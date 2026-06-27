@@ -1,0 +1,21 @@
+{
+  "name": "yasunori0418-skills",
+  "owner": {
+    "name": "yasunori0418"
+  },
+  "metadata": {
+    "description": "AI agent skills for Claude Code / Codex, following the agentskills.io open standard."
+  },
+  "plugins": [
+    {
+      "name": "yasunori0418-skills",
+      "source": "./",
+      "description": "AI agent skills (Claude Code / Codex) following the agentskills.io standard.",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "skills",
+      "tags": ["claude-code", "codex", "agentskills"]
+    }
+  ]
+}
