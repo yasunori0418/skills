@@ -29,8 +29,15 @@
               enable = true;
               package = pkgs.nixfmt;
             };
-            # Markdown / YAML / JSON formatter for skill sources and schema.
+            # Format JSON / YAML (schema + Codex manifests) only.
+            # Markdown is excluded: prettier reflows CJK (full/half-width)
+            # tables inconsistently and produces churn on README.md / AGENTS.md
+            # / SKILL.md. Prose markdown is left to the author.
             programs.prettier.enable = true;
+            settings.formatter.prettier.excludes = [
+              "*.md"
+              "**/*.md"
+            ];
           };
 
           # Validate every skill (SKILL.md frontmatter + agents/openai.yaml)
