@@ -22,7 +22,13 @@
       ];
       perSystem =
         { pkgs, ... }:
+        let
+          # Project-local packages (callPackage pattern; see nix/).
+          skills-ref = pkgs.callPackage ./nix/skills-ref.nix { };
+        in
         {
+          packages.skills-ref = skills-ref;
+
           treefmt = {
             projectRootFile = "flake.nix";
             programs.nixfmt = {
@@ -40,16 +46,16 @@
             ];
           };
 
-          # Validate every skill (SKILL.md frontmatter + agents/openai.yaml)
-          # against the JSON Schemas. Runs as part of `nix flake check`
-          # (offline, sandbox-safe). New/untracked files must be `git add`ed
-          # first to be visible to the flake source.
+          # Validate every skill: SKILL.md via the official skills-ref validator,
+          # agents/openai.yaml via the repo-local JSON Schema. Runs as part of
+          # `nix flake check` (offline, sandbox-safe). New/untracked files must
+          # be `git add`ed first to be visible to the flake source.
           checks.skills =
             pkgs.runCommand "check-skills"
               {
-                nativeBuildInputs = with pkgs; [
-                  check-jsonschema
-                  yq-go
+                nativeBuildInputs = [
+                  skills-ref
+                  pkgs.check-jsonschema
                 ];
                 env.SKILLS_SCHEMA_DIR = "${./schema}";
               }

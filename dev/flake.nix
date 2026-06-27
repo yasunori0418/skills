@@ -30,8 +30,9 @@
                 nixd # Nix language server
                 inputs'.root.formatter # root's treefmt (nixfmt + prettier)
 
-                # Skill metadata validation & lint
-                check-jsonschema # JSON Schema validation for metadata.yaml
+                # Skill validation & lint
+                inputs'.root.packages.skills-ref # official agentskills.io validator
+                check-jsonschema # JSON Schema validation for agents/openai.yaml
                 yamllint # YAML lint
                 markdownlint-cli2 # Markdown lint for SKILL.md
 
@@ -53,10 +54,11 @@
 
             # CI: minimal validators + dumb terminal.
             ci = pkgs.mkShell {
-              packages = with pkgs; [
-                check-jsonschema
-                yamllint
-                markdownlint-cli2
+              packages = [
+                inputs'.root.packages.skills-ref
+                pkgs.check-jsonschema
+                pkgs.yamllint
+                pkgs.markdownlint-cli2
               ];
               env = {
                 TERM = "dumb";
