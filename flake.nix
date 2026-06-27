@@ -40,9 +40,9 @@
           checks.skills =
             pkgs.runCommand "check-skills"
               {
-                nativeBuildInputs = [
-                  pkgs.check-jsonschema
-                  pkgs.yq-go
+                nativeBuildInputs = with pkgs; [
+                  check-jsonschema
+                  yq-go
                 ];
                 env.SKILLS_SCHEMA_DIR = "${./schema}";
               }
