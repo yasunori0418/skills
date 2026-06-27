@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasunori0418/skills/schema/openai-agent.schema.json",
+  "title": "Codex / OpenAI agent manifest",
+  "description": "agents/openai.yaml that exposes a skill to Codex (OpenAI) agents.",
+  "type": "object",
+  "required": ["interface"],
+  "additionalProperties": true,
+  "properties": {
+    "interface": {
+      "type": "object",
+      "required": ["display_name", "short_description"],
+      "additionalProperties": true,
+      "properties": {
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "short_description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "default_prompt": {
+          "type": "string"
+        },
+        "icon_small": {
+          "type": "string"
+        },
+        "icon_large": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
