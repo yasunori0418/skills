@@ -1,0 +1,17 @@
+# Nix / direnv
+.envrc
+.direnv/
+result
+result-*
+
+# APM / package manager dependencies
+apm_modules/
+.apm/
+
+# Node
+node_modules/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.claude/settings.local.json
