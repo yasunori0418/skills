@@ -18,8 +18,10 @@ AI エージェント向けスキルを管理するリポジトリ。3 つのレ
 
 - スキルは `<category>/<skill-name>/` 形式でカテゴリ配下に置く。
 - `SKILL.md` の frontmatter `name` は **親ディレクトリ名（`<skill-name>`）と一致**させる。
-- インフラ（`flake.nix` / `dev/` / `schema/` / `scripts/` / `.github/` / `.claude-plugin/`）は
+- インフラ（`flake.nix` / `dev/` / `nix/` / `schema/` / `scripts/` / `.github/` / `.claude-plugin/`）は
   リポジトリ直下。スキルのカテゴリディレクトリと混在する。
+- 追加の Nix パッケージは callPackage パターンで `nix/<pkg>.nix` に置き、`flake.nix` から
+  `pkgs.callPackage ./nix/<pkg>.nix { }` で取り込む。
 
 ## スキルを作成・編集するときのルール
 
@@ -30,7 +32,8 @@ AI エージェント向けスキルを管理するリポジトリ。3 つのレ
    - 任意: `license` / `compatibility`（≤500文字）/ `metadata`（string→string）/
      `allowed-tools`（スペース区切り文字列）。
    - Claude Code 拡張 `disable-model-invocation` / `argument-hint` も許可。
-   - スキーマ正本: `schema/skill-frontmatter.schema.json`。
+   - 検証は公式 `skills-ref`（`nix/skills-ref.nix` でビルド）に委譲する。独自の
+     frontmatter スキーマは持たない。
 3. 本文は ~500 行以内に収め、詳細は `references/` に分割する（progressive disclosure）。
 4. Codex 連携が必要なら `agents/openai.yaml` を置く（`interface.display_name` /
    `interface.short_description` 必須。スキーマ: `schema/openai-agent.schema.json`）。不要なら削除。
@@ -43,12 +46,14 @@ AI エージェント向けスキルを管理するリポジトリ。3 つのレ
 新規ファイルは `git add` してから検証する（`nix flake check` は git tracked のみ参照する）。
 
 ```sh
-nix fmt                              # treefmt 整形（nixfmt + prettier）
-nix flake check                     # スキルスキーマ検証 + 整形チェック
+nix fmt                              # treefmt 整形（nixfmt + prettier、markdown は対象外）
+nix flake check                     # skills-ref 検証 + openai.yaml スキーマ検証 + 整形チェック
 claude plugin validate . --strict   # plugin.json / marketplace.json 検証
 ```
 
-スキル検証だけを手早く回すなら `bash scripts/validate-skills.sh .`。
+- SKILL.md は公式 `skills-ref validate <dir>` で検証（`checks.skills` / `scripts/validate-skills.sh`）。
+- `agents/openai.yaml` は `schema/openai-agent.schema.json` で検証（公式スキーマが無いため独自）。
+- devShell では `skills-ref validate <dir>` を直接実行できる。
 
 ## コミット規約
 
