@@ -15,5 +15,5 @@ runs:
     - name: Setup Cachix
       uses: cachix/cachix-action@97e5ff84d02b3b4f9936339f767e17f03c9252ed # v16
       with:
-        name: <cachix-cache-name>
+        name: yasunori0418
         authToken: ${{ inputs.cachix-auth-token }}
