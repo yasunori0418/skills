@@ -1,0 +1,19 @@
+name: "Setup Nix"
+description: "Install Nix and configure Cachix"
+inputs:
+  cachix-auth-token:
+    description: "Cachix authentication token"
+    required: false
+runs:
+  using: "composite"
+  steps:
+    - name: Install Nix
+      uses: cachix/install-nix-action@1ca7d21a94afc7c957383a2d217460d980de4934 # v31.10.1
+      with:
+        github_access_token: ${{ github.token }}
+
+    - name: Setup Cachix
+      uses: cachix/cachix-action@97e5ff84d02b3b4f9936339f767e17f03c9252ed # v16
+      with:
+        name: <cachix-cache-name>
+        authToken: ${{ inputs.cachix-auth-token }}

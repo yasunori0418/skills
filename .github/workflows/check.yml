@@ -1,0 +1,22 @@
+name: Nix Flake Check
+
+on:
+  push:
+    branches-ignore:
+      - main # main is updated via PR only
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Nix
+        uses: ./.github/actions/setup-nix
+        with:
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      # Runs treefmt formatting check + skills schema validation (checks.skills).
+      - name: nix flake check
+        run: nix flake check
