@@ -62,6 +62,15 @@ push せずにローカル編集を配信できる。
 /plugin install yasunori0418-skills@yasunori0418-skills
 ```
 
+編集の反映手順(実測): plugin はキャッシュ
+(`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`)への **version 単位のコピー**で
+ロードされるため、symlink 時代のような即時反映はされない。ローカル編集を反映するには
+
+1. `plugin.json` の `version` を bump(同一 version のままだと `plugin update` が
+   「already at the latest version」でスキップし再コピーされない)
+2. `claude plugin update yasunori0418-skills@yasunori0418-skills`(オフライン可・push 不要)
+3. セッションを再起動(hooks / skills はセッション開始時にロードされる)
+
 GitHub から直接登録する場合(反映に push が必要):
 
 ```
