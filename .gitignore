@@ -16,7 +16,8 @@ node_modules/
 .vscode/
 .claude/settings.local.json
 
-# nput (dev/nput.nix, project mode): mattpocock/skills placed under .claude/skills/.
-# Broader than `nput gitignore skills`'s per-entry output on purpose, so adding a
-# skill in dev/nput.nix never needs a matching .gitignore edit.
+# nput (dev/nput.nix, project mode): external skills (mattpocock/mizchi/anthropics)
+# placed under .claude/skills/. Broader than `nput gitignore skills`'s per-entry
+# output on purpose, so adding a skill in dev/nput.nix never needs a matching
+# .gitignore edit.
 /.claude/skills/

@@ -8,7 +8,7 @@
     # NG: treefmt-nix is intentionally NOT added here.
     # OK: reuse root's treefmt formatter via inputs'.root.formatter.
 
-    # Places mattpocock/skills under .claude/skills/ (project mode, dev-only concern).
+    # Places curated external skills under .claude/skills/ (project mode, dev-only concern).
     nput = {
       url = "github:yasunori0418/nput";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -18,6 +18,18 @@
     # .claude/skills/ へ配置するため flake=false。flake.lock が rev を pin する。
     matt-skills = {
       url = "github:mattpocock/skills";
+      flake = false;
+    };
+
+    # mizchi/skills（スキル作成メタスキルの追加ソース）。同じく project mode 用に flake=false。
+    mizchi-skills = {
+      url = "github:mizchi/skills";
+      flake = false;
+    };
+
+    # anthropics/skills（公式 skill-creator を明示管理するため）。同じく flake=false。
+    anthropic-skills = {
+      url = "github:anthropics/skills";
       flake = false;
     };
   };
@@ -64,7 +76,8 @@
                 ripgrep
                 fd
 
-                # mattpocock/skills を .claude/skills/ へ配置する nput（project mode 用に pin）
+                # 外部スキル（mattpocock/mizchi/anthropics）を .claude/skills/ へ配置する
+                # nput（project mode 用に pin）
                 inputs'.nput.packages.nput
               ];
               shellHook = ''
