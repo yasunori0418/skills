@@ -8,5 +8,6 @@
   },
   "license": "MIT",
   "keywords": ["claude-code", "codex", "agentskills", "skills"],
-  "skills": ["./example"]
+  "skills": ["./example", "./git"],
+  "agents": ["./git/diff-review/agents/diff-reviewer.md"]
 }

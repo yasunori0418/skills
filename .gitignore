@@ -21,3 +21,9 @@ node_modules/
 # output on purpose, so adding a skill in dev/nput.nix never needs a matching
 # .gitignore edit.
 /.claude/skills/
+
+# Python runtime artifacts inside skills (parallel-worktree / session-insights
+# are uv projects; their venvs and caches are recreated by `uv run`)
+.venv/
+__pycache__/
+.pytest_cache/
