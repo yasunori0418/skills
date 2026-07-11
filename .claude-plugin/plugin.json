@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "yasunori0418-skills",
   "description": "AI agent skills (Claude Code / Codex) following the agentskills.io standard.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "author": {
     "name": "yasunori0418"
   },
