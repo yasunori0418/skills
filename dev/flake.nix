@@ -7,6 +7,19 @@
     flake-parts.follows = "root/flake-parts";
     # NG: treefmt-nix is intentionally NOT added here.
     # OK: reuse root's treefmt formatter via inputs'.root.formatter.
+
+    # Places mattpocock/skills under .claude/skills/ (project mode, dev-only concern).
+    nput = {
+      url = "github:yasunori0418/nput";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    # Claude Code 用スキル集（mattpocock/skills）。nput の project mode で
+    # .claude/skills/ へ配置するため flake=false。flake.lock が rev を pin する。
+    matt-skills = {
+      url = "github:mattpocock/skills";
+      flake = false;
+    };
   };
 
   outputs =
@@ -17,6 +30,10 @@
         "aarch64-linux"
         "aarch64-darwin"
         "x86_64-darwin"
+      ];
+      imports = [
+        inputs.nput.flakeModules.default
+        ./nput.nix
       ];
       perSystem =
         { inputs', pkgs, ... }:
@@ -46,9 +63,13 @@
                 # Search
                 ripgrep
                 fd
+
+                # mattpocock/skills を .claude/skills/ へ配置する nput（project mode 用に pin）
+                inputs'.nput.packages.nput
               ];
               shellHook = ''
                 export REPO_ROOT=$(git rev-parse --show-superproject-working-tree --show-toplevel)
+                nput apply skills -f "$REPO_ROOT/dev" --no-wait
               '';
             };
 
