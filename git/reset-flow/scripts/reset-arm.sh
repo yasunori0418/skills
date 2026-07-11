@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# reset-arm.sh — reset 実行直前の safety branch を作成し、cchook guard の
+# reset-arm.sh — reset 実行直前の safety branch を作成し、git-guard hook の
 # 解錠 marker（30 分有効）を置く。reset 本体は実行しない。
 #
 # Usage: reset-arm.sh [--allow-dirty]
@@ -61,7 +61,7 @@ date +%s > "$marker"
 echo "=== SAFETY ==="
 echo "branch: $name"
 echo "sha: $(git rev-parse HEAD)"
-echo "armed: $marker（30 分有効 — git reset が cchook guard を通過可能になる）"
+echo "armed: $marker（30 分有効 — git reset が git-guard hook を通過可能になる）"
 if [ "$dirty" -gt 0 ]; then
     echo "NOTE: 未コミット変更 ${dirty} ファイルは safety branch では守られない（--hard で消えたら復旧不能）"
 fi

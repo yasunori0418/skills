@@ -1,6 +1,6 @@
 ---
 name: gh-ci-investigate
-description: "GitHub Actions の CI 失敗を調査するスキル。失敗した run / PR / job の URL（例: https://github.com/OWNER/REPO/actions/runs/RUNID、…/pull/PR、…/job/JOBID）や run_id・PR 番号を貼られて「このCIが失敗している、原因を調査して」「ビルド/テストがコケた、なぜ落ちたか調べて」「workflow が failed、修正案を出して」「job のログを見て」と頼まれたら必ず使う。WebFetch では github.com のログは取れない（cchook が差し戻し、HTML しか返らない）ため、gh（`gh run view --log-failed` / `gh run view --job` / `gh pr checks` / `gh api`）で失敗ジョブ・ステップと失敗ステップのログだけを決定論スクリプトで収集し、失敗原因を特定して修正案を提示する。GitHub Actions 以外（GitLab CI 等）や、URL がログではなくソース閲覧目的のときは対象外。GitHub(gh) 前提。`/gh-ci-investigate` で明示起動も可。"
+description: "GitHub Actions の CI 失敗を調査するスキル。失敗した run / PR / job の URL（例: https://github.com/OWNER/REPO/actions/runs/RUNID、…/pull/PR、…/job/JOBID）や run_id・PR 番号を貼られて「このCIが失敗している、原因を調査して」「ビルド/テストがコケた、なぜ落ちたか調べて」「workflow が failed、修正案を出して」「job のログを見て」と頼まれたら必ず使う。WebFetch では github.com のログは取れない（PreToolUse hook が差し戻し、HTML しか返らない）ため、gh（`gh run view --log-failed` / `gh run view --job` / `gh pr checks` / `gh api`）で失敗ジョブ・ステップと失敗ステップのログだけを決定論スクリプトで収集し、失敗原因を特定して修正案を提示する。GitHub Actions 以外（GitLab CI 等）や、URL がログではなくソース閲覧目的のときは対象外。GitHub(gh) 前提。`/gh-ci-investigate` で明示起動も可。"
 argument-hint: "[run/PR/job の URL・run_id・#PR番号（省略時は現在ブランチの最新 run）]"
 ---
 
@@ -10,7 +10,7 @@ argument-hint: "[run/PR/job の URL・run_id・#PR番号（省略時は現在ブ
 
 CI 失敗調査で毎回同じことをする——失敗した run を開き、どのジョブ・ステップが落ちたかを見て、失敗ステップのログから原因を読む——を、決定論スクリプトに寄せて安定させる。
 
-肝は **WebFetch を使わないこと**。github.com への WebFetch は cchook が差し戻すうえ、通っても Actions 画面の HTML が返るだけでログにならない。失敗ジョブ・ステップと「失敗ステップだけのログ」は `gh` で確実かつ簡潔に取れる。だから run/PR/job の URL を渡された時点で `scripts/gh-ci-investigate.sh` に解決させ、そこから調査に入る（グローバル CLAUDE.md の「GitHub 情報は gh で取得」ルールの具体実装）。
+肝は **WebFetch を使わないこと**。github.com への WebFetch は plugin hooks の webfetch-github-guard が差し戻すうえ、通っても Actions 画面の HTML が返るだけでログにならない。失敗ジョブ・ステップと「失敗ステップだけのログ」は `gh` で確実かつ簡潔に取れる。だから run/PR/job の URL を渡された時点で `scripts/gh-ci-investigate.sh` に解決させ、そこから調査に入る（グローバル CLAUDE.md の「GitHub 情報は gh で取得」ルールの具体実装）。
 
 ## 前提
 

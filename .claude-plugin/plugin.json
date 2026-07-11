@@ -19,5 +19,6 @@
   "agents": [
     "./git/diff-review/agents/diff-reviewer.md",
     "./product/product-spec/agents/product-researcher.md"
-  ]
+  ],
+  "hooks": "./hooks/hooks.json"
 }

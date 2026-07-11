@@ -1,7 +1,7 @@
 # 失敗時の復旧手順
 
 前提: `git reset` を伴う復旧は本スキルでは実行しない。**reset-flow スキル**の
-ワークフロー（計画提示 → 承認 → arm → 実行）に委ねる。cchook guard も
+ワークフロー（計画提示 → 承認 → arm → 実行）に委ねる。git-guard hook も
 reset-flow を通らない `git reset` をブロックする。
 
 ## 早見表
@@ -60,7 +60,7 @@ backup ブランチが第一の復旧手段であり、reflog は最後の頼み
    ```bash
    bash <gh-push skill>/scripts/gh-push.sh push <branch> --force --expect=<rebase後HEADのsha>
    ```
-   （raw の `git push --force*` は cchook guard に弾かれる）
+   （raw の `git push --force*` は git-guard hook に弾かれる）
 4. 不一致（他者 push あり）→ 停止し、ユーザー・関係者への連絡を優先する
 
 ### あてにしないもの

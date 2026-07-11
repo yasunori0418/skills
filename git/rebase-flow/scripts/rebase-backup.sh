@@ -39,7 +39,7 @@ while git show-ref --verify --quiet "refs/heads/$name"; do
 done
 git branch "$name" HEAD
 
-# cchook の git-guard を解錠する marker（30 分有効）。
+# git-guard hook を解錠する marker（30 分有効）。
 # これが「backup なしで git rebase を実行できない」ことの機械的担保になる。
 marker=$(git rev-parse --git-path rebase-flow.armed)
 date +%s > "$marker"
@@ -47,7 +47,7 @@ date +%s > "$marker"
 echo "=== BACKUP ==="
 echo "branch: $name"
 echo "sha: $(git rev-parse HEAD)"
-echo "armed: ${marker}（30 分有効 — git rebase が cchook guard を通過可能になる）"
+echo "armed: ${marker}（30 分有効 — git rebase が git-guard hook を通過可能になる）"
 if upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null); then
     echo "upstream-tip: $(git rev-parse "$upstream") ($upstream — force-push 時の lease 候補)"
 fi

@@ -63,6 +63,29 @@
                 bash ${./scripts/validate-skills.sh} ${./.}
                 touch "$out"
               '';
+
+          # Run plugin hook unit tests (hooks/scripts/*/tests/*.test.sh).
+          # Scripts use `#!/usr/bin/env bash`, which does not exist in the nix
+          # sandbox — copy to a writable dir and patchShebangs first.
+          checks.hooks =
+            pkgs.runCommand "check-hooks"
+              {
+                nativeBuildInputs = [
+                  pkgs.jq
+                  pkgs.git
+                ];
+              }
+              ''
+                cp -r ${./hooks/scripts} scripts
+                chmod -R +w scripts
+                patchShebangs scripts
+                fail=0
+                for t in scripts/*/tests/*.test.sh; do
+                  bash "$t" || fail=1
+                done
+                [ "$fail" -eq 0 ]
+                touch "$out"
+              '';
         };
     };
 }

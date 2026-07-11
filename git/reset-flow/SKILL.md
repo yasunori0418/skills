@@ -1,6 +1,6 @@
 ---
 name: reset-flow
-description: "git reset（HEAD / ブランチポインタの移動）の安全運用ルール。reset --hard は未コミット変更をどこにも残さず消せる唯一の日常操作であり、git reset を 1 つでも実行する前に必ず本スキルを参照する。「reset して」「巻き戻して」「直前のコミットを取り消して」「コミットをやり直したい」「変更を全部捨てて」「HEAD を◯◯に戻して」と依頼される、rebase-flow の失敗から backup へ復旧する、reflog から復元する、といった場面すべてが対象。決定論スクリプトで失われるもの（外れるコミット・push 済み範囲・消える未コミット変更）を判定 → 計画提示 → ユーザー承認 → safety branch 作成（arm）→ 実行 → 検証、のゲートを固定化する。cchook の guard により arm なしの git reset は機械的にブロックされる。unstage 目的なら reset ではなく git restore --staged を使う。"
+description: "git reset（HEAD / ブランチポインタの移動）の安全運用ルール。reset --hard は未コミット変更をどこにも残さず消せる唯一の日常操作であり、git reset を 1 つでも実行する前に必ず本スキルを参照する。「reset して」「巻き戻して」「直前のコミットを取り消して」「コミットをやり直したい」「変更を全部捨てて」「HEAD を◯◯に戻して」と依頼される、rebase-flow の失敗から backup へ復旧する、reflog から復元する、といった場面すべてが対象。決定論スクリプトで失われるもの（外れるコミット・push 済み範囲・消える未コミット変更）を判定 → 計画提示 → ユーザー承認 → safety branch 作成（arm）→ 実行 → 検証、のゲートを固定化する。plugin hooks の git-guard により arm なしの git reset は機械的にブロックされる。unstage 目的なら reset ではなく git restore --staged を使う。"
 user-invocable: true
 argument-hint: "[target-ref と mode（例: backup/rebase/foo-20260707 hard）]"
 ---
@@ -9,7 +9,7 @@ argument-hint: "[target-ref と mode（例: backup/rebase/foo-20260707 hard）]"
 
 `git reset` は 2 つの破壊を同時に起こせる: **ブランチからコミットを外す**（reflog / backup があれば復旧可）と、`--hard` による**未コミット変更の完全消滅**（どこにも残らず復旧不能 — reset 最大の危険）。本スキルは **収集 → 計画提示 → 承認 → arm + 実行 → 検証** をゲートとして固定する。
 
-環境側の強制: cchook の PreToolUse guard が `git reset` を監視しており、`scripts/reset-arm.sh` が置く解錠 marker（30 分有効）が無い実行は機械的に deny される。
+環境側の強制: plugin hooks の git-guard（PreToolUse） が `git reset` を監視しており、`scripts/reset-arm.sh` が置く解錠 marker（30 分有効）が無い実行は機械的に deny される。
 
 ## そもそも reset を使わない選択肢（先に検討する）
 
