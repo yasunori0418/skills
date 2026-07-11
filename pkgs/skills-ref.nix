@@ -25,6 +25,20 @@ python3Packages.buildPythonApplication rec {
   # skills-ref is a subdirectory of the repo.
   sourceRoot = "${src.name}/skills-ref";
 
+  # Claude Code 拡張の frontmatter フィールドを許可する。
+  # upstream の ALLOWED_FIELDS は agentskills.io 標準のみで、Claude Code の
+  # 拡張（argument-hint / disable-model-invocation / user-invocable）を弾く。
+  # 本リポジトリのスキルは Claude Code での利用が主目的のためパッチで緩和する。
+  # upstream の rev を上げる際はこのパッチが当たるか要確認。
+  postPatch = ''
+    substituteInPlace src/skills_ref/validator.py \
+      --replace-fail '"compatibility",' \
+        '"compatibility",
+        "argument-hint",
+        "disable-model-invocation",
+        "user-invocable",'
+  '';
+
   build-system = [ python3Packages.hatchling ];
   dependencies = with python3Packages; [
     click
