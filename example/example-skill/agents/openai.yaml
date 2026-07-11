@@ -1,4 +1,0 @@
-interface:
-  display_name: "Example Skill"
-  short_description: "Template skill demonstrating the repository layout"
-  default_prompt: "Use $example-skill as a starting point to author a new skill."
