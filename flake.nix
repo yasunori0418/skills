@@ -23,8 +23,8 @@
       perSystem =
         { pkgs, ... }:
         let
-          # Project-local packages (callPackage pattern; see nix/).
-          skills-ref = pkgs.callPackage ./nix/skills-ref.nix { };
+          # Project-local packages (callPackage pattern; see pkgs/).
+          skills-ref = pkgs.callPackage ./pkgs/skills-ref.nix { };
         in
         {
           packages.skills-ref = skills-ref;
