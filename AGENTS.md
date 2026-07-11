@@ -6,18 +6,23 @@
 
 ## このリポジトリは何か
 
-AI エージェント向けスキルを管理するリポジトリ。3 つのレイヤーを併用する。
+AI エージェント向けスキルを管理するリポジトリ。スキルは 3 つのレイヤーを併用する。
+加えて Claude Code 限定で、スキルに紐づく任意のサブエージェント層を持てる。
 
 | レイヤー | 担当 | 実体 |
 | --- | --- | --- |
 | スキルの中身 | [agentskills.io](https://agentskills.io/specification) 標準 | `<category>/<skill-name>/SKILL.md` |
 | 配布・パッケージング | Claude Code plugin | `.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json` |
 | Codex 連携 | 本リポジトリの慣習 | per-skill `agents/openai.yaml` |
+| claude-code サブエージェント（任意） | Claude Code plugin | per-skill `agents/<name>.md` |
 
 ## ディレクトリ規約
 
 - スキルは `<category>/<skill-name>/` 形式でカテゴリ配下に置く。
 - `SKILL.md` の frontmatter `name` は **親ディレクトリ名（`<skill-name>`）と一致**させる。
+- スキルに紐づく claude-code サブエージェントは `<category>/<skill-name>/agents/<name>.md` に置く。
+  `agents/` は「そのスキルのエージェント連携置き場」で、Codex 用 `openai.yaml` と
+  Claude 用 `*.md` が同居する。`.md` の frontmatter `name` はファイル名 stem と一致させる。
 - インフラ（`flake.nix` / `dev/` / `nix/` / `schema/` / `scripts/` / `.github/` / `.claude-plugin/`）は
   リポジトリ直下。スキルのカテゴリディレクトリと混在する。
 - 追加の Nix パッケージは callPackage パターンで `nix/<pkg>.nix` に置き、`flake.nix` から
@@ -37,9 +42,15 @@ AI エージェント向けスキルを管理するリポジトリ。3 つのレ
 3. 本文は ~500 行以内に収め、詳細は `references/` に分割する（progressive disclosure）。
 4. Codex 連携が必要なら `agents/openai.yaml` を置く（`interface.display_name` /
    `interface.short_description` 必須。スキーマ: `schema/openai-agent.schema.json`）。不要なら削除。
-5. **新しいカテゴリを追加したら `.claude-plugin/plugin.json` の `skills` 配列に必ず追記する**
+5. Claude Code のワーカーサブエージェントが必要なら `agents/<name>.md` を置く
+   （frontmatter: `name`（ファイル名 stem と一致）/ `description` 必須、任意で
+   `tools` / `model` / `color`）。**claude-code 専用**で Codex 側に等価物は無い
+   （`agents/openai.yaml` とは別物）。不要なら置かない。
+6. **新しいカテゴリを追加したら `.claude-plugin/plugin.json` の `skills` 配列に必ず追記する**
    （例: `"skills": ["./example", "./aws"]`）。カテゴリ別配置のため Claude Code の
-   デフォルト探索（`skills/<name>/`）に乗らず、明示登録が必要。
+   デフォルト探索（`skills/<name>/`）に乗らず、明示登録が必要。加えて、**サブエージェント
+   `.md` を追加したら `agents` 配列に `"./<category>/<skill-name>/agents/<name>.md"` を
+   追記する**（トップレベル `agents/` のみ自動検出のため、skills 同様に明示登録が必要）。
 
 ## 検証（コミット前に必須）
 
@@ -53,6 +64,8 @@ claude plugin validate . --strict   # plugin.json / marketplace.json 検証
 
 - SKILL.md は公式 `skills-ref validate <dir>` で検証（`checks.skills` / `scripts/validate-skills.sh`）。
 - `agents/openai.yaml` は `schema/openai-agent.schema.json` で検証（公式スキーマが無いため独自）。
+- サブエージェント `agents/*.md` は独自スキーマを持たず、`claude plugin validate . --strict`
+  （参照整合）+ レビューで担保する（frontmatter 検証の公式スキーマが無いため最小限に保つ）。
 - devShell では `skills-ref validate <dir>` を直接実行できる。
 
 ## コミット規約
