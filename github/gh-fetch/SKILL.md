@@ -1,20 +1,25 @@
 ---
 name: gh-fetch
-description: "非対話セッション（claude-code の remote-control / CI など TTY が無く SSH 鍵パスフレーズを入力できない状況）で git fetch / pull を通すスキル。remote が SSH URL（git@github.com:…）で秘密鍵がパスフレーズ保護されている、または ssh-agent に鍵が無いために `git fetch`/`git pull` が `Permission denied (publickey)` で失敗する場合に、取り込みを HTTPS + gh トークン（credential.helper='!gh auth git-credential'）経由へ切り替えて標準入力なしで実行する。「fetch して」「pull して」「リモートの変更を取り込んで」「最新を取ってきて」と頼まれたが SSH 認証が使えない、fetch/pull が publickey で弾かれた、remote-control からリモートの更新を取り込みたい、といった場面で使う。gh-push の取り込み（incoming）版。`/gh-fetch` で明示起動も可。GitHub(gh) 前提。"
+description: "非対話セッション（claude-code の remote-control / CI など TTY が無く SSH 鍵パスフレーズを入力できない状況）で git fetch / pull を通すスキル。ssh-agent に鍵がロード済み（`ssh-add -l` が exit 0）なら素の SSH fetch を非対話で実行し、remote が SSH URL でも秘密鍵がパスフレーズ保護され ssh-agent に鍵が無いために `git fetch`/`git pull` が `Permission denied (publickey)` で失敗する場合は、取り込みを HTTPS + gh トークン（credential.helper='!gh auth git-credential'）経由へ自動フォールバックして標準入力なしで実行する。「fetch して」「pull して」「リモートの変更を取り込んで」「最新を取ってきて」と頼まれたが SSH 認証が使えない、fetch/pull が publickey で弾かれた、remote-control からリモートの更新を取り込みたい、といった場面で使う。gh-push の取り込み（incoming）版。`/gh-fetch` で明示起動も可。GitHub(gh) 前提。"
 argument-hint: "[ブランチ名（任意、省略時は現在のブランチ）] [--merge|--rebase（pull 時のみ）]"
 ---
 
-# gh-fetch — gh トークン経由の非対話 fetch / pull
+# gh-fetch — 非対話 fetch / pull（SSH 優先・gh フォールバック）
 
 ## このスキルの目的
 
-SSH 鍵がパスフレーズ保護されていて非対話セッションでは署名できない（標準入力が無く fetch/pull が `publickey` で失敗する）状況でも、リモートの変更を取り込む。仕組みは [[gh-push]] と同一 — **通信認証を gh の credential helper に肩代わりさせ、HTTPS で取得する**:
+非対話セッション（TTY 無し）でリモートの変更を取り込む。経路は [[gh-push]] と同一方針で **決定論的に** 選ぶ:
 
-```
-git -c credential.helper= -c credential.helper='!gh auth git-credential' fetch <https-url> +refs/heads/<branch>:refs/remotes/<remote>/<branch>
-```
+1. **SSH 優先** — remote が SSH URL で、かつ ssh-agent に鍵がロード済み（`ssh-add -l` が exit 0）なら、素の `git fetch` を SSH で実行する。鍵が agent に載っているので署名は非対話で完結し、パスフレーズ入力待ちに入らない。`GIT_SSH_COMMAND='ssh -o BatchMode=yes'` を強制し、万一鍵が未ロードでも即失敗させる。
+2. **gh(HTTPS) フォールバック** — SSH fetch が失敗した場合、または SSH が使えない（HTTPS remote / ssh-agent に鍵なし）場合は、通信認証を gh の credential helper に肩代わりさせて HTTPS で取得する:
 
-`credential.helper=`（空）で既存ヘルパー一覧をリセットし、gh ヘルパーだけを使う。remote が SSH URL でも URL を HTTPS に変換して取得元に使うので **origin の設定は変更しない**。public リポジトリならトークン無しでも HTTPS 変換だけで通る（gh helper は private のとき効く）。
+   ```
+   git -c credential.helper= -c credential.helper='!gh auth git-credential' fetch <https-url> +refs/heads/<branch>:refs/remotes/<remote>/<branch>
+   ```
+
+   `credential.helper=`（空）で既存ヘルパー一覧をリセットし gh ヘルパーだけを使う。remote が SSH URL でも URL を HTTPS に変換して取得元に使うので **origin の設定は変更しない**。public リポジトリならトークン無しでも HTTPS 変換だけで通る（gh helper は private のとき効く）。
+
+「SSH で取得できるか」は ssh-agent の状態から `ssh-add -l` で決定論的に判定できる。ssh-agent が生きている環境では素の fetch がそのまま通るため、余計なトークン経由を挟まない。
 
 ## fetch と pull の違い（重要）
 
@@ -27,8 +32,10 @@ push と違い、取り込みは2段階で危険度が分かれる:
 
 ## 前提
 
-- `gh auth status` でログイン済みであること。private リポジトリの取得にはトークンの read 権限が要る（public は不要）。
-- GitHub（github.com / GitHub Enterprise）が対象。GitLab 等 gh が扱わないホストは対象外 — その場合はこのスキルを使わず SSH 鍵や glab を案内する。
+- **SSH 経路の条件**: remote が SSH URL（`ssh://git@…` または `git@host:owner/repo`）で、`ssh-add -l` が鍵を返すこと。揃わなければ自動的に gh 経路になる。
+- **gh 経路（フォールバック）の条件**: private リポジトリの取得には `gh auth status` でログイン済み＋トークンの read 権限が要る（public は gh 未認証でも HTTPS 変換だけで通る）。
+- SSH が使えず gh も未導入のときは preflight/fetch が `ERROR:` で停止する。`ssh-add` で鍵をロードするか GitHub CLI を導入する。
+- GitHub（github.com / GitHub Enterprise）が対象。GitLab 等 gh が扱わないホストは gh 経路が使えない — SSH が通らなければ対象外（SSH 鍵や glab を案内する）。
 
 ## ワークフロー
 
@@ -40,7 +47,7 @@ push と違い、取り込みは2段階で危険度が分かれる:
 bash <skill-dir>/scripts/gh-fetch.sh preflight [branch]
 ```
 
-`=== SECTION ===` 区切りの出力を読み、**取得元 URL・ブランチ・取り込まれるコミット・作業ツリーの状態**をユーザーに提示する。`STATE` の `incoming` の意味:
+`=== SECTION ===` 区切りの出力を読み、**取得経路（SSH / gh）・取得元 URL・ブランチ・取り込まれるコミット・作業ツリーの状態**をユーザーに提示する。`TARGET` の `route` 行で経路と理由、`AUTH` で ssh-agent の鍵有無と gh 認証が分かる。`STATE` の `incoming` の意味:
 
 - `up-to-date` … リモート tip を既に保持。取り込み不要。
 - `behind` … ローカルがリモートの祖先。**FF で安全に取り込める**。取り込まれるコミット一覧が出る。
@@ -48,7 +55,7 @@ bash <skill-dir>/scripts/gh-fetch.sh preflight [branch]
 - `fetchable` … リモートに新規コミットがあるが未取得で件数不明。fetch すれば確定する。
 - `missing-remote` … リモートにそのブランチが無い。取り込むものがない。
 
-`WORKTREE` セクションで dirty / clean を確認する。dirty のとき pull は実行できない（fetch は可）。preflight が `ERROR:` を出したら、その内容（未認証・未対応 URL・detached HEAD 等）を解決してから進む。
+`WORKTREE` セクションで dirty / clean を確認する。dirty のとき pull は実行できない（fetch は可）。preflight が `ERROR:` を出したら、その内容（SSH 鍵未ロード かつ gh 未導入・未対応 URL・detached HEAD 等）を解決してから進む。実行結果の `OK: [ssh]` / `OK: [gh]` でどちらの経路を使ったか分かる。
 
 ### 2. 実行
 
