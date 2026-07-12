@@ -1,25 +1,32 @@
 ---
 name: gh-push
-description: "非対話セッション（claude-code の remote-control / CI など TTY が無く SSH 鍵パスフレーズを入力できない状況）で git push を通すスキル。remote が SSH URL（git@github.com:…）で秘密鍵がパスフレーズ保護されている、または ssh-agent に鍵が無いために `git push` が `Permission denied (publickey)` で失敗する場合に、push を HTTPS + gh トークン（credential.helper='!gh auth git-credential'）経由へ切り替えて標準入力なしで実行する。「push して」「リモートに反映して」と頼まれたが SSH 認証が使えない、push が publickey で弾かれた、remote-control から push したい、といった場面で使う。`/gh-push` で明示起動も可。GitHub(gh) 前提。"
+description: "非対話セッション（claude-code の remote-control / CI など TTY が無く SSH 鍵パスフレーズを入力できない状況）で git push を通すスキル。ssh-agent に鍵がロード済み（`ssh-add -l` が exit 0）なら素の SSH push を非対話で実行し、remote が SSH URL でも秘密鍵がパスフレーズ保護され ssh-agent に鍵が無いために `git push` が `Permission denied (publickey)` で失敗する場合は、push を HTTPS + gh トークン（credential.helper='!gh auth git-credential'）経由へ自動フォールバックして標準入力なしで実行する。「push して」「リモートに反映して」と頼まれたが SSH 認証が使えない、push が publickey で弾かれた、remote-control から push したい、といった場面で使う。`/gh-push` で明示起動も可。GitHub(gh) 前提。"
 argument-hint: "[push 先ブランチ名（任意、省略時は現在のブランチ）]"
 ---
 
-# gh-push — gh トークン経由の非対話 push
+# gh-push — 非対話 push（SSH 優先・gh フォールバック）
 
 ## このスキルの目的
 
-SSH 鍵がパスフレーズ保護されていて非対話セッションでは署名できない（標準入力が無く push が `publickey` で失敗する）状況でも、`git push` を通す。仕組みは1つ — **push 認証を gh の credential helper に肩代わりさせ、HTTPS で送る**:
+非対話セッション（TTY 無し）で `git push` を通す。経路は **決定論的に** 選ぶ:
 
-```
-git -c credential.helper= -c credential.helper='!gh auth git-credential' push <https-url> <branch>
-```
+1. **SSH 優先** — remote が SSH URL で、かつ ssh-agent に鍵がロード済み（`ssh-add -l` が exit 0）なら、素の `git push` を SSH で実行する。鍵が agent に載っているので署名は非対話で完結し、パスフレーズ入力待ちに入らない。`GIT_SSH_COMMAND='ssh -o BatchMode=yes'` を強制し、万一鍵が未ロードでもプロンプトに落ちず即失敗させる。
+2. **gh(HTTPS) フォールバック** — SSH push が失敗した場合、または SSH が使えない（remote が HTTPS / ssh-agent に鍵なし）場合は、push 認証を gh の credential helper に肩代わりさせて HTTPS で送る:
 
-`credential.helper=`（空）で既存ヘルパー一覧をリセットし、gh ヘルパーだけを使う。これで `cache`/`oauth` 等の介入を避ける。remote が SSH URL でも、URL を HTTPS に変換して push 先に使うので **origin の設定は変更しない**。
+   ```
+   git -c credential.helper= -c credential.helper='!gh auth git-credential' push <https-url> <branch>
+   ```
+
+   `credential.helper=`（空）で既存ヘルパー一覧をリセットし gh ヘルパーだけを使う（`cache`/`oauth` 等の介入を避ける）。remote が SSH URL でも URL を HTTPS に変換して push 先に使うので **origin の設定は変更しない**。
+
+**なぜ SSH を先に試すか**: 「SSH で push できるか」は ssh-agent の状態から `ssh-add -l` で決定論的に判定できる。ssh-agent が生きている環境（Linux で常駐、macOS のキーチェーン連携など）では素の push がそのまま通るため、余計なトークン経由を挟まない。判定に使う `ssh-add -l` は登録鍵の一覧照会であり、パスフレーズ入力の余地もタイムアウト待ちも無い。
 
 ## 前提
 
-- `gh auth status` でログイン済みで、トークンに **`repo`（write）scope** があること。無ければ push は権限エラーで落ちる（`gh auth refresh -s repo` で付与）。
-- GitHub（github.com / GitHub Enterprise）が対象。GitLab 等 gh が扱わないホストは対象外 — その場合はこのスキルを使わず、SSH 鍵や glab を案内する。
+- **SSH 経路の条件**: remote が SSH URL（`ssh://git@…` または `git@host:owner/repo`）で、`ssh-add -l` が鍵を返すこと。この2条件が揃わなければ自動的に gh 経路になる。
+- **gh 経路（フォールバック）の条件**: `gh auth status` でログイン済みで、トークンに **`repo`（write）scope** があること。無ければ push は権限エラーで落ちる（`gh auth refresh -s repo` で付与）。
+- SSH と gh のどちらも使えない（SSH 鍵未ロード かつ gh 未認証/未導入）ときは preflight/push が `ERROR:` で停止する。`ssh-add` で鍵をロードするか `gh auth login` を促す。
+- GitHub（github.com / GitHub Enterprise）が対象。GitLab 等 gh が扱わないホストは gh 経路が使えない — SSH が通らなければこのスキルの対象外（SSH 鍵や glab を案内する）。
 
 ## ワークフロー
 
@@ -31,7 +38,7 @@ git -c credential.helper= -c credential.helper='!gh auth git-credential' push <h
 bash <skill-dir>/scripts/gh-push.sh preflight [branch]
 ```
 
-`=== SECTION ===` 区切りの出力を読み、**push 先 URL・ブランチ・送るコミット**をユーザーに提示する。`STATE` の意味:
+`=== SECTION ===` 区切りの出力を読み、**push 経路（SSH / gh）・push 先 URL・ブランチ・送るコミット**をユーザーに提示する。`TARGET` の `route` 行で、SSH 経路か gh 経路かとその理由が分かる。`AUTH` セクションで ssh-agent の鍵有無と gh 認証を確認する。`STATE` の意味:
 
 - `up-to-date` … 差分なし。push 不要。
 - `new` … リモートに無い新規ブランチ。直近コミットを提示。
@@ -39,7 +46,7 @@ bash <skill-dir>/scripts/gh-push.sh preflight [branch]
 - `diverged` … **履歴分岐**。通常 push は弾かれる。WARNING を読み、**ここで停止してユーザーに確認**（fetch して rebase/merge で整合させるのが既定。意図的な上書きのときだけ force）。
 - `unknown` … リモート tip がローカルに無く厳密判定不能。非 FF ならサーバが安全に拒否するのでそのまま push 試行してよい。
 
-`AUTH` セクションで gh 認証ホスト／アカウントを確認する。preflight が `ERROR:` を出したら、その内容（未認証・未対応 URL・detached HEAD 等）を解決してから進む。
+preflight が `ERROR:` を出したら、その内容（SSH 鍵未ロード かつ gh 未認証・未対応 URL・detached HEAD 等）を解決してから進む。
 
 ### 2. push 実行
 
@@ -55,9 +62,9 @@ bash <skill-dir>/scripts/gh-push.sh push [branch]
 bash <skill-dir>/scripts/gh-push.sh push [branch] --force [--expect=<sha>]
 ```
 
-force は `--force-with-lease=<branch>:<現リモート tip>` の**明示 lease** で実行される（URL 直 push では引数なし `--force-with-lease` の比較対象となる remote-tracking ref が参照されず、常に stale info で拒否されるため）。呼び出し元が「安全と確認済みのリモート tip」を持っている場合 — rebase-flow スキルからの委譲等 — は `--expect=<sha>` で渡す。確認時点以降に他者の push が挟まると実 tip と不一致になり、push 前に確実に停止する。
+force は両経路とも `--force-with-lease=<branch>:<現リモート tip>` の**明示 lease** で実行される（gh 経路の URL 直 push では引数なし `--force-with-lease` の比較対象となる remote-tracking ref が参照されず常に stale info で拒否されるため、明示 lease に統一している）。呼び出し元が「安全と確認済みのリモート tip」を持っている場合 — rebase-flow スキルからの委譲等 — は `--expect=<sha>` で渡す。確認時点以降に他者の push が挟まると実 tip と不一致になり、push 前に確実に停止する。
 
-push 成功後、スクリプトは `refs/remotes/<remote>/<branch>` を手で進めて `git status` の ahead 表示を整合させる。
+gh 経路で push した場合、スクリプトは `refs/remotes/<remote>/<branch>` を手で進めて `git status` の ahead 表示を整合させる（URL 直 push では remote-tracking ref が自動更新されないため）。SSH 経路では git が更新するのでこの補正は行われない。実行結果の `OK: [ssh]` / `OK: [gh]` でどちらの経路を使ったか分かる。
 
 ## 制約
 
