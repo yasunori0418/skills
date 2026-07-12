@@ -64,7 +64,7 @@
                 touch "$out"
               '';
 
-          # Run plugin hook unit tests (hooks/scripts/*/tests/*.test.sh).
+          # Run plugin hook unit tests (hooks/*/tests/*.test.sh).
           # Scripts use `#!/usr/bin/env bash`, which does not exist in the nix
           # sandbox — copy to a writable dir and patchShebangs first.
           checks.hooks =
@@ -76,11 +76,11 @@
                 ];
               }
               ''
-                cp -r ${./hooks/scripts} scripts
-                chmod -R +w scripts
-                patchShebangs scripts
+                cp -r ${./hooks} hooks
+                chmod -R +w hooks
+                patchShebangs hooks
                 fail=0
-                for t in scripts/*/tests/*.test.sh; do
+                for t in hooks/*/tests/*.test.sh; do
                   bash "$t" || fail=1
                 done
                 [ "$fail" -eq 0 ]

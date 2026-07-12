@@ -3,7 +3,7 @@
 # sudo の実行を deny する（settings.json の deny `Bash(sudo:*)` の多層防御側）。
 #
 # 旧 cchook 構成は command_contains "sudo" の部分一致で、パスやファイル名に
-# "sudo" を含むだけの無害なコマンド（例: hooks/scripts/sudo-guard/ への操作）も
+# "sudo" を含むだけの無害なコマンド（例: hooks/sudo-guard/ への操作）も
 # 誤ブロックしていた。本スクリプトは「コマンド語として現れる sudo」のみ照合する:
 # 行頭またはコマンド区切り（; & | ` ( や空白）の直後に sudo が単語として現れる場合のみ。
 set -euo pipefail

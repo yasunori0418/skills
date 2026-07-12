@@ -1,5 +1,5 @@
 {
-  "description": "cchook から移植した個人運用 guard 群: AskUserQuestion のセッション単位無効化 (#aq-off/#aq-on)、github.com への WebFetch の gh 誘導、git rebase/reset のスキル経由強制 (arm marker)、raw force push の禁止、sudo の禁止、Stop 時のデスクトップ通知、自動圧縮前の保護指示。",
+  "description": "cchook から移植した個人運用 guard 群: AskUserQuestion のセッション単位無効化 (#aq-off/#aq-on)、github.com への WebFetch の gh 誘導、git rebase/reset のスキル経由強制 (arm marker)、raw force push の禁止、sudo の禁止、Stop 時のデスクトップ通知。",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/askuserquestion-guard/main.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/askuserquestion-guard/main.sh"
           }
         ]
       },
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/webfetch-github-guard/main.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/webfetch-github-guard/main.sh"
           }
         ]
       },
@@ -25,11 +25,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/git-guard/main.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/git-guard/main.sh"
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/sudo-guard/main.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/sudo-guard/main.sh"
           }
         ]
       }
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/askuserquestion-toggle/main.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/askuserquestion-toggle/main.sh"
           }
         ]
       }
@@ -49,18 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/notify-stop/main.sh"
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "auto",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/precompact-note/main.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-stop/main.sh"
           }
         ]
       }

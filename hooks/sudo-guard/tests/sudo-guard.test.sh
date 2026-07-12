@@ -29,7 +29,7 @@ check "after-pipe" "deny" "$(decision 'echo pw | sudo -S id')"
 check "bare" "deny" "$(decision 'sudo')"
 
 # 単語の一部・パスに含まれるだけ -> 沈黙
-check "dir-name" "" "$(decision 'mkdir -p hooks/scripts/sudo-guard/tests')"
+check "dir-name" "" "$(decision 'mkdir -p hooks/sudo-guard/tests')"
 check "file-arg" "" "$(decision 'cat docs/sudoers-note.md')"
 check "word-prefix" "" "$(decision 'echo visudo')"
 check "word-suffix" "" "$(decision 'echo sudoku')"
