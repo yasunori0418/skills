@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# gh-fetch.sh — 非対話セッション向け、HTTPS + gh トークン経由の git fetch / pull。
+# gh-fetch.sh — 非対話セッション向けの git fetch / pull。SSH 優先・gh フォールバック。
+# gh-push の取り込み（incoming）版。
 #
-# remote が SSH URL（git@github.com:owner/repo.git）でも、通信認証を
-# gh の credential helper に肩代わりさせて HTTPS で実行する。秘密鍵の
-# パスフレーズ入力（= 標準入力）を一切必要としないのが狙い。gh-push の
-# 取り込み（incoming）版。
+# 経路の選び方（決定論）:
+#   - remote が SSH URL かつ ssh-agent に鍵ロード済み（`ssh-add -l` が exit 0）なら、
+#     素の git fetch を SSH で実行する。鍵が agent に載っているので署名は非対話で
+#     完結し、パスフレーズ入力（= 標準入力）待ちに入らない。GIT_SSH_COMMAND に
+#     BatchMode=yes を強制し、万一の鍵未ロード時も即失敗させる。
+#   - SSH fetch が失敗した場合、または SSH が使えない（HTTPS remote / agent に鍵なし）
+#     場合は、通信認証を gh の credential helper に肩代わりさせて HTTPS で実行する。
+#     remote が SSH URL でも URL を HTTPS に変換して取得元に使うので origin は変えない。
 #
 # 使い方:
 #   gh-fetch.sh preflight [branch]                 取り込み対象を収集して提示用に出力（何もしない）
@@ -51,6 +56,24 @@ to_https() {
     esac
 }
 
+# remote URL が SSH 形式（ssh:// もしくは scp 形式 git@host:path）か。
+is_ssh_url() {
+    case "$1" in
+        ssh://*) return 0 ;;
+        https://*) return 1 ;;
+        *@*:*)   return 0 ;;
+        *)       return 1 ;;
+    esac
+}
+
+# ssh-agent に鍵がロード済みか（= 非対話でも SSH 署名できる）を決定論的に判定。
+# `ssh-add -l` の exit — 0: 鍵あり / 1: agent は生きているが鍵なし / 2: agent へ接続不能。
+# 鍵が載っていれば SSH fetch はパスフレーズを問われず通る。この一覧照会自体に
+# パスフレーズ入力の余地は無いので、タイムアウト待ちも発生しない。
+ssh_agent_has_key() {
+    ssh-add -l >/dev/null 2>&1
+}
+
 cmd="${1:-preflight}"; shift || true
 strategy="--ff-only"; branch=""
 for a in "$@"; do
@@ -72,15 +95,49 @@ url="$(git remote get-url "$remote" 2>/dev/null || true)"
 
 IFS=$'\t' read -r https host < <(to_https "$url")
 
-command -v gh >/dev/null 2>&1 || die "gh が見つかりません。GitHub CLI を導入してください"
-gh auth status --hostname "$host" >/dev/null 2>&1 \
-    || die "gh が host '$host' で未認証です。'gh auth login --hostname $host' を実行してください"
+# fetch 経路の決定（決定論、gh-push と同一方針）:
+#   remote が SSH URL かつ ssh-agent に鍵ロード済みなら SSH を優先し、
+#   素の git fetch を試す。失敗時のみ gh(HTTPS) 経路へフォールバックする。
+#   それ以外（HTTPS remote / agent に鍵なし）は最初から gh 経路。
+ssh_ok=0
+gh_route_reason=""
+if is_ssh_url "$url"; then
+    if ssh_agent_has_key; then
+        ssh_ok=1
+    else
+        gh_route_reason="ssh-agent に鍵なし/接続不能"
+    fi
+else
+    gh_route_reason="remote が非SSH（HTTPS）"
+fi
+
+gh_present=0
+if command -v gh >/dev/null 2>&1; then gh_present=1; fi
+gh_auth=0
+if [ "$gh_present" = 1 ] && gh auth status --hostname "$host" >/dev/null 2>&1; then
+    gh_auth=1
+fi
+
+# gh 経路が唯一の手段（SSH 不可）なのに gh が使えないなら、ここで止める。
+# ただし public リポジトリは HTTPS 変換のみで通るため、gh 未認証でも fetch は
+# 試せる。fetch 実行時に到達可否が確定するので、ここでは硬く止めない。
+if [ "$ssh_ok" != 1 ] && [ "$gh_present" != 1 ]; then
+    die "SSH 署名不可（ssh-agent に鍵なし/remote が非SSH）で、gh も見つかりません。GitHub CLI を導入するか ssh-add で鍵をロードしてください"
+fi
 
 local_tip="$(git rev-parse HEAD)"
 tracking_ref="refs/remotes/$remote/$branch"
 
-# リモート側 tip を ls-remote で取得（gh トークン認証経由）。auth/URL の早期検証も兼ねる。
-remote_tip="$(git "${CRED_RESET[@]}" ls-remote "$https" "refs/heads/$branch" 2>/dev/null | awk 'NR==1{print $1}')" || true
+# リモート側 tip を ls-remote で取得。auth/URL の早期検証も兼ねる。
+# SSH 経路なら SSH URL で直接引き、引けなければ gh トークン経由の HTTPS で
+# フォールバックする（public は gh 未認証でも HTTPS 変換だけで引ける）。
+remote_tip=""
+if [ "$ssh_ok" = 1 ]; then
+    remote_tip="$(GIT_SSH_COMMAND='ssh -o BatchMode=yes' git ls-remote "$url" "refs/heads/$branch" 2>/dev/null | awk 'NR==1{print $1}')" || true
+fi
+if [ -z "$remote_tip" ]; then
+    remote_tip="$(git "${CRED_RESET[@]}" ls-remote "$https" "refs/heads/$branch" 2>/dev/null | awk 'NR==1{print $1}')" || true
+fi
 
 # 取り込み方向の状態判定（push の逆向き）。
 #   missing-remote … リモートにそのブランチが無い
@@ -109,8 +166,23 @@ fi
 dirty=0
 [ -z "$(git status --porcelain 2>/dev/null)" ] || dirty=1
 
+# fetch 本体。SSH 経路を優先し、失敗したら gh(HTTPS) 経路へフォールバックする。
+# BatchMode=yes で万一の鍵未ロード時もパスフレーズ入力待ちに入らせず即失敗させる。
+# used_route に実際に成功した経路（ssh / gh）を残す。
+used_route=""
 do_fetch() {
+    used_route=""
+    local rc=1
+    if [ "$ssh_ok" = 1 ]; then
+        set +e
+        GIT_SSH_COMMAND='ssh -o BatchMode=yes' git fetch "$url" "+refs/heads/$branch:$tracking_ref"
+        rc=$?
+        set -e
+        if [ "$rc" = 0 ]; then used_route="ssh"; return 0; fi
+        echo "  SSH fetch に失敗 (exit $rc)。gh(HTTPS) 経路へフォールバックします..." >&2
+    fi
     git "${CRED_RESET[@]}" fetch "$https" "+refs/heads/$branch:$tracking_ref"
+    used_route="gh"
 }
 
 case "$cmd" in
@@ -121,9 +193,25 @@ case "$cmd" in
         echo "fetch_url:  $https"
         echo "host:       $host"
         echo "branch:     $branch"
+        if [ "$ssh_ok" = 1 ]; then
+            echo "route:      SSH（ssh-agent に鍵ロード済み → 素の git fetch を優先。失敗時 gh へフォールバック）"
+        else
+            echo "route:      gh(HTTPS)（$gh_route_reason のため）"
+        fi
         echo
         echo "=== AUTH ==="
-        gh auth status --hostname "$host" 2>&1 | sed 's/^/  /'
+        if [ "$ssh_ok" = 1 ]; then
+            echo "  ssh-agent: 鍵ロード済み（SSH 署名可）"
+        elif ssh-add -l >/dev/null 2>&1; then
+            echo "  ssh-agent: 鍵ロード済み（ただし remote が非SSH のため未使用）"
+        else
+            echo "  ssh-agent: 鍵なし/agent 接続不能"
+        fi
+        if [ "$gh_auth" = 1 ]; then
+            gh auth status --hostname "$host" 2>&1 | sed 's/^/  /'
+        else
+            echo "  gh: host '$host' で未認証（gh フォールバックは public リポジトリのみ通る）"
+        fi
         echo
         echo "=== STATE ==="
         echo "local HEAD:   $(git log -1 --format='%h %s' "$local_tip")"
@@ -164,14 +252,14 @@ case "$cmd" in
         if git rev-parse --verify -q "$tracking_ref" >/dev/null; then
             n="$(git rev-list --count "HEAD..$tracking_ref" 2>/dev/null || echo 0)"
             if [ "$n" -gt 0 ]; then
-                echo "OK: fetch 完了。未取り込みコミット $n 件（$tracking_ref）:"
+                echo "OK: [$used_route] fetch 完了。未取り込みコミット $n 件（$tracking_ref）:"
                 git log --format='  %h %s' "HEAD..$tracking_ref"
                 echo "（取り込むには: gh-fetch.sh pull $branch [--merge|--rebase]）"
             else
-                echo "OK: fetch 完了。取り込む差分はありません。"
+                echo "OK: [$used_route] fetch 完了。取り込む差分はありません。"
             fi
         else
-            echo "OK: fetch 完了。"
+            echo "OK: [$used_route] fetch 完了。"
         fi
         ;;
 
