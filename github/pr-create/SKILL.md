@@ -31,6 +31,7 @@ bash <skill-dir>/scripts/pr-context.sh [base-branch]
 `=== SECTION ===` 区切りの出力を読む:
 
 - **REPO IDENTITY** = 対象リポジトリの `repo` slug と `worktree-root`。**本文を起こす前にここを確認し**、いま PR を作ろうとしている対象と一致することを担保する（制約「対象リポジトリの取り違え禁止」）。
+- **PR BODY FILE** = 本文下書きの書き出し先（絶対パス）。**§5 でここに本文を Write し**、`template-check.sh` の第2引数にも同じパスを渡す。パスにはセッションごとにユニークな ID が埋まっている（worktrunk 等で複数セッションが `tmp_claude/` を symlink 共有していても衝突しないよう分離済み）。自分でファイル名を決めず、必ずこの行のパスを使う。同一セッションでの再実行は同じパスに落ちるので下書きの上書き更新になる。
 - **PLATFORM** = remote URL から判定したプラットフォームと使用 CLI・導入有無。`github`→`gh`、`gitlab`→`glab`、`unknown`/`installed: no` → 本文を提示して手動作成を案内。コマンド詳細は `references/platforms.md`。
 - **TEMPLATE** = リポジトリルートから決定論検出したテンプレ。`primary:` が出たら**それを使う（独自フォーマット禁止）**。`multi:` は複数テンプレなので候補提示して選んでもらう。`(テンプレートなし)` のときだけ §4 の汎用構成。**ここで `primary` が出ているのに自前の見出しで書くのは規約違反**。
 - **BASE BRANCH** = リモート既定ブランチではなく、**作業ブランチの分岐元**をローカル探索した結果。`(特定できませんでした)` や誤検出が疑わしいときは引数 `base-branch` を渡して再実行、またはユーザーに確認。
@@ -88,11 +89,11 @@ bash <skill-dir>/scripts/pr-context.sh [base-branch]
 
 テンプレ遵守を目視に委ねると、無意識にセクションを落としたり見出しを言い換えたりしやすい。決定論スクリプトで機械的に照合し、drift があれば提示前に潰す。
 
-1. 生成した本文を一時ファイルに書き出す（`tmp_claude/pr-body.md` 等、tmp-output 準拠）。
-2. テンプレ本体と照合する:
+1. 生成した本文を **§1 の `PR BODY FILE` が示すパス**に書き出す（セッション分離済みの絶対パス。自分でファイル名を決めない）。
+2. テンプレ本体と照合する（`<pr-body>` は §1 の `PR BODY FILE` のパス）:
 
    ```bash
-   bash <skill-dir>/scripts/template-check.sh <テンプレのパス> tmp_claude/pr-body.md
+   bash <skill-dir>/scripts/template-check.sh <テンプレのパス> <pr-body>
    ```
 
    - `RESULT: OK` → 骨組み一致。§7 の提示へ進む。
