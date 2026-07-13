@@ -107,6 +107,30 @@ detect_repo_identity() {
     echo "repo: $slug"
 }
 
+# --- PR 本文の書き出し先（セッション分離）---------------------------------
+# worktrunk 等で複数セッションが tmp_claude/ を symlink 共有していると、本文の
+# 下書きを固定名（pr-body.md）に書いた瞬間に別セッションと衝突する。セッション
+# ごとにユニークな ID をパスへ埋め、書き出し先を分離する。
+#
+# ID はセッション単位で安定なものを優先する（同一セッションで再実行しても同じ
+# パスに落ち、下書きを上書き更新できる）。取れないエージェント（Codex・素の CLI
+# 実行）では最終的に mktemp 由来のランダム値へフォールバックし、必ず非空・
+# 衝突しない値を得る。スクリプト自体は read-only を保ち、ファイルは作らない
+# （書き出しは呼び出し側が Write で行う）。
+detect_body_id() {
+    local raw="" v
+    # セッション単位で安定な候補を順に見る（Claude Code → 他エージェント）
+    for v in "${CLAUDE_CODE_SESSION_ID:-}" "${CLAUDE_SESSION_ID:-}" "${TIRITH_SESSION_ID:-}"; do
+        if [ -n "$v" ]; then raw="$v"; break; fi
+    done
+    # どれも無ければランダム（衝突しないことだけを担保。再現性は無い）
+    if [ -z "$raw" ]; then
+        raw=$(basename "$(mktemp -u)")
+    fi
+    # 先頭 8 文字を英数へ正規化（区切りや記号をパスに出さない）
+    printf '%s' "$raw" | tr -cd 'A-Za-z0-9' | cut -c1-8
+}
+
 # --- テンプレート検出 -----------------------------------------------------
 # PR/MR テンプレートをリポジトリルートから決定論的に探す。モデルが手で find を
 # 打つと打ち忘れ・スキップが起きるため、ここで確定させる。単一テンプレ（探索順
@@ -206,6 +230,14 @@ echo ""
 
 echo "=== REPO IDENTITY ==="
 detect_repo_identity
+echo ""
+
+echo "=== PR BODY FILE ==="
+# 本文下書きの書き出し先（セッション分離済み・絶対パス）。呼び出し側はこの
+# パスに本文を Write し、template-check.sh の第2引数にも同じパスを渡す。
+body_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+echo "$body_root/tmp_claude/pr-body-$(detect_body_id).md"
+echo "(このパスに本文を書き出す。セッションごとに分離され、他セッションと衝突しない)"
 echo ""
 
 echo "=== PLATFORM ==="
