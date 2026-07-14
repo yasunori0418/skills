@@ -3,12 +3,13 @@
 # gh-push の取り込み（incoming）版。
 #
 # 経路の選び方（決定論）:
-#   - remote が SSH URL かつ ssh-agent に鍵ロード済み（`ssh-add -l` が exit 0）なら、
-#     素の git fetch を SSH で実行する。鍵が agent に載っているので署名は非対話で
-#     完結し、パスフレーズ入力（= 標準入力）待ちに入らない。GIT_SSH_COMMAND に
-#     BatchMode=yes を強制し、万一の鍵未ロード時も即失敗させる。
-#   - SSH fetch が失敗した場合、または SSH が使えない（HTTPS remote / agent に鍵なし）
-#     場合は、通信認証を gh の credential helper に肩代わりさせて HTTPS で実行する。
+#   - remote が SSH URL で、`ssh -o BatchMode=yes` による非対話 SSH 認証が実際に
+#     通るなら、素の git fetch を SSH で実行する。判定は agent の鍵有無ではなく、
+#     BatchMode=yes での ls-remote が成功するかで直接テストする（agent の鍵・
+#     パスフレーズ無しのディスク鍵・macOS キーチェーン鍵を区別せず「非対話で
+#     通るか」を確かめられる。BatchMode=yes なのでパスフレーズ入力待ちには入らない）。
+#   - SSH 認証テストが失敗した場合、または remote が非SSH（HTTPS）の場合は、
+#     通信認証を gh の credential helper に肩代わりさせて HTTPS で実行する。
 #     remote が SSH URL でも URL を HTTPS に変換して取得元に使うので origin は変えない。
 #
 # 使い方:
@@ -24,6 +25,23 @@ set -euo pipefail
 # 既存の credential.helper 一覧を空でリセットしてから gh ヘルパーだけを使う。
 # cache / oauth など他ヘルパーの介入・キャッシュ汚染を避ける。
 CRED_RESET=(-c credential.helper= -c credential.helper='!gh auth git-credential')
+
+# SSH 経路で使う共通オプション（判定 ls-remote と fetch 本体の両方でこの値を使う）。
+#   BatchMode=yes            … パスフレーズ/パスワードのプロンプトに落ちず即失敗させる（非対話の担保）。
+#   ConnectTimeout=5         … 接続段階のハングを 5 秒で打ち切る。
+#   StrictHostKeyChecking=accept-new … known_hosts 未登録でも確認プロンプトに落ちず自動受理して進む
+#                                       （CI 等 known_hosts が空の環境でも SSH 判定が通る）。
+SSH_CMD='ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new'
+
+# 判定 ls-remote 限定の全体タイムアウト（fetch 本体はデータ転送があるので包まない）。
+# timeout / gtimeout があればそれで包み、無ければ SSH の ConnectTimeout に委ねる。
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_CMD=(timeout 10)
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_CMD=(gtimeout 10)
+else
+    TIMEOUT_CMD=()
+fi
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -66,12 +84,15 @@ is_ssh_url() {
     esac
 }
 
-# ssh-agent に鍵がロード済みか（= 非対話でも SSH 署名できる）を決定論的に判定。
-# `ssh-add -l` の exit — 0: 鍵あり / 1: agent は生きているが鍵なし / 2: agent へ接続不能。
-# 鍵が載っていれば SSH fetch はパスフレーズを問われず通る。この一覧照会自体に
-# パスフレーズ入力の余地は無いので、タイムアウト待ちも発生しない。
-ssh_agent_has_key() {
-    ssh-add -l >/dev/null 2>&1
+# SSH で全 head を非対話で引く。exit 0 なら「非対話 SSH 認証が通る」ことの
+# 直接の証拠。agent の鍵・パスフレーズ無しのディスク鍵・キーチェーン鍵を区別せず
+# 判定できる。出力（全 refs/heads）を stdout に返し、$branch の tip 抽出は呼び出し側で行う
+# （認証成功だがブランチ未作成なら tip は空になるが、それは exit 0 の「認証OK」と両立する）。
+# パイプで awk に食わせると認証失敗の exit code が握り潰されるため、ここでは
+# git の生の exit code をそのまま返す。
+ssh_ls_remote() {
+    "${TIMEOUT_CMD[@]}" env GIT_SSH_COMMAND="$SSH_CMD" \
+        git ls-remote "$url" "refs/heads/*" 2>/dev/null
 }
 
 cmd="${1:-preflight}"; shift || true
@@ -96,16 +117,22 @@ url="$(git remote get-url "$remote" 2>/dev/null || true)"
 IFS=$'\t' read -r https host < <(to_https "$url")
 
 # fetch 経路の決定（決定論、gh-push と同一方針）:
-#   remote が SSH URL かつ ssh-agent に鍵ロード済みなら SSH を優先し、
-#   素の git fetch を試す。失敗時のみ gh(HTTPS) 経路へフォールバックする。
-#   それ以外（HTTPS remote / agent に鍵なし）は最初から gh 経路。
+#   remote が SSH URL なら、まず BatchMode=yes での ls-remote を打って
+#   「非対話 SSH 認証が通るか」を実テストする。通ればその経路を採り、出力を
+#   リモート tip 取得にも流用する（往復増加ゼロ）。テストが失敗、または remote が
+#   非SSH（HTTPS）なら gh(HTTPS) 経路へ。判定は agent の鍵有無に依存しない
+#   （パスフレーズ無しのディスク鍵・macOS キーチェーン鍵でも非対話で通れば SSH を選ぶ）。
 ssh_ok=0
 gh_route_reason=""
+remote_tip=""
 if is_ssh_url "$url"; then
-    if ssh_agent_has_key; then
+    # 1 回の ls-remote で「認証が通るか（exit code）」と「$branch の tip」を同時に得る。
+    ssh_heads=""
+    if ssh_heads="$(ssh_ls_remote)"; then
         ssh_ok=1
+        remote_tip="$(printf '%s\n' "$ssh_heads" | awk -v r="refs/heads/$branch" '$2==r{print $1; exit}')"
     else
-        gh_route_reason="ssh-agent に鍵なし/接続不能"
+        gh_route_reason="非対話 SSH 認証テストに失敗"
     fi
 else
     gh_route_reason="remote が非SSH（HTTPS）"
@@ -122,19 +149,15 @@ fi
 # ただし public リポジトリは HTTPS 変換のみで通るため、gh 未認証でも fetch は
 # 試せる。fetch 実行時に到達可否が確定するので、ここでは硬く止めない。
 if [ "$ssh_ok" != 1 ] && [ "$gh_present" != 1 ]; then
-    die "SSH 署名不可（ssh-agent に鍵なし/remote が非SSH）で、gh も見つかりません。GitHub CLI を導入するか ssh-add で鍵をロードしてください"
+    die "非対話 SSH 認証不可（テスト失敗/remote が非SSH）で、gh も見つかりません。GitHub CLI を導入するか SSH 鍵を使える状態にしてください"
 fi
 
 local_tip="$(git rev-parse HEAD)"
 tracking_ref="refs/remotes/$remote/$branch"
 
-# リモート側 tip を ls-remote で取得。auth/URL の早期検証も兼ねる。
-# SSH 経路なら SSH URL で直接引き、引けなければ gh トークン経由の HTTPS で
-# フォールバックする（public は gh 未認証でも HTTPS 変換だけで引ける）。
-remote_tip=""
-if [ "$ssh_ok" = 1 ]; then
-    remote_tip="$(GIT_SSH_COMMAND='ssh -o BatchMode=yes' git ls-remote "$url" "refs/heads/$branch" 2>/dev/null | awk 'NR==1{print $1}')" || true
-fi
+# リモート側 tip の取得。SSH 経路なら経路判定の ls-remote 出力から既に $remote_tip を
+# 得ている（往復増加ゼロ）。SSH を使わない場合、または SSH では引けなかった場合は
+# gh トークン経由の HTTPS で引く（public は gh 未認証でも HTTPS 変換だけで引ける）。
 if [ -z "$remote_tip" ]; then
     remote_tip="$(git "${CRED_RESET[@]}" ls-remote "$https" "refs/heads/$branch" 2>/dev/null | awk 'NR==1{print $1}')" || true
 fi
@@ -167,7 +190,9 @@ dirty=0
 [ -z "$(git status --porcelain 2>/dev/null)" ] || dirty=1
 
 # fetch 本体。SSH 経路を優先し、失敗したら gh(HTTPS) 経路へフォールバックする。
-# BatchMode=yes で万一の鍵未ロード時もパスフレーズ入力待ちに入らせず即失敗させる。
+# 判定と同一の $SSH_CMD（BatchMode=yes 等）を使い、万一の非対話認証失敗時も
+# パスフレーズ入力待ちに入らせず即失敗させる。fetch 本体はデータ転送があるため
+# timeout では包まない（接続段階は ConnectTimeout に委ねる）。
 # used_route に実際に成功した経路（ssh / gh）を残す。
 used_route=""
 do_fetch() {
@@ -175,7 +200,7 @@ do_fetch() {
     local rc=1
     if [ "$ssh_ok" = 1 ]; then
         set +e
-        GIT_SSH_COMMAND='ssh -o BatchMode=yes' git fetch "$url" "+refs/heads/$branch:$tracking_ref"
+        GIT_SSH_COMMAND="$SSH_CMD" git fetch "$url" "+refs/heads/$branch:$tracking_ref"
         rc=$?
         set -e
         if [ "$rc" = 0 ]; then used_route="ssh"; return 0; fi
@@ -194,18 +219,18 @@ case "$cmd" in
         echo "host:       $host"
         echo "branch:     $branch"
         if [ "$ssh_ok" = 1 ]; then
-            echo "route:      SSH（ssh-agent に鍵ロード済み → 素の git fetch を優先。失敗時 gh へフォールバック）"
+            echo "route:      SSH（非対話 SSH 認証テスト成功 → 素の git fetch を優先。失敗時 gh へフォールバック）"
         else
             echo "route:      gh(HTTPS)（$gh_route_reason のため）"
         fi
         echo
         echo "=== AUTH ==="
         if [ "$ssh_ok" = 1 ]; then
-            echo "  ssh-agent: 鍵ロード済み（SSH 署名可）"
-        elif ssh-add -l >/dev/null 2>&1; then
-            echo "  ssh-agent: 鍵ロード済み（ただし remote が非SSH のため未使用）"
+            echo "  SSH 認証テスト: 成功（BatchMode=yes で非対話通過）"
+        elif is_ssh_url "$url"; then
+            echo "  SSH 認証テスト: 失敗（非対話では通らず → gh 経路）"
         else
-            echo "  ssh-agent: 鍵なし/agent 接続不能"
+            echo "  SSH 認証テスト: 未実施（remote が非SSH）"
         fi
         if [ "$gh_auth" = 1 ]; then
             gh auth status --hostname "$host" 2>&1 | sed 's/^/  /'
