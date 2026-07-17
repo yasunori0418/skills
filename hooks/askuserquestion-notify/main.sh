@@ -52,7 +52,9 @@ fi
 
 TITLE="Claude が質問中"
 
-case "$(uname)" in
+# OS 判定。既定は uname。テスト時のみ CLAUDE_AQ_UNAME で差し替え、Darwin/Linux
+# 両分岐をホスト非依存で検証する（本番では未設定 → 実 uname 固定）。
+case "${CLAUDE_AQ_UNAME:-$(uname)}" in
     Darwin)
         # 引数渡しでエスケープを回避（item 1 = 本文, item 2 = subtitle=header）。
         # subtitle は空文字でも AppleScript 上問題なく通る。
