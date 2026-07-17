@@ -64,11 +64,11 @@
                 touch "$out"
               '';
 
-          # Run plugin hook unit tests. Hooks live in two places: the standalone
-          # yasunori0418-hooks plugin (hooks/) and skill-coupled hooks colocated
-          # with their category plugin (skills/<cat>/hooks/, e.g. git-guard).
-          # Copy both trees and discover tests recursively so newly added
-          # category hooks are picked up automatically.
+          # Run plugin hook unit tests. Hooks live in two places: the skill-agnostic
+          # per-hook plugins (hooks/<plugin>/hooks/, one plugin per guard/notify hook)
+          # and skill-coupled hooks colocated with their category plugin
+          # (skills/<cat>/hooks/, e.g. git-guard). Copy both trees and discover tests
+          # recursively so newly added hooks are picked up automatically.
           # Scripts use `#!/usr/bin/env bash`, which does not exist in the nix
           # sandbox — copy to a writable dir and patchShebangs first.
           checks.hooks =
