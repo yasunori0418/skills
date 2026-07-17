@@ -1,0 +1,30 @@
+{
+  "description": "AskUserQuestion 運用 hook 群: セッション単位無効化 (#aq-off/#aq-on トグルでマーカーを作成/削除し、発火時に guard が deny 判定) と発火時のデスクトップ通知。",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/askuserquestion-guard/main.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/askuserquestion-notify/main.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/askuserquestion-toggle/main.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

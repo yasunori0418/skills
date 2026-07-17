@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "yasunori0418-webfetch-github-guard-hooks",
+  "description": "github.com への WebFetch を差し戻し gh コマンドへ誘導する hook。hooks/hooks.json を規約検出する。",
+  "version": "0.2.2",
+  "author": {
+    "name": "yasunori0418"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "hooks", "guard", "webfetch", "github"]
+}

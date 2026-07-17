@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "workflow-skills",
+  "description": "エージェント非依存の作業運用スキル群（external-writes / test-targeted）。外部システムへの書き込み運用ルールとテスト絞り込み運用ルールを扱う。",
+  "version": "0.2.2",
+  "author": {
+    "name": "yasunori0418"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "agentskills", "workflow"],
+  "skills": ["./external-writes", "./test-targeted"]
+}

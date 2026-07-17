@@ -1,0 +1,15 @@
+{
+  "description": "Stop 時にデスクトップ通知を出す hook。",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-stop/main.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

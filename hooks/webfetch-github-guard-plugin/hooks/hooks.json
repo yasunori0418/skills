@@ -1,0 +1,16 @@
+{
+  "description": "github.com への WebFetch を差し戻し gh コマンドへ誘導する hook。",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/webfetch-github-guard/main.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

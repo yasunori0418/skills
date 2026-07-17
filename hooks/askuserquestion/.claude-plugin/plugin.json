@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "yasunori0418-askuserquestion-hooks",
+  "description": "AskUserQuestion 運用 hook 群: セッション単位無効化 (#aq-off/#aq-on トグルでマーカーを作成/削除し、発火時に guard が deny 判定) と発火時のデスクトップ通知。hooks/hooks.json を規約検出する。",
+  "version": "0.2.2",
+  "author": {
+    "name": "yasunori0418"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "hooks", "guard", "askuserquestion"]
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "yasunori0418-notify-stop-hooks",
+  "description": "Stop 時にデスクトップ通知を出す hook。hooks/hooks.json を規約検出する。",
+  "version": "0.2.2",
+  "author": {
+    "name": "yasunori0418"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "hooks", "notify", "stop"]
+}

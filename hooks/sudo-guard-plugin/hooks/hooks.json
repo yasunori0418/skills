@@ -1,0 +1,16 @@
+{
+  "description": "Bash コマンドの sudo 実行を禁止する hook。",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/sudo-guard/main.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

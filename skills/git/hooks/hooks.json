@@ -1,0 +1,16 @@
+{
+  "description": "git-skills に同梱する skill 連動 guard: git rebase/reset を rebase-flow/reset-flow の arm marker がある時だけ通し、raw force push を gh-push スキル経由へ誘導する。rebase-flow/reset-flow スキルとペアで機能するため git-skills プラグインに同居する。",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/git-guard/main.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

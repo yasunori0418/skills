@@ -64,7 +64,11 @@
                 touch "$out"
               '';
 
-          # Run plugin hook unit tests (hooks/*/tests/*.test.sh).
+          # Run plugin hook unit tests. Hooks live in two places: the skill-agnostic
+          # per-hook plugins (hooks/<plugin>/hooks/, one plugin per guard/notify hook)
+          # and skill-coupled hooks colocated with their category plugin
+          # (skills/<cat>/hooks/, e.g. git-guard). Copy both trees and discover tests
+          # recursively so newly added hooks are picked up automatically.
           # Scripts use `#!/usr/bin/env bash`, which does not exist in the nix
           # sandbox — copy to a writable dir and patchShebangs first.
           checks.hooks =
@@ -77,12 +81,13 @@
               }
               ''
                 cp -r ${./hooks} hooks
-                chmod -R +w hooks
-                patchShebangs hooks
+                cp -r ${./skills} skills
+                chmod -R +w hooks skills
+                patchShebangs hooks skills
                 fail=0
-                for t in hooks/*/tests/*.test.sh; do
+                while IFS= read -r -d "" t; do
                   bash "$t" || fail=1
-                done
+                done < <(find hooks skills -type f -name '*.test.sh' -path '*/tests/*' -print0)
                 [ "$fail" -eq 0 ]
                 touch "$out"
               '';
