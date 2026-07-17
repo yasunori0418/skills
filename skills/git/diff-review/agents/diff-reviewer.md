@@ -8,7 +8,7 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          command: "${CLAUDE_PLUGIN_ROOT}/git/diff-review/scripts/validate-readonly-bash.sh"
+          command: "${CLAUDE_PLUGIN_ROOT}/diff-review/scripts/validate-readonly-bash.sh"
 ---
 
 あなたは読み取り専用のコードレビュアー。diff を分析し、指摘を報告することだけが仕事。
