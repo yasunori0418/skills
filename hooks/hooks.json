@@ -1,5 +1,5 @@
 {
-  "description": "cchook から移植した個人運用 guard 群: AskUserQuestion のセッション単位無効化 (#aq-off/#aq-on)、github.com への WebFetch の gh 誘導、git rebase/reset のスキル経由強制 (arm marker)、raw force push の禁止、sudo の禁止、Stop 時のデスクトップ通知。",
+  "description": "cchook から移植した個人運用 guard 群: AskUserQuestion のセッション単位無効化 (#aq-off/#aq-on)、AskUserQuestion 発火時のデスクトップ通知、github.com への WebFetch の gh 誘導、git rebase/reset のスキル経由強制 (arm marker)、raw force push の禁止、sudo の禁止、Stop 時のデスクトップ通知。",
   "hooks": {
     "PreToolUse": [
       {
@@ -8,6 +8,10 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/askuserquestion-guard/main.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/askuserquestion-notify/main.sh"
           }
         ]
       },
