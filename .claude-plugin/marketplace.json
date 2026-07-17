@@ -4,18 +4,68 @@
     "name": "yasunori0418"
   },
   "metadata": {
-    "description": "AI agent skills for Claude Code / Codex, following the agentskills.io open standard."
+    "description": "AI agent skills for Claude Code / Codex, following the agentskills.io open standard. Category plugins are installable individually."
   },
   "plugins": [
     {
-      "name": "yasunori0418-skills",
-      "source": "./",
-      "description": "AI agent skills (Claude Code / Codex) following the agentskills.io standard.",
+      "name": "git-skills",
+      "source": "./skills/git",
+      "description": "git 運用スキル群（commit-flow / diff-review / rebase-flow / reset-flow / parallel-worktree）と git-guard hook。",
       "author": {
         "name": "yasunori0418"
       },
       "category": "skills",
-      "tags": ["claude-code", "codex", "agentskills"]
+      "tags": ["claude-code", "codex", "agentskills", "git"]
+    },
+    {
+      "name": "github-skills",
+      "source": "./skills/github",
+      "description": "GitHub 運用スキル群（gh-ci-investigate / gh-fetch / gh-push / pr-create）。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "skills",
+      "tags": ["claude-code", "codex", "agentskills", "github"]
+    },
+    {
+      "name": "nix-skills",
+      "source": "./skills/nix",
+      "description": "Nix 運用スキル群（nix-cache-check / nix-devenv）。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "skills",
+      "tags": ["claude-code", "codex", "agentskills", "nix"]
+    },
+    {
+      "name": "claude-skills",
+      "source": "./skills/claude",
+      "description": "Claude Code 運用スキル群（external-writes / latency-triage / response-format / session-insights / test-targeted / tmp-output）。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "skills",
+      "tags": ["claude-code", "codex", "agentskills", "claude"]
+    },
+    {
+      "name": "product-skills",
+      "source": "./skills/product",
+      "description": "プロダクト業務スキル群（biz-translate / product-spec）。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "skills",
+      "tags": ["claude-code", "codex", "agentskills", "product"]
+    },
+    {
+      "name": "yasunori0418-hooks",
+      "source": "./",
+      "description": "skill 非依存の個人運用 guard/通知 hook 群（AskUserQuestion 無効化・通知、WebFetch の gh 誘導、sudo 禁止、Stop 通知）。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "hooks",
+      "tags": ["claude-code", "hooks", "guard"]
     }
   ]
 }
