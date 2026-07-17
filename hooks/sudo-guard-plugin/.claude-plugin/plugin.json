@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "yasunori0418-sudo-guard-hooks",
+  "description": "Bash コマンドの sudo 実行を禁止する hook。hooks/hooks.json を規約検出する。",
+  "version": "0.2.2",
+  "author": {
+    "name": "yasunori0418"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "hooks", "guard", "sudo"]
+}

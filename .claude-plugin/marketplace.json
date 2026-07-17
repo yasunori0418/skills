@@ -68,14 +68,44 @@
       "tags": ["claude-code", "agentskills", "product"]
     },
     {
-      "name": "yasunori0418-hooks",
-      "source": "./",
-      "description": "skill 非依存の個人運用 guard/通知 hook 群（AskUserQuestion 無効化・通知、WebFetch の gh 誘導、sudo 禁止、Stop 通知）。",
+      "name": "yasunori0418-askuserquestion-hooks",
+      "source": "./hooks/askuserquestion",
+      "description": "AskUserQuestion 運用 hook 群（セッション単位無効化 #aq-off/#aq-on と発火時のデスクトップ通知）。",
       "author": {
         "name": "yasunori0418"
       },
       "category": "hooks",
-      "tags": ["claude-code", "hooks", "guard"]
+      "tags": ["claude-code", "hooks", "guard", "askuserquestion"]
+    },
+    {
+      "name": "yasunori0418-webfetch-github-guard-hooks",
+      "source": "./hooks/webfetch-github-guard-plugin",
+      "description": "github.com への WebFetch を差し戻し gh コマンドへ誘導する hook。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "hooks",
+      "tags": ["claude-code", "hooks", "guard", "webfetch", "github"]
+    },
+    {
+      "name": "yasunori0418-sudo-guard-hooks",
+      "source": "./hooks/sudo-guard-plugin",
+      "description": "Bash コマンドの sudo 実行を禁止する hook。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "hooks",
+      "tags": ["claude-code", "hooks", "guard", "sudo"]
+    },
+    {
+      "name": "yasunori0418-notify-stop-hooks",
+      "source": "./hooks/notify-stop-plugin",
+      "description": "Stop 時にデスクトップ通知を出す hook。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "hooks",
+      "tags": ["claude-code", "hooks", "notify", "stop"]
     }
   ]
 }
