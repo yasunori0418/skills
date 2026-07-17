@@ -7,7 +7,7 @@
     "name": "yasunori0418"
   },
   "license": "MIT",
-  "keywords": ["claude-code", "codex", "agentskills", "claude"],
+  "keywords": ["claude-code", "agentskills", "claude"],
   "skills": [
     "./external-writes",
     "./latency-triage",

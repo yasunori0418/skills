@@ -7,6 +7,6 @@
     "name": "yasunori0418"
   },
   "license": "MIT",
-  "keywords": ["claude-code", "codex", "agentskills", "github"],
+  "keywords": ["claude-code", "agentskills", "github"],
   "skills": ["./gh-ci-investigate", "./gh-fetch", "./gh-push", "./pr-create"]
 }

@@ -7,7 +7,7 @@
     "name": "yasunori0418"
   },
   "license": "MIT",
-  "keywords": ["claude-code", "codex", "agentskills", "git"],
+  "keywords": ["claude-code", "agentskills", "git"],
   "skills": [
     "./commit-flow",
     "./diff-review",

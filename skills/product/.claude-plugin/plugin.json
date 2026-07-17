@@ -7,7 +7,7 @@
     "name": "yasunori0418"
   },
   "license": "MIT",
-  "keywords": ["claude-code", "codex", "agentskills", "product"],
+  "keywords": ["claude-code", "agentskills", "product"],
   "skills": ["./biz-translate", "./product-spec"],
   "agents": ["./product-spec/agents/product-researcher.md"]
 }
