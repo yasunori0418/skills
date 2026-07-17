@@ -14,14 +14,16 @@ NOTIFY="$SCRIPT_DIR/../main.sh"
 # /bin/sh を使い、bash 拡張（負のインデックス等）を避けた POSIX 構文で書く。
 TMPBIN=$(mktemp -d)
 trap 'rm -rf "$TMPBIN"' EXIT
+# echo は /bin/sh 実装によりバックスラッシュ列（\b 等）を解釈して壊すため
+# printf '%s\n' で素通しする。
 cat > "$TMPBIN/osascript" <<'MOCK'
 #!/bin/sh
 for a in "$@"; do last=$a; done
-echo "$last"
+printf '%s\n' "$last"
 MOCK
 cat > "$TMPBIN/dunstify" <<'MOCK'
 #!/bin/sh
-echo "$2"
+printf '%s\n' "$2"
 MOCK
 chmod +x "$TMPBIN/osascript" "$TMPBIN/dunstify"
 
