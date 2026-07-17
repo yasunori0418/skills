@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "claude-skills",
+  "description": "Claude Code 運用スキル群（external-writes / latency-triage / response-format / session-insights / test-targeted / tmp-output）。外部書き込み・遅延トリアージ・応答整形などの運用ルールを扱う。",
+  "version": "0.2.2",
+  "author": {
+    "name": "yasunori0418"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "codex", "agentskills", "claude"],
+  "skills": [
+    "./external-writes",
+    "./latency-triage",
+    "./response-format",
+    "./session-insights",
+    "./test-targeted",
+    "./tmp-output"
+  ]
+}

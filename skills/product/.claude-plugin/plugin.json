@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "product-skills",
+  "description": "プロダクト業務スキル群（biz-translate / product-spec）。ビジネス翻訳と競合調査・仕様策定を扱う。",
+  "version": "0.2.2",
+  "author": {
+    "name": "yasunori0418"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "codex", "agentskills", "product"],
+  "skills": ["./biz-translate", "./product-spec"],
+  "agents": ["./product-spec/agents/product-researcher.md"]
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "github-skills",
+  "description": "GitHub 運用スキル群（gh-ci-investigate / gh-fetch / gh-push / pr-create）。gh CLI 経由の CI 調査・fetch/push・PR 作成を扱う。",
+  "version": "0.2.2",
+  "author": {
+    "name": "yasunori0418"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "codex", "agentskills", "github"],
+  "skills": ["./gh-ci-investigate", "./gh-fetch", "./gh-push", "./pr-create"]
+}
