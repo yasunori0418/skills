@@ -40,12 +40,22 @@
     {
       "name": "claude-skills",
       "source": "./skills/claude",
-      "description": "Claude Code 運用スキル群（external-writes / latency-triage / response-format / session-insights / test-targeted / tmp-output）。",
+      "description": "Claude Code 固有の運用スキル群（latency-triage / response-format / session-insights / tmp-output）。",
       "author": {
         "name": "yasunori0418"
       },
       "category": "skills",
       "tags": ["claude-code", "agentskills", "claude"]
+    },
+    {
+      "name": "workflow-skills",
+      "source": "./skills/workflow",
+      "description": "エージェント非依存の作業運用スキル群（external-writes / test-targeted）。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "skills",
+      "tags": ["claude-code", "agentskills", "workflow"]
     },
     {
       "name": "product-skills",
