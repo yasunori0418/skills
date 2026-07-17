@@ -1,16 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "yasunori0418-skills",
-  "description": "AI agent skills (Claude Code / Codex) following the agentskills.io standard.",
+  "name": "yasunori0418-hooks",
+  "description": "skill 非依存の個人運用 guard/通知 hook 群（AskUserQuestion 無効化・通知、WebFetch の gh 誘導、sudo 禁止、Stop 通知）。hooks/hooks.json を規約検出する。",
   "version": "0.2.2",
   "author": {
     "name": "yasunori0418"
   },
   "license": "MIT",
-  "keywords": ["claude-code", "codex", "agentskills", "skills"],
-  "skills": ["./git", "./github", "./nix", "./claude", "./product"],
-  "agents": [
-    "./git/diff-review/agents/diff-reviewer.md",
-    "./product/product-spec/agents/product-researcher.md"
-  ]
+  "keywords": ["claude-code", "hooks", "guard"]
 }
