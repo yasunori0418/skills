@@ -4,7 +4,7 @@
     "name": "yasunori0418"
   },
   "metadata": {
-    "description": "AI agent skills for Claude Code / Codex, following the agentskills.io open standard. Category plugins are installable individually."
+    "description": "AI agent skills for Claude Code, following the agentskills.io open standard. Category plugins are installable individually."
   },
   "plugins": [
     {

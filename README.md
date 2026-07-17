@@ -1,6 +1,6 @@
 # skills
 
-AI エージェント(Claude Code / Codex)向けスキルを管理するリポジトリ。
+AI エージェント(Claude Code)向けスキルを管理するリポジトリ。
 各スキルは [agentskills.io](https://agentskills.io/specification) のオープン標準に従い、
 **カテゴリごとに独立した Claude Code プラグイン**として、1 つのマーケットプレイスから
 個別に install できる。
