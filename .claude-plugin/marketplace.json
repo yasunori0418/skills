@@ -40,7 +40,7 @@
     {
       "name": "claude-skills",
       "source": "./skills/claude",
-      "description": "Claude Code 固有の運用スキル群（latency-triage / response-format / session-insights / tmp-output）。",
+      "description": "Claude Code 固有の運用スキル群（latency-triage / response-format / session-insights / tmp-output / project-session）。",
       "author": {
         "name": "yasunori0418"
       },
