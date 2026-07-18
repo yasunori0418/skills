@@ -1,6 +1,6 @@
 ---
 name: project-session
-description: "ghq 管理下のプロジェクトを 1 つ選び、そのディレクトリでブランチを変えずに claude を detached tmux セッションとして起動する。引数は claude へそのまま passthrough（値なし --remote-control のみ実セッション名を自動補完し、リモート接続一覧と tmux ls の識別子を揃える）。セッション名は repo 名（sanitize 済み。ghq 内で repo 名が重複する場合は owner-repo、同名セッション存在時は連番 suffix）。worktree を作る /parallel-worktree と異なり単発・現ブランチのまま。`/project-session [プロジェクト] [claude引数...]` の明示実行専用。"
+description: "ghq 管理下のプロジェクトを 1 つ選び、そのディレクトリでブランチを変えずに claude を detached tmux セッションとして起動する。`/project-session` の明示実行専用。"
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[プロジェクト名(部分一致可)] [claudeへ渡す引数...]"
