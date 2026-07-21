@@ -68,6 +68,16 @@
       "tags": ["claude-code", "agentskills", "product"]
     },
     {
+      "name": "testing-skills",
+      "source": "./skills/testing",
+      "description": "ISTQB/JSTQB テストプロセススキル群（test-plan / test-monitor / test-analyze / test-design / test-implement / test-execute / test-report）。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "skills",
+      "tags": ["claude-code", "agentskills", "testing"]
+    },
+    {
       "name": "yasunori0418-askuserquestion-hooks",
       "source": "./hooks/askuserquestion",
       "description": "AskUserQuestion 運用 hook 群（セッション単位無効化 #aq-off/#aq-on と発火時のデスクトップ通知）。",

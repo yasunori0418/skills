@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "testing-skills",
+  "description": "ISTQB/JSTQB テストプロセススキル群（test-plan / test-monitor / test-analyze / test-design / test-implement / test-execute / test-report）。",
+  "version": "0.2.2",
+  "author": {
+    "name": "yasunori0418"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "agentskills", "testing"],
+  "skills": []
+}
