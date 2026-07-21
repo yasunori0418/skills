@@ -10,6 +10,7 @@
   "keywords": ["claude-code", "agentskills", "testing"],
   "skills": [
     "./test-plan",
+    "./test-monitor",
     "./test-analyze",
     "./test-design",
     "./test-implement",
