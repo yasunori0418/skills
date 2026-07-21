@@ -53,6 +53,42 @@ fi
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+# --- 非対話 SSH 認証テスト結果のメモ化 ---------------------------------------
+# SSH 認証が「非対話で通るか」は host 単位で決まり、リポジトリ/ブランチに依存しない。
+# セッション内で一度成功したら、以降は実 ls-remote を打たずにその結果を再利用する
+# （preflight → push、複数回 push の各回で往復コストを消せる）。
+#
+#   キー粒度 : host 単位（同一 host の別リポジトリでも再利用）
+#   保存先   : /tmp/gh-ssh-authcache.<session_id>.<host>（セッション毎に独立）
+#   TTL      : 30 分（ssh-agent ロック・鍵失効・キーチェーンロック等の状態変化に追従）
+#   対象     : 成功（ssh_ok=1）のみ。失敗は記録せず毎回テストする
+#             （鍵をアンロックした直後などに即座に SSH 経路へ復帰できる）。
+# $CLAUDE_SESSION_ID が無ければメモ化しない（＝従来どおり毎回テスト）。
+SSH_AUTH_TTL=1800   # 秒（30 分）
+
+ssh_cache_file() {
+    [ -n "${CLAUDE_SESSION_ID:-}" ] || return 1
+    local safe_host="${1//[^A-Za-z0-9._-]/_}"
+    printf '/tmp/gh-ssh-authcache.%s.%s\n' "$CLAUDE_SESSION_ID" "$safe_host"
+}
+
+# TTL 内の成功キャッシュがあれば 0 を返す（SSH 認証済みとみなす）。
+ssh_cache_valid() {
+    local f; f="$(ssh_cache_file "$1")" || return 1
+    [ -f "$f" ] || return 1
+    local saved now
+    saved="$(cat "$f" 2>/dev/null)" || return 1
+    case "$saved" in ''|*[!0-9]*) return 1 ;; esac   # 数値でなければ無効
+    now="$(date +%s)"
+    [ $((now - saved)) -lt "$SSH_AUTH_TTL" ]
+}
+
+# SSH 認証成功をエポック秒で記録する（stat の OS 差異を避け自前で時刻を持つ）。
+ssh_cache_store() {
+    local f; f="$(ssh_cache_file "$1")" || return 0
+    date +%s >"$f" 2>/dev/null || true
+}
+
 # remote URL → "https_url<TAB>host" に正規化。
 to_https() {
     local url="$1" host path rest
@@ -133,16 +169,25 @@ IFS=$'\t' read -r https host < <(to_https "$url")
 #   （パスフレーズ無しのディスク鍵・macOS キーチェーン鍵でも非対話で通れば SSH を選ぶ）。
 # BatchMode=yes を強制するため、SSH がパスフレーズ入力待ちに落ちる余地は無い。
 ssh_ok=0
+ssh_cached=0        # キャッシュ由来で ssh_ok を立てたか（tip は別途取得が要る）
 gh_route_reason=""
 remote_tip=""
 if is_ssh_url "$url"; then
-    # 1 回の ls-remote で「認証が通るか（exit code）」と「$branch の tip」を同時に得る。
-    ssh_heads=""
-    if ssh_heads="$(ssh_ls_remote)"; then
+    if ssh_cache_valid "$host"; then
+        # セッション内で SSH 認証成功済み。実 ls-remote を省き経路を確定する。
+        # このパスでは tip を得ていないので、後段の tip 取得で別途引く。
         ssh_ok=1
-        remote_tip="$(printf '%s\n' "$ssh_heads" | awk -v r="refs/heads/$branch" '$2==r{print $1; exit}')"
+        ssh_cached=1
     else
-        gh_route_reason="非対話 SSH 認証テストに失敗"
+        # 1 回の ls-remote で「認証が通るか（exit code）」と「$branch の tip」を同時に得る。
+        ssh_heads=""
+        if ssh_heads="$(ssh_ls_remote)"; then
+            ssh_ok=1
+            ssh_cache_store "$host"
+            remote_tip="$(printf '%s\n' "$ssh_heads" | awk -v r="refs/heads/$branch" '$2==r{print $1; exit}')"
+        else
+            gh_route_reason="非対話 SSH 認証テストに失敗"
+        fi
     fi
 else
     gh_route_reason="remote が非SSH（HTTPS）"
@@ -183,9 +228,22 @@ fi
 
 local_tip="$(git rev-parse HEAD)"
 
-# リモート側 tip の取得。SSH 経路なら経路判定の ls-remote 出力から既に $remote_tip を
-# 得ている（往復増加ゼロ）。SSH を使わない gh 経路で、かつ tip が未取得なら
-# gh トークン経由の HTTPS ls-remote で引く（auth/URL の早期検証も兼ねる）。
+# リモート側 tip の取得。SSH 経路を実テストしたときは経路判定の ls-remote 出力から
+# 既に $remote_tip を得ている（往復増加ゼロ）。tip が未取得のケースは 2 つ:
+#   1. SSH 認証キャッシュヒット（ssh_ok=1 だが判定 ls-remote を省いた）→ SSH で 1 ブランチ分だけ引く。
+#      ここで SSH が失敗したらキャッシュを破棄し gh 経路へ落とす（鍵失効などへの追従）。
+#   2. gh(HTTPS) 経路 → gh トークン経由で引く（auth/URL の早期検証も兼ねる）。
+if [ -z "$remote_tip" ] && [ "$ssh_cached" = 1 ]; then
+    # awk へ直接パイプすると ls-remote の exit code を握り潰すため、生出力を変数に受けてから抽出する。
+    if ssh_one="$(GIT_SSH_COMMAND="$SSH_CMD" "${TIMEOUT_CMD[@]}" git ls-remote "$url" "refs/heads/$branch" 2>/dev/null)"; then
+        remote_tip="$(printf '%s\n' "$ssh_one" | awk 'NR==1{print $1}')"
+    else
+        # キャッシュは有効だったが今回 SSH が通らなかった。gh 経路へ降格する。
+        ssh_ok=0; ssh_cached=0
+        gh_route_reason="キャッシュ済み SSH 認証が今回失敗（鍵失効等）"
+        f="$(ssh_cache_file "$host")" && rm -f "$f" 2>/dev/null || true
+    fi
+fi
 if [ -z "$remote_tip" ] && [ "$ssh_ok" != 1 ] && [ "$gh_auth" = 1 ]; then
     remote_tip="$(git "${CRED_RESET[@]}" ls-remote "$https" "refs/heads/$branch" 2>/dev/null | awk 'NR==1{print $1}')" || true
 fi
@@ -238,7 +296,9 @@ case "$cmd" in
         fi
         echo
         echo "=== AUTH ==="
-        if [ "$ssh_ok" = 1 ]; then
+        if [ "$ssh_ok" = 1 ] && [ "$ssh_cached" = 1 ]; then
+            echo "  SSH 認証テスト: 成功（セッション内キャッシュ再利用 — ls-remote 省略）"
+        elif [ "$ssh_ok" = 1 ]; then
             echo "  SSH 認証テスト: 成功（BatchMode=yes で非対話通過）"
         elif is_ssh_url "$url"; then
             echo "  SSH 認証テスト: 失敗（非対話では通らず → gh 経路）"
@@ -314,8 +374,10 @@ case "$cmd" in
             set +e; do_push_ssh; rc=$?; set -e
             if [ "$rc" = 0 ]; then
                 used_route="ssh"
+                ssh_cache_store "$host"   # 実 push が通った＝最も強い成功証拠。TTL を延長。
             elif [ "$gh_auth" = 1 ]; then
                 echo "  SSH push に失敗 (exit $rc)。gh(HTTPS) 経路へフォールバックします..." >&2
+                f="$(ssh_cache_file "$host")" && rm -f "$f" 2>/dev/null || true   # SSH が通らなかったのでキャッシュ破棄
                 set +e; do_push_gh; rc=$?; set -e
                 [ "$rc" = 0 ] && used_route="gh"
             fi
