@@ -13,6 +13,7 @@
     "./test-analyze",
     "./test-design",
     "./test-implement",
-    "./test-execute"
+    "./test-execute",
+    "./test-report"
   ]
 }
