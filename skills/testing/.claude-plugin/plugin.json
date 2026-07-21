@@ -8,5 +8,11 @@
   },
   "license": "MIT",
   "keywords": ["claude-code", "agentskills", "testing"],
-  "skills": ["./test-plan", "./test-analyze", "./test-design", "./test-implement", "./test-execute"]
+  "skills": [
+    "./test-plan",
+    "./test-analyze",
+    "./test-design",
+    "./test-implement",
+    "./test-execute"
+  ]
 }
