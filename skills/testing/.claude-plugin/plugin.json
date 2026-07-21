@@ -8,5 +8,5 @@
   },
   "license": "MIT",
   "keywords": ["claude-code", "agentskills", "testing"],
-  "skills": []
+  "skills": ["./test-plan"]
 }
