@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "learning-skills",
+  "description": "学習・理解支援スキル群（quizzing）。AI ツール利用で生じた理解負債の返済を扱う。",
+  "version": "0.2.2",
+  "author": {
+    "name": "yasunori0418"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "agentskills", "learning"],
+  "skills": ["./quizzing"]
+}

@@ -78,6 +78,16 @@
       "tags": ["claude-code", "agentskills", "testing"]
     },
     {
+      "name": "learning-skills",
+      "source": "./skills/learning",
+      "description": "学習・理解支援スキル群（quizzing）。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "skills",
+      "tags": ["claude-code", "agentskills", "learning"]
+    },
+    {
       "name": "yasunori0418-askuserquestion-hooks",
       "source": "./hooks/askuserquestion",
       "description": "AskUserQuestion 運用 hook 群（セッション単位無効化 #aq-off/#aq-on と発火時のデスクトップ通知）。",
