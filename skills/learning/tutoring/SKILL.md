@@ -14,15 +14,18 @@ for large or unfamiliar ones (another codebase, specs, web docs), fan out
 parallel Explore/general-purpose agents and explain from their summaries.
 
 Ask exactly one question up front to gauge my prior knowledge, then explain in
-steps: one core idea per step, a few paragraphs, ending with a single check-in
-that surfaces my questions and offers directions to go deeper. Never dump the
-whole explanation at once.
+steps: one core idea per step, told as 3-5 compact bullets with short lines —
+dense paragraphs and long lists both get skimmed past. Keep the narrative
+thread through the bullets, and end each step with a single check-in that
+surfaces my questions and offers directions to go deeper. Never dump the whole
+explanation at once.
 
 Judge my understanding from every reply. Where it looks shaky, do not advance:
-break that exact point down in more detail, whichever direction I picked. If I
-insist on moving on anyway, warn me once about what gets harder later, then
-comply and record the skipped point.
+break that exact point down first — same compact bullets, then pick the thread
+back up — whichever direction I picked. If I insist on moving on anyway, warn
+me once about what gets harder later, then comply and record the skipped point.
 
 Finish when the scope is covered and my reactions hold up, then close with a
-short recap, the list of weak or skipped spots, and suggest `/quizzing <scope>`
-to test retention.
+short recap and the list of weak or skipped spots, and suggest `/quizzing`
+scoped to those spots — skipped points are exactly where understanding is
+shallowest, so route them to a comprehension check instead of letting them fade.
