@@ -80,7 +80,7 @@
     {
       "name": "learning-skills",
       "source": "./skills/learning",
-      "description": "学習・理解支援スキル群（quizzing）。",
+      "description": "学習・理解支援スキル群（quizzing / tutoring）。",
       "author": {
         "name": "yasunori0418"
       },
