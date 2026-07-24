@@ -66,6 +66,8 @@ testing-skills 全 7 スキル共通の原則。型は test-plan が確立する
 
 - 本文は簡潔に保ち、テンプレ・詳細は `references/` に置く。
 - テンプレ: [`references/template.md`](references/template.md)（`test-analysis.md` の雛形）。
+- mini サマリ雛形: [`references/mini-template.md`](references/mini-template.md)
+  （`mini-test-analysis.md` の雛形。手順 5 で使う）。
 
 ## 手順
 
@@ -134,6 +136,15 @@ testing-skills 全 7 スキル共通の原則。型は test-plan が確立する
   あれば優先）へ書き込む。
 - 手順 1〜3 で見つけた対象・仕様・テスタビリティの問題は「改善提案」セクションに記載（原則 3）。
 - 末尾で **次工程 `/test-design <テスト対象名>` の実行を提案** する（原則 4）。自分では進めない。
+
+### 手順 5: mini サマリの作成（レビュー収束後）
+
+- 本編 `test-analysis.md` への利用者フィードバックが出なくなり、確認が完了したら、同ディレクトリに
+  初見者向けサマリ **`mini-test-analysis.md`** を作成する。**レビュー中は作らない**
+  （フィードバックのたびに本編と同期し直すことになるため、収束後に一度だけ作る）。
+- 構成は [`references/mini-template.md`](references/mini-template.md) に従う。対象ドメインに
+  詳しくない人へ短時間で説明できる状態を目指し、見出しは「何を確認するか」「何が怖いか」の
+  ような問いの形にする。先行する `mini-test-plan.md` があればリスク番号を相互参照で一貫させる。
 
 ## 用語（JSTQB 訳語 / 初出英語併記）
 
