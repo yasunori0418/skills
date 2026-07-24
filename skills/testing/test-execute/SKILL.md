@@ -28,7 +28,7 @@ test-implement が具体化したテストを実行・記録し、失敗を欠�
 
 ## このスキルが従う横断原則
 
-testing-skills 全 7 スキル共通の原則。型は test-plan（参照実装）に揃える。
+testing-skills 全 8 スキル共通の原則。型は test-plan（参照実装）に揃える。
 
 ### 1. ファイル規約 + 任意入力
 

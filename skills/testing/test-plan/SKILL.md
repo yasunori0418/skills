@@ -20,7 +20,7 @@ ISTQB/JSTQB のテストプロセス 7 活動のうち **テスト計画（test 
 
 ## このスキルが従う横断原則
 
-testing-skills 全 7 スキル共通の原則。test-plan はこの型を確立する参照実装。
+testing-skills 全 8 スキル共通の原則。test-plan はこの型を確立する参照実装。
 
 ### 1. ファイル規約 + 任意入力
 

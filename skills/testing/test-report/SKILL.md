@@ -25,7 +25,7 @@ ISTQB/JSTQB のテストプロセス 7 活動のうち、テスト完了（test 
 
 ## このスキルが従う横断原則
 
-testing-skills 全 7 スキル共通の原則。
+testing-skills 全 8 スキル共通の原則。
 
 ### 1. ファイル規約 + 任意入力
 
