@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "git-skills",
-  "description": "git 運用スキル群（commit-flow / diff-review / rebase-flow / reset-flow / parallel-worktree）と、rebase/reset を安全運用へ強制する git-guard hook。",
+  "description": "git 運用スキル群（commit-flow / commit-plan / diff-review / rebase-flow / reset-flow / parallel-worktree）と、rebase/reset を安全運用へ強制する git-guard hook。",
   "version": "0.2.2",
   "author": {
     "name": "yasunori0418"
@@ -10,6 +10,7 @@
   "keywords": ["claude-code", "agentskills", "git"],
   "skills": [
     "./commit-flow",
+    "./commit-plan",
     "./diff-review",
     "./parallel-worktree",
     "./rebase-flow",
