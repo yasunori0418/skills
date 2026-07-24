@@ -48,7 +48,7 @@
 
 - このテスト計画: `docs/test/<テスト対象名>/test-plan.md`
 - 初見者向けサマリ: `mini-test-plan.md`（本計画のレビュー収束後に作成）
-- 後続工程で作られる成果物（予定）: `test-analysis.md` / `test-cases.md` / ほか
+- 後続工程で作られる成果物（予定）: `test-analysis.md` / `test-design.md` / `test-case.md` / ほか
 
 ## 7. 改善提案
 

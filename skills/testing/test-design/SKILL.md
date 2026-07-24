@@ -1,6 +1,6 @@
 ---
 name: test-design
-description: ISTQB/JSTQB のテスト設計（test design）活動を支援するスキル。test-analyze が識別したテスト条件から、テスト対象の特性に応じたテスト技法（同値分割・境界値分析・デシジョンテーブル・状態遷移・カバレッジ基準・エラー推測など）を選定提案し、承認された技法で具体的なテストケース（入力値・前提・期待結果）を導出して選定根拠つきの test-cases.md を作る。「テストケースを作って」「テストケースを設計して」「どの技法で網羅すべきか提案して」「境界値/デシジョンテーブルでテストを起こして」と依頼されたときに使う。テストコード実装（test-implement）は対象外。単発のテスト作成依頼（単にユニットテストを書きたいだけ）も対象外。/test-design <テスト対象名> で明示的に呼び出されたときのみ使用する。
+description: ISTQB/JSTQB のテスト設計（test design）活動を支援するスキル。test-analyze が識別したテスト条件から、テスト対象の特性に応じたテスト技法（同値分割・境界値分析・デシジョンテーブル・状態遷移・カバレッジ基準・エラー推測など）を選定提案し、承認された技法で具体的なテストケース（入力値・前提・期待結果）を導出して、設計書 test-design.md（技法選定根拠・カバレッジ）とケース一覧 test-case.md の 2 本を作る。「テストケースを作って」「テストケースを設計して」「どの技法で網羅すべきか提案して」「境界値/デシジョンテーブルでテストを起こして」と依頼されたときに使う。テストコード実装（test-implement）は対象外。単発のテスト作成依頼（単にユニットテストを書きたいだけ）も対象外。/test-design <テスト対象名> で明示的に呼び出されたときのみ使用する。
 license: MIT
 disable-model-invocation: true
 user-invocable: true
@@ -11,8 +11,13 @@ argument-hint: "[テスト対象名]"
 
 ISTQB/JSTQB のテストプロセス 7 活動のうち **テスト設計（test design）** を担う単機能スキル。
 test-analyze が識別した **テスト条件** から、対象特性に応じた **テスト技法（test technique）** を
-選定提案し、承認された技法で **具体的なテストケース（入力値・前提・期待結果）** を導出して
-`test-cases.md` を 1 本作る。**技法の選定根拠を必ず成果物に残す**。
+選定提案し、承認された技法で **具体的なテストケース（入力値・前提・期待結果）** を導出して、
+成果物を 2 本作る。**設計判断とケース一覧を 1 ファイルに混在させない**:
+
+- **`test-design.md`（テスト設計書）**: 採用技法と選定根拠・カバレッジ確認・改善提案。
+  **技法の選定根拠を必ずこちらに残す**。
+- **`test-case.md`（テストケース一覧）**: 前提・入力・期待結果の一覧のみ。技法の根拠は
+  `test-design.md` への参照で示す。
 
 このスキルは **テストケースの導出だけ** を行う。テストコード・手順書への具体化（test-implement）・
 実行（test-execute）・レポートは各専用スキルの担当で、ここでは呼び出さない。**単発のテスト作成
@@ -26,7 +31,8 @@ testing-skills 全 7 スキル共通の原則。型は test-plan が確立する
 
 ### 1. ファイル規約 + 任意入力
 
-- 成果物の既定パスは **`docs/test/<テスト対象名>/test-cases.md`**。
+- 成果物の既定パスは **`docs/test/<テスト対象名>/test-design.md`** と
+  **同 `test-case.md`** の 2 本。
 - **プロジェクト側（`CLAUDE.md` / `AGENTS.md` 等）に成果物の配置規約があればそちらを優先する**。
   着手前にリポジトリを調べ、既存の `docs/` 構成やテストドキュメントの慣習に合わせる。
 - 前工程 test-analyze の成果物 **`docs/test/<テスト対象名>/test-analysis.md`**（テスト条件と
@@ -60,7 +66,9 @@ testing-skills 全 7 スキル共通の原則。型は test-plan が確立する
 ### 5. Progressive disclosure
 
 - 本文は簡潔に保ち、テンプレ・技法カタログ・詳細は `references/` に置く。
-- テンプレ: [`references/template.md`](references/template.md)（`test-cases.md` の雛形）。
+- テンプレ: [`references/template-design.md`](references/template-design.md)
+  （`test-design.md` の雛形）、
+  [`references/template-case.md`](references/template-case.md)（`test-case.md` の雛形）。
 - 技法カタログ:
   [`references/techniques-blackbox.md`](references/techniques-blackbox.md)（ブラックボックス技法）、
   [`references/techniques-whitebox-experience.md`](references/techniques-whitebox-experience.md)
@@ -118,11 +126,14 @@ testing-skills 全 7 スキル共通の原則。型は test-plan が確立する
 
 ### 手順 4: ドラフト提示 → 承認 → 書き込み
 
-- [`references/template.md`](references/template.md) の構成で `test-cases.md` のドラフトを作り、
-  **本文で提示して承認を得る**（原則 2）。**技法選定根拠のセクションを必ず含める**。
-- 承認後、規約パス（既定 `docs/test/<テスト対象名>/test-cases.md`、プロジェクト規約があれば
-  優先）へ書き込む。
-- 手順 1〜3 で見つけた対象・仕様・テスタビリティの問題は「改善提案」セクションに記載（原則 3）。
+- [`references/template-design.md`](references/template-design.md) の構成で `test-design.md`、
+  [`references/template-case.md`](references/template-case.md) の構成で `test-case.md` の
+  ドラフトを作り、**本文で提示して承認を得る**（原則 2）。**技法選定根拠のセクションを
+  設計書側に必ず含める**。設計判断（技法・カバレッジ・除外）とケース一覧を混在させない。
+- 承認後、規約パス（既定 `docs/test/<テスト対象名>/test-design.md` と同 `test-case.md`、
+  プロジェクト規約があれば優先）へ書き込む。
+- 手順 1〜3 で見つけた対象・仕様・テスタビリティの問題は `test-design.md` の「改善提案」
+  セクションに記載（原則 3）。
 - 末尾で **次工程 `/test-implement <テスト対象名>` の実行を提案** する（原則 4）。自分では進めない。
 
 ## 用語（JSTQB 訳語 / 初出英語併記）

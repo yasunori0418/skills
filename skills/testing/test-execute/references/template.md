@@ -14,7 +14,7 @@
 
 ## 2. 実行結果詳細
 
-test-cases.md / test-procedures.md のケースごとに結果を記録する。
+test-case.md / test-procedures.md のケースごとに結果を記録する。
 
 | ケース # | 内容 | 結果 | 実際結果（失敗時） | 対応欠陥候補 # |
 |---|---|---|---|---|
