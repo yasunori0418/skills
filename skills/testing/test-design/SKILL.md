@@ -69,6 +69,10 @@ testing-skills 全 7 スキル共通の原則。型は test-plan が確立する
 - テンプレ: [`references/template-design.md`](references/template-design.md)
   （`test-design.md` の雛形）、
   [`references/template-case.md`](references/template-case.md)（`test-case.md` の雛形）。
+- mini サマリ雛形: [`references/mini-template-design.md`](references/mini-template-design.md)
+  （`mini-test-design.md` の雛形）、
+  [`references/mini-template-case.md`](references/mini-template-case.md)
+  （`mini-test-case.md` の雛形。いずれも手順 5 で使う）。
 - 技法カタログ:
   [`references/techniques-blackbox.md`](references/techniques-blackbox.md)（ブラックボックス技法）、
   [`references/techniques-whitebox-experience.md`](references/techniques-whitebox-experience.md)
@@ -135,6 +139,17 @@ testing-skills 全 7 スキル共通の原則。型は test-plan が確立する
 - 手順 1〜3 で見つけた対象・仕様・テスタビリティの問題は `test-design.md` の「改善提案」
   セクションに記載（原則 3）。
 - 末尾で **次工程 `/test-implement <テスト対象名>` の実行を提案** する（原則 4）。自分では進めない。
+
+### 手順 5: mini サマリの作成（レビュー収束後）
+
+- 本編 `test-design.md` / `test-case.md` への利用者フィードバックが出なくなり、確認が完了したら、
+  同ディレクトリに初見者向けサマリ **`mini-test-design.md`** と **`mini-test-case.md`** を
+  作成する。**レビュー中は作らない**（フィードバックのたびに本編と同期し直すことになるため、
+  収束後に一度だけ作る）。
+- 構成は [`references/mini-template-design.md`](references/mini-template-design.md) /
+  [`references/mini-template-case.md`](references/mini-template-case.md) に従う。対象ドメインに
+  詳しくない人へ短時間で説明できる状態を目指す。先行する `mini-test-plan.md` /
+  `mini-test-analysis.md` があればリスク番号・テスト条件番号を相互参照で一貫させる。
 
 ## 用語（JSTQB 訳語 / 初出英語併記）
 

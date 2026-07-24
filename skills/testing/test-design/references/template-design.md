@@ -4,6 +4,7 @@
 - 作成日: <YYYY-MM-DD>
 - 入力: <参照した test-analysis.md / test-plan.md / 仕様・コードへのパス/リンク>
 - ケース一覧: [`test-case.md`](test-case.md)（本設計に基づく具体テストケース）
+- 初見者向けサマリ: `mini-test-design.md` / `mini-test-case.md`（レビュー収束後に作成）
 
 ## 1. 採用テスト技法と選定根拠
 
