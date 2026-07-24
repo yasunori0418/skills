@@ -85,6 +85,8 @@ testing-skills 全 7 スキル共通の原則。
 
 - 本文は簡潔に保ち、テンプレ・詳細は `references/` に置く。
 - テンプレ: [`references/template.md`](references/template.md)（`test-monitoring.md` の雛形）。
+- mini サマリ雛形: [`references/mini-template.md`](references/mini-template.md)
+  （`mini-test-monitoring.md` の雛形。手順 5 で使う）。
 - メトリクス早見表: [`references/metrics-catalog.md`](references/metrics-catalog.md)
   （進捗・カバレッジ・失敗率・flaky 率などの定義と取得元）。
 
@@ -147,6 +149,14 @@ Markdown 成果物（`test-monitoring.md`・改善提案等）に適用する。
 - 手順 1〜3 で見つけた問題は「改善提案」セクションに記載（原則 3）。
 - 計測結果の評価が必要になったら、末尾で **`/test-report` の実行を提案** する（原則 4）。
   データ分析・評価はこのスキルでは行わない。
+
+### 手順 5: mini サマリの作成（レビュー収束後）
+
+- 本編 `test-monitoring.md` と実装物への利用者フィードバックが出なくなり、確認が完了したら、
+  同ディレクトリに初見者向けサマリ **`mini-test-monitoring.md`** を作成する。**レビュー中は
+  作らない**（フィードバックのたびに本編と同期し直すことになるため、収束後に一度だけ作る）。
+- 構成は [`references/mini-template.md`](references/mini-template.md) に従う。対象ドメインに
+  詳しくない人へ「何を測っていて、どこで見られるか」を短時間で説明できる状態を目指す。
 
 ## 用語（JSTQB 訳語 / 初出英語併記）
 
