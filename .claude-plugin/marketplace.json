@@ -118,6 +118,16 @@
       "tags": ["claude-code", "hooks", "guard", "sudo"]
     },
     {
+      "name": "yasunori0418-task-boundary-hooks",
+      "source": "./hooks/task-boundary-plugin",
+      "description": "worktree の境界ファイル .claude/task-boundary.json が宣言する glob の外への Edit / Write / NotebookEdit を deny する hook。境界ファイルが無ければ沈黙する（fail-open）。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "hooks",
+      "tags": ["claude-code", "hooks", "guard", "task-boundary"]
+    },
+    {
       "name": "yasunori0418-notify-stop-hooks",
       "source": "./hooks/notify-stop-plugin",
       "description": "Stop 時にデスクトップ通知を出す hook。",

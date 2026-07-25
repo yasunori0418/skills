@@ -1,0 +1,16 @@
+{
+  "description": "書き込み対象パスから遡って見つけた .claude/task-boundary.json の allow glob と照合し、境界外の書き込みを deny する hook。境界ファイルが無いセッションでは沈黙する。",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/task-boundary/main.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
