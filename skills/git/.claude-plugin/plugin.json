@@ -14,7 +14,8 @@
     "./diff-review",
     "./parallel-worktree",
     "./rebase-flow",
-    "./reset-flow"
+    "./reset-flow",
+    "./review-converge"
   ],
   "agents": ["./diff-review/agents/diff-reviewer.md"]
 }
