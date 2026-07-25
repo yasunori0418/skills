@@ -62,6 +62,46 @@ sum_numstat() {
     awk -F'\t' '{ if ($1 != "-") t += $1; if ($2 != "-") t += $2 } END { print t + 0 }'
 }
 
+# グラウンドトゥルース(仕様・基本設計・テストケース)と タスク境界ファイルの機械検出。
+# 該当が 1 つも無ければ何も出力しない(節ごと出さない = 従来と完全一致の出力)。
+emit_ground_truth() {
+    local root
+    root=$(git rev-parse --show-toplevel)
+
+    # docs/dev/*/spec.md の走査で対象を特定する(対象名 = spec.md の親ディレクトリ名)
+    local targets=() d
+    if [[ -d "$root/docs/dev" ]]; then
+        for d in "$root"/docs/dev/*/; do
+            [[ -f "$d/spec.md" ]] || continue
+            targets+=("$(basename "$d")")
+        done
+    fi
+
+    local boundary="$root/.claude/task-boundary.json"
+    local has_boundary=0
+    [[ -f "$boundary" ]] && has_boundary=1
+
+    if ((${#targets[@]} == 0)) && ((has_boundary == 0)); then
+        return
+    fi
+
+    echo "== GROUND_TRUTH (レビューの判断基準。Read して仕様・テストケースと突合する) =="
+    local t p
+    for t in ${targets[@]+"${targets[@]}"}; do
+        echo "対象: $t"
+        for p in "docs/dev/$t/spec.md" "docs/dev/$t/basic-design.md" "docs/test/$t/test-case.md"; do
+            if [[ -f "$root/$p" ]]; then
+                echo "  $p"
+            fi
+        done
+    done
+    if ((has_boundary == 1)); then
+        echo "タスク境界ファイル: .claude/task-boundary.json"
+        sed 's/^/  /' "$boundary"
+    fi
+    echo
+}
+
 cmd_manifest() {
     resolve_base "${1:-}"
     local head_sha branch commits untracked
@@ -80,6 +120,8 @@ cmd_manifest() {
     echo "base=$BASE_SHA"
     echo "head=$head_sha (branch: $branch)"
     echo
+
+    emit_ground_truth
 
     echo "== COMMITS (base..HEAD, 古い順) =="
     if [[ -z "$commits" ]]; then
