@@ -68,14 +68,39 @@ PC の強制終了・クラッシュ等でセッションが不意に中断さ�
   {
     "default_base": "main",
     "tasks": [
-      {"id": "A",  "branch": "refactor-logger",  "depends_on": [],     "prompt": "..."},
+      {"id": "A",  "branch": "refactor-logger",  "depends_on": [],     "prompt": "...",
+       "boundary": ["pkg/logger/**"]},
       {"id": "B2", "branch": "feat-client-retry", "depends_on": ["B1"], "prompt": "...",
+       "boundary": ["internal/client/**", "docs/dev/<対象>/**"],
        "model": "opus", "permission_mode": "plan", "effort": "high"}
     ]
   }
   ```
 
-  `depends_on` 空＝独立（並列・base はデフォルト）、親 1 つ＝その親ブランチを base にした stacked 段。task の `model`/`permission_mode`/`effort` は任意で、その task の claude だけ起動設定を上書きする（CLI のグローバル既定より優先。どちらも無ければ claude 自身のデフォルト）。出力の `SCHEDULE`（起動ウェーブ）と `COMMANDS`（実行コマンド列）をそのまま plan と実行に使う。スクリプトのロジック（順序・base・クォート）は SKILL.md 上で再現しない。
+  `depends_on` 空＝独立（並列・base はデフォルト）、親 1 つ＝その親ブランチを base にした stacked 段。task の `model`/`permission_mode`/`effort` は任意で、その task の claude だけ起動設定を上書きする（CLI のグローバル既定より優先。どちらも無ければ claude 自身のデフォルト）。`boundary`（触ってよいパスの glob 配列）は任意で、書くと**境界ファイル生成**が有効になる（下記「タスク境界の宣言」）。出力の `SCHEDULE`（起動ウェーブ）・`BOUNDARY`（境界宣言の一覧）・`COMMANDS`（実行コマンド列）をそのまま plan と実行に使う。スクリプトのロジック（順序・base・クォート・ワーカー指示の標準セクション）は SKILL.md 上で再現しない。
+
+## タスク境界の宣言（スコープドリフト防止）
+
+並列レーンでワーカーが当初タスクの境界から逸脱する**スコープドリフト**を、**指示 + 機械ブロックの二層**で止める。
+
+- spec の task に `boundary`（glob 配列）を書くと、`plan_orchestration.py` がその worktree ルートへ境界ファイル **`.claude/task-boundary.json`**（`task_id` / `branch` / `allow` の公開契約書式）を生成する起動コマンドを組む。worktree ローカル・gitignored（`git rev-parse --git-path info/exclude` へ追記）・`wt remove` で worktree ごと消える
+- 境界ファイルがあると **`task-boundary` hook（`hooks/task-boundary-plugin`。併用推奨）** が境界外への `Edit`/`Write`/`NotebookEdit` を PreToolUse で deny する。スキルと hook は互いを呼ばず、**境界ファイルという契約だけで結合**する（hook 未 install でも指示層は機能する）
+- **`boundary` を書かない task は境界ファイルを生成しない**（従来動作）。境界ファイルが無ければ hook は即 `exit 0` で沈黙するので、境界宣言はオプトイン
+- 境界の決め方は依存解析と同じ材料（触るファイルが重ならない範囲）。**テスト実装も含むので実装・テスト両ディレクトリを宣言に入れる**（TDD 順序を指示しながらテストが境界外だと詰む）
+
+生成方式・gitignore 方式の選定理由は `references/orchestration.md` の「タスク境界の宣言」を参照。
+
+## ワーカー指示の標準セクション（常設）
+
+ワーカーへ渡す指示は**手書きしない**。`plan_orchestration.py` が spec の `prompt`（タスク本文）の後ろへ下記を必ず連結する。
+
+1. **実装範囲の境界** — `boundary` の glob と一致（境界ファイルの `allow` と同じ値を使うのでコードで整合が担保される）
+2. **TDD 順序** — テスト実装 → アプリケーション実装
+3. **コミット粒度** — `commit-flow` 準拠（Conventional Commits、論理的に独立した修正は都度）
+4. **push ポリシー** — 自分の feature ブランチのみ
+5. **PR 作成前ゲート** — `/review-converge` で収束させてから `/pr-create [base]`
+
+spec の `prompt` には**タスク固有の内容と完了条件だけ**を書く（境界・TDD・PR 手順を重複して書かない）。雛形の全文は `references/orchestration.md` の「タスクプロンプト雛形」。
 
 ## 全体フロー
 
@@ -83,7 +108,9 @@ PC の強制終了・クラッシュ等でセッションが不意に中断さ�
 
 入口は**事前に作成済みの計画ファイル**（引数のパス。無ければ所在をユーザーに確認）を読むこと。計画は別途 grill-me 方式（対話的な問い詰め）で固めてファイル化されている前提。
 
-読み込んだら、各タスクの **依存辺（A→B）** を意味的に判定し、上記 JSON spec に落とす。判定基準（同一ファイル/モジュールに触る、前段の型・関数・API・スキーマに依存する 等）は `references/orchestration.md` の「依存解析」を参照。**計画ファイルに依存関係やタスク境界が欠けている／曖昧なときは、憶測で埋めず grill-me 方式で確認する**（依存の読み違えは並列化を破綻させる）。
+読み込んだら、各タスクの **依存辺（A→B）** と **境界（`boundary`: 触ってよいパスの glob）** を意味的に判定し、上記 JSON spec に落とす。判定基準（同一ファイル/モジュールに触る、前段の型・関数・API・スキーマに依存する 等）は `references/orchestration.md` の「依存解析」を参照。**計画ファイルに依存関係やタスク境界が欠けている／曖昧なときは、憶測で埋めず grill-me 方式で確認する**（依存の読み違えは並列化を破綻させる。境界の読み違えは hook による誤 deny か、逆にドリフトの取り逃がしになる）。
+
+ワーカー指示の標準セクション（境界・TDD 順序・PR 前ゲート・コミット粒度）はスクリプトが自動付与するので、`prompt` にはタスク固有の内容と完了条件だけを書く。
 
 ### Phase 1: 事前確認・スケジュール算出 → plan 承認
 
@@ -103,12 +130,13 @@ PC の強制終了・クラッシュ等でセッションが不意に中断さ�
 - **wave 0（独立）**: まとめて並列起動してよい
 - **後続 wave（stacked）**: 前段の**コミット完了を `wt list` で確認してから**起動（後段が前段のコードを見られるように）
 
-各エージェントへ渡すプロンプトには必ず「実装範囲の境界（他タスクのファイルに触れない）」「コミット粒度（commit-flow 準拠）」「自分の feature ブランチを push してよい」「最後に `/pr-create [base]` を実行」を含める（spec の `prompt` に書く）。worktree は必ず `wt switch --create` で作り、`isolation: "worktree"` は使わない。
+各エージェントへ渡す指示の標準セクション（実装範囲の境界・TDD 順序・コミット粒度・push ポリシー・`/review-converge` → `/pr-create` の PR 前ゲート）は**スクリプトが自動付与する**ので、spec の `prompt` に手書きしない。`boundary` 宣言ありの task は、起動コマンドが `-x bash` の bootstrap 経由になり、worktree 生成後・claude 起動前に境界ファイルを置く（`COMMANDS` をそのまま実行すればよい）。worktree は必ず `wt switch --create` で作り、`isolation: "worktree"` は使わない。
 
 ### Phase 3: PR 作成
 
-各エージェントが実装・コミット完了後、**自分で `/pr-create [base]` を実行**して draft PR を作る（スクリプトの `PR` セクション通り）。
+各エージェントが実装・コミット完了後、**まず `/review-converge` で指摘を収束させ**、そのうえで**自分で `/pr-create [base]` を実行**して draft PR を作る（スクリプトの `PR` セクション通り）。この 2 段は標準セクションで全 task に指示される。
 
+- **PR 作成前ゲート**: `/review-converge` の収束前に PR を作らない（レビュー往復を PR 上に持ち出さない）
 - push ポリシー: エージェントは**自分の feature ブランチに限り push 可**。`main` 等の保護ブランチへは push しない
 - stacked: `/pr-create <parent-branch>` で base を前段に向ける
 - `/pr-create` はタイトル/本文をユーザー承認後に作成する対話ゲートを持つ。各 tmux pane で承認待ちになるので、ユーザーが pane を巡回して承認する。**`--remote-control` 起動時は pane を巡回せず、claude.ai 等のリモート接続から各セッション（Remote Control 名＝ブランチ名）に入って承認できる**
@@ -125,6 +153,8 @@ PC の強制終了・クラッシュ等でセッションが不意に中断さ�
 
 - `commit-plan`: plan のコミット計画（Phase 1 の plan 本文に必ず含める）
 - `commit-flow`: コミット粒度とコミットの実施（各エージェント）
-- `pr-create`: PR 本文作成（Phase 4 で各エージェントが `/pr-create` を実行）
+- `review-converge`: PR 作成前ゲートの収束ループ（Phase 3 で各エージェントが `/review-converge` を実行）
+- `pr-create`: PR 本文作成（Phase 3 で各エージェントが収束後に `/pr-create` を実行）
 - `worktrunk`: `wt` の設定・hook の詳細が要るとき
-- `references/orchestration.md`: 依存解析ヒューリスティック、`wt`/tmux/`gh` コマンドレシピ、stacked 構築手順、タスクプロンプト雛形
+- `task-boundary` hook（`hooks/task-boundary-plugin`。**併用推奨**・別プラグイン）: 境界ファイルを読んで境界外の `Edit`/`Write` を機械ブロックする。このスキルとは境界ファイル書式という契約だけで結合し、互いを呼ばない
+- `references/orchestration.md`: 依存解析ヒューリスティック、`wt`/tmux/`gh` コマンドレシピ、stacked 構築手順、タスク境界の宣言（生成方式・gitignore 方式の選定理由）、タスクプロンプト雛形

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """parallel-worktree オーケストレーション・スケジューラ（決定論 CLI）。
 
-AI が計画ファイルから抽出した「タスク + 依存辺」を JSON spec として受け取り、
-循環検出・base 解決・並列ウェーブ算出・wt/tmux//pr-create コマンド列生成を
-決定論的に行う。AI の責務は spec（特に depends_on の意味的判定）まで。
-ここから先の順序・base・クォートはこのスクリプトが保証する。
+AI が計画ファイルから抽出した「タスク + 依存辺 + 境界宣言」を JSON spec として受け取り、
+循環検出・base 解決・並列ウェーブ算出・境界ファイル生成・ワーカー指示テンプレ付与・
+wt/tmux//pr-create コマンド列生成を決定論的に行う。AI の責務は spec（特に depends_on の
+意味的判定と boundary の範囲決め）まで。ここから先の順序・base・クォート・
+ワーカー指示の標準セクションはこのスクリプトが保証する。
 
 実行（cwd 非依存。uv が skill 直下の pyproject.toml から .venv を構築し、その中で実行）:
     uv run --project "<skill-dir>" python "<skill-dir>/scripts/plan_orchestration.py" <spec.json>
@@ -21,9 +22,11 @@ spec の形:
 {
   "default_base": "main",
   "tasks": [
-    {"id": "A",  "branch": "refactor-logger",  "depends_on": [],     "prompt": "..."},
+    {"id": "A",  "branch": "refactor-logger",  "depends_on": [],     "prompt": "...",
+     "boundary": ["pkg/logger/**"]},
     {"id": "B1", "branch": "feat-config-retry", "depends_on": [],     "prompt": "..."},
     {"id": "B2", "branch": "feat-client-retry", "depends_on": ["B1"], "prompt": "...",
+     "boundary": ["internal/client/**", "docs/dev/retry/**"],
      "model": "opus", "permission_mode": "plan", "effort": "high"}
   ]
 }
@@ -35,6 +38,9 @@ spec の形:
 - model / permission_mode / effort は任意。その task の claude をこの設定で起動する。
   未指定なら CLI の --model / --permission-mode / --effort（グローバル既定）を使う。
   どちらも無ければ claude のデフォルト（＝呼び出し元の設定）に従う。
+- boundary は任意の「触ってよいパス」glob 配列。指定すると、その worktree に
+  境界ファイル `.claude/task-boundary.json`（task-boundary hook の公開契約書式）を
+  生成する起動コマンドを組む。未指定の task は境界ファイルを作らない（従来動作）。
 
 終了コード: 致命的検証エラー（循環・未定義参照・重複・必須欠落）があれば 1、警告のみなら 0。
 
@@ -75,6 +81,8 @@ class Task:
     model: str = ""
     permission_mode: str = ""
     effort: str = ""
+    # 触ってよいパスの glob。空 = 境界宣言なし（境界ファイルを生成しない従来動作）。
+    boundary: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -118,6 +126,9 @@ def parse_spec(data: object) -> Plan:
         deps_raw = t.get("depends_on", []) or []
         if not isinstance(deps_raw, list):
             raise SpecError(f"depends_on は配列でない: {t.get('id')!r}")
+        bounds_raw = t.get("boundary", []) or []
+        if not isinstance(bounds_raw, list):
+            raise SpecError(f"boundary は配列でない: {t.get('id')!r}")
         tasks.append(
             Task(
                 id=str(t.get("id", "")).strip(),
@@ -127,6 +138,7 @@ def parse_spec(data: object) -> Plan:
                 model=str(t.get("model", "")).strip(),
                 permission_mode=str(t.get("permission_mode", "")).strip(),
                 effort=str(t.get("effort", "")).strip(),
+                boundary=tuple(g for g in (str(b).strip() for b in bounds_raw) if g),
             )
         )
     default_base = str(data.get("default_base", "main")).strip() or "main"
@@ -263,6 +275,81 @@ def launch_flags(task: Task, launch: Launch) -> list[str]:
     return flags
 
 
+BOUNDARY_FILE = ".claude/task-boundary.json"
+
+# 境界ファイルを worktree ローカルかつ gitignored に置くための bootstrap。
+# 引数は $1=境界 JSON 本文。cwd は wt switch 後の worktree ルート（wt --execute の仕様）。
+#
+# gitignore 方式は `git rev-parse --git-path info/exclude` への追記を採る。linked worktree
+# から実行しても common dir（メインリポジトリの .git/info/exclude）へ正しく解決されるため、
+# worktree の .git がファイル（gitdir ポインタ）である差異を呼び出し側で場合分けしなくて済む。
+# パターンは 1 ファイル固定・行頭 / 付き・重複追記を grep -qxF で抑止するので冪等。
+#
+# set -e は意図的（fail-closed）。cwd は wt switch --create が作った worktree なので git
+# リポジトリであることが前提で、rev-parse がコケるのは環境が壊れている場合だけ。そのとき
+# 境界の無い状態で claude を起動する（＝ガードレール無しで走らせる）より、起動せず
+# tmux セッションに失敗を残す方が安全。hook 側の fail-open とは役割が逆であることに注意。
+BOUNDARY_BOOTSTRAP = (
+    "set -e; "
+    f"mkdir -p {shlex.quote(BOUNDARY_FILE.rsplit('/', 1)[0])}; "
+    f"printf '%s\\n' \"$1\" > {shlex.quote(BOUNDARY_FILE)}; "
+    'ex="$(git rev-parse --path-format=absolute --git-path info/exclude)"; '
+    'mkdir -p "$(dirname "$ex")"; '
+    f"pat='/{BOUNDARY_FILE}'; "
+    'grep -qxF "$pat" "$ex" 2>/dev/null || printf \'%s\\n\' "$pat" >> "$ex"; '
+    "shift; "
+    'exec claude "$@"'
+)
+
+
+def boundary_json(task: Task) -> str:
+    """task の境界宣言 -> 境界ファイル（.claude/task-boundary.json）の内容。
+
+    書式は task-boundary hook の公開契約（task_id / branch / allow）。生成者を
+    parallel-worktree に限定しないため、キー順・構造をここで固定する。
+    """
+    return json.dumps(
+        {"task_id": task.id, "branch": task.branch, "allow": list(task.boundary)},
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def worker_sections(task: Task, base: str, default_base: str) -> str:
+    """ワーカーへ渡す指示の標準セクション（常設テンプレ）。
+
+    手書き指示への依存を廃し、境界・TDD 順序・PR 前ゲート・コミット粒度を
+    全 task に必ず載せる。境界の記述は境界ファイル（boundary_json）と同じ glob を
+    使い、hook のブロック条件と指示文が食い違わないようにする。
+    """
+    if task.boundary:
+        scope = (
+            "- 編集してよい範囲（境界）: "
+            + ", ".join(task.boundary)
+            + f"\n  この glob 外のファイルは編集しない。宣言は {BOUNDARY_FILE} と同一で、"
+            "task-boundary hook が境界外の Edit/Write を機械ブロックする。\n"
+            "  境界を広げる必要が出たら自分で境界ファイルを書き換えず、ユーザーに相談する。"
+        )
+    else:
+        scope = (
+            "- 編集してよい範囲（境界）: このタスクの担当範囲に限る。他タスクのファイルに触れない"
+        )
+    pr_arg = "" if base == default_base else f" {base}"
+    return "\n".join(
+        [
+            "## 制約（parallel-worktree 標準セクション）",
+            scope,
+            "- TDD 順序: テストを先に実装し（失敗を確認）、その後アプリケーション実装で通す",
+            "- コミット粒度: 論理的に独立した修正は都度コミットする"
+            "（commit-flow スキル準拠、Conventional Commits）",
+            f"- push: 自分の feature ブランチ {task.branch} に限り push してよい。"
+            "main 等の保護ブランチへは push しない",
+            "- PR 作成前ゲート: `/review-converge` を実行して指摘を収束させてから "
+            f"`/pr-create{pr_arg}` を実行する（収束前に PR を作らない）",
+        ]
+    )
+
+
 def render(plan: Plan, an: Analysis, launch: Launch = Launch()) -> str:
     """Plan + Analysis -> 人間/AI 向けテキスト出力（純粋）。
 
@@ -295,6 +382,21 @@ def render(plan: Plan, an: Analysis, launch: Launch = Launch()) -> str:
         kind = "独立・並列" if level == 0 else f"stacked {level}段目"
         out.append(f"  wave {level} ({kind}): {', '.join(wave)}")
 
+    declared = [t for t in sorted(plan.tasks, key=lambda x: x.id) if t.boundary]
+    if declared:
+        out.append(f"\n=== BOUNDARY (各 worktree に生成する {BOUNDARY_FILE}) ===")
+        out.append(
+            "worktree ローカル・gitignored（git rev-parse --git-path info/exclude へ追記）。"
+            "task-boundary hook が境界外の Edit/Write を機械ブロックする。"
+        )
+        for t in declared:
+            out.append(f"  {t.id} ({t.branch}): {', '.join(t.boundary)}")
+        undeclared = sorted(t.id for t in plan.tasks if not t.boundary)
+        if undeclared:
+            out.append(
+                f"  境界宣言なし（境界ファイルを生成しない・hook は沈黙）: {', '.join(undeclared)}"
+            )
+
     defaults = []
     if launch.model:
         defaults.append(f"model={launch.model}")
@@ -320,7 +422,9 @@ def render(plan: Plan, an: Analysis, launch: Launch = Launch()) -> str:
         for t in sorted(wave_tasks, key=lambda x: x.id):
             base = an.bases[t.id]
             sess = sanitize(t.branch)
-            prompt = t.prompt or f"<{t.id} のタスクプロンプト未記入>"
+            body = t.prompt or f"<{t.id} のタスクプロンプト未記入>"
+            # ワーカー指示は「タスク本文 + 標準セクション」を常に連結する（手書き指示の廃止）。
+            prompt = f"{body}\n\n{worker_sections(t, base, plan.default_base)}"
             base_part = "" if (level == 0 and base == plan.default_base) else f" --base {shlex.quote(base)}"
             # -x claude の -- 以降に渡す引数列。すべて positional な prompt より前に置く。
             # 起動フラグ（--model/--permission-mode/--effort）は task 個別 > グローバル既定で解決。
@@ -330,12 +434,31 @@ def render(plan: Plan, an: Analysis, launch: Launch = Launch()) -> str:
             # 追えるようにする。--remote-control は値オプション省略可だが、後続の prompt を名前
             # として誤食いしないよう常に名前を明示する。
             rc_args = ["--remote-control", sess] if launch.remote_control else []
-            exec_args = launch_flags(t, launch) + rc_args + [prompt]
+            claude_args = launch_flags(t, launch) + rc_args + [prompt]
+            if t.boundary:
+                # 境界宣言ありのときは claude を直接 exec せず、bootstrap シェル経由にする。
+                # wt --execute は worktree ルートを cwd にして走るので、ここで境界ファイルを
+                # 置いてから exec claude "$@" に繋ぐ（worktree 生成後・claude 起動前の唯一の窓）。
+                # 境界 JSON と claude 引数はすべて positional 引数で渡し、入れ子クォートを避ける。
+                exec_cmd = "bash"
+                exec_args = [
+                    "-c",
+                    BOUNDARY_BOOTSTRAP,
+                    f"wt-boundary-{t.id}",
+                    boundary_json(t),
+                    *claude_args,
+                ]
+            else:
+                exec_cmd = "claude"
+                exec_args = claude_args
             args_str = " ".join(shlex.quote(a) for a in exec_args)
-            inner = f"wt switch --create {shlex.quote(t.branch)}{base_part} -x claude -- {args_str}"
+            inner = (
+                f"wt switch --create {shlex.quote(t.branch)}{base_part}"
+                f" -x {exec_cmd} -- {args_str}"
+            )
             out.append(f"tmux new-session -d -s {shlex.quote(sess)} {shlex.quote(inner)}")
 
-    out.append("\n=== PR (各エージェントが実装・コミット後に実行) ===")
+    out.append("\n=== PR (各エージェントが実装・コミット後、/review-converge 収束後に実行) ===")
     for t in sorted(plan.tasks, key=lambda x: (an.levels[x.id], x.id)):
         base = an.bases[t.id]
         arg = "" if base == plan.default_base else f" {base}"
