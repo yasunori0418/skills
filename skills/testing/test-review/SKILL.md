@@ -1,6 +1,6 @@
 ---
 name: test-review
-description: ISTQB/JSTQB のテストプロセス各工程の出口ゲートとして、工程成果物（test-plan.md / test-analysis.md / test-design.md / test-case.md / テスト実装 / test-execution-log.md / test-monitoring.md / test-summary-report.md）をレビューするスキル。決定論スクリプトの機械検査（トレーサビリティ ID 突合・テンプレ準拠）と test-reviewer サブエージェントの定性レビューを行い、利用者が通過/条件付き通過/差し戻しを判定して軽量記録 test-review-<工程>.md を残す。各工程スキル（test-plan〜test-report）が完了宣言の前に本スキルの実行を促す。ソースコード diff のレビュー（diff-review）とは別物で、対象はテストプロセスの成果物のみ。成果物の修正・代作はしない。/test-review <テスト対象名> [工程] で明示的に呼び出されたときのみ使用する。
+description: ISTQB/JSTQB のテストプロセス各工程の出口ゲートとして、工程成果物（test-plan.md / test-analysis.md / test-design.md / test-case.md / テスト実装 / test-execution-log.md / test-monitoring.md / test-summary-report.md）をレビューするスキル。決定論スクリプトの機械検査（トレーサビリティ ID 突合・テンプレ準拠）と test-reviewer サブエージェントの定性レビューを行い、利用者が通過/条件付き通過/差し戻しを判定して軽量記録 test-review-<工程>.md を残す。上流の仕様・基本設計（spec / design-doc 工程。docs/dev/<対象>/spec.md・basic-design.md）は機械検査と利用者判定のみの軽量ゲートとして扱う。各工程スキル（test-plan〜test-report / feature-spec / basic-design）が完了宣言の前に本スキルの実行を促す。ソースコード diff のレビュー（diff-review）とは別物で、対象はテストプロセスの成果物のみ。成果物の修正・代作はしない。/test-review <テスト対象名> [工程] で明示的に呼び出されたときのみ使用する。
 license: MIT
 disable-model-invocation: true
 user-invocable: true
@@ -21,6 +21,8 @@ ISTQB/JSTQB の **静的テスト（レビュー）** をテストプロセス�
 
 | 工程引数 | 対象工程スキル | レビュー対象（既定パス: `docs/test/<テスト対象名>/`） |
 |---|---|---|
+| spec ※ | feature-spec | `docs/dev/<対象>/spec.md` |
+| design-doc ※ | basic-design | `docs/dev/<対象>/basic-design.md` |
 | plan | test-plan | `test-plan.md` |
 | analyze | test-analyze | `test-analysis.md` |
 | design | test-design | `test-design.md` / `test-case.md` |
@@ -28,6 +30,20 @@ ISTQB/JSTQB の **静的テスト（レビュー）** をテストプロセス�
 | execute | test-execute | `test-execution-log.md` |
 | monitor | test-monitor | `test-monitoring.md` と計測基盤の実装物 |
 | report | test-report | `test-summary-report.md` |
+
+※ **`spec` / `design-doc` は軽量ゲート**。テストプロセスの上流にある仕様・基本設計を対象とし、
+他工程と違って **AI 定性レビュー（test-reviewer サブエージェント）を起動しない**。
+機械検査 → 利用者判定 → 記録の 3 段で閉じる（手順 2 を飛ばす）。
+
+- 理由: 仕様・設計の**意味的**な欠陥検出（矛盾・テスト可能性・検証可能性）は、テスト工程との
+  往復（early testing）が正式な担い手である。ゲートが検査するのは**形式契約**
+  （必須セクション・REQ-# の形式と一意性・参照整合）のみで、意味には踏み込まない。
+- レビュー**対象**のパスだけが `docs/dev/<対象>/` である点に注意する。レビュー**記録**の置き場所は
+  他工程と同じく `docs/test/<対象>/test-review-<工程>.md`（原則 1 のまま変えない）。
+- 検査内容: `spec` は必須セクション / REQ-# 定義見出しの一意性 / 受け入れ条件の空欄と REQ-# 紐づけ /
+  下流 `test-analysis.md` からの孤児参照（仕様改訂で参照先 REQ-# を消していないか）。
+  `design-doc` は必須セクション / 機能一覧の各行の REQ-# 参照必須と `spec.md` での実在 /
+  `test-case.md` があれば CASE-# 突合。突合先が無い検査は SKIP（差し戻し理由にしない）。
 
 mini サマリ（`mini-test-*.md`）はレビュー対象外（本編の収束後に作られる派生物のため）。
 実施タイミングは **本編への利用者フィードバック収束後・mini サマリ作成前** を推奨する
@@ -52,7 +68,8 @@ test-review はゲートという性質上、原則 3 を「指摘の管理」�
 - 成果物（レビュー記録）の既定パスは **`docs/test/<テスト対象名>/test-review-<工程>.md`**。
 - **プロジェクト側（`CLAUDE.md` / `AGENTS.md` 等）に成果物の配置規約があればそちらを優先する**。
 - レビュー対象は上表の工程成果物。**対象成果物が規約パスに無ければレビューを進めず、
-  対象工程スキル（`/test-<工程> <テスト対象名>`）の実行を提案するに留める**（代作しない）。
+  対象工程スキル（`/test-<工程> <テスト対象名>`。`spec` / `design-doc` は
+  `/feature-spec` / `/basic-design`）の実行を提案するに留める**（代作しない）。
 - 突合先の前工程成果物（例: analyze のレビューでの `test-plan.md`）が無い検査は
   スキップし、その旨を記録へ明記する。
 
@@ -104,26 +121,36 @@ test-review はゲートという性質上、原則 3 を「指摘の管理」�
 
 ### 手順 0: テスト対象と工程の確定
 
-- 引数は `<テスト対象名> [工程]`。工程は `plan / analyze / design / implement / execute /
-  monitor / report` のいずれか。
+- 引数は `<テスト対象名> [工程]`。工程は `spec / design-doc / plan / analyze / design /
+  implement / execute / monitor / report` のいずれか。
 - **工程が省略されたら自分で推定して確認する**: `docs/test/<テスト対象名>/` にある工程成果物と
   `test-review-*.md`（レビュー済みの証跡）を突き合わせ、成果物があって未レビューの工程を
-  候補として利用者に確認する（推奨案先頭）。
+  候補として利用者に確認する（推奨案先頭）。`docs/dev/<テスト対象名>/` の
+  `spec.md` / `basic-design.md` も同じ要領で候補に含める。
 - テスト対象名も無ければ利用者に一言で確認する（英数字・ハイフンへ正規化）。
 
 ### 手順 1: 機械検査（決定論）
 
 `<SKILL_DIR>/scripts/review-check.sh <工程> <成果物ディレクトリ>` を実行する。
 
+- **成果物ディレクトリ**は工程で変わる。`spec` / `design-doc` は `docs/dev/<対象>`、
+  それ以外は `docs/test/<テスト対象名>`。`spec` / `design-doc` は第 3 引数で突合先の
+  テスト成果物ディレクトリを渡せる（省略時は `docs/dev/X` → `docs/test/X` を導出。
+  導出先が無ければ突合を SKIP）。
 - 検査内容: 対象成果物の存在・必須セクション・テーブル空欄・トレーサビリティ ID 突合
-  （リスク R# / テスト条件 TC-# / ケース CASE-# / 欠陥候補 D# の参照先存在と網羅）。
+  （要求 REQ-# / リスク R# / テスト条件 TC-# / ケース CASE-# / 欠陥候補 D# の参照先存在と網羅）。
 - **NG が 1 件でもあれば自動で差し戻し**: 定性レビューへ進まず、判定「差し戻し」と NG 内容を
   記録へ書き込み（手順 4）、対象工程スキルの再実行を促して終了する。機械 NG は事実であり
   利用者判定を待たない（原則 2）。SKIP（突合先なし等）は差し戻し理由にしない。
 
 ### 手順 2: AI 定性レビュー（サブエージェント）
 
-機械検査を通過したら、**test-reviewer サブエージェントを 1 体起動** する。メインセッションで
+**工程が `spec` / `design-doc` のときは本手順を飛ばして手順 3 へ進む**（軽量ゲート。
+意味的な欠陥検出はテスト工程との往復が担い手であり、ここでは形式契約だけを見る）。
+判定の材料は機械検査の結果のみになるため、手順 3 の推奨案は
+「NG なし → 通過 / NG あり → 差し戻し」で提示する。
+
+それ以外の工程では、機械検査を通過したら **test-reviewer サブエージェントを 1 体起動** する。メインセッションで
 成果物を作った直後でも独立した目で見られるよう、レビュー本体は必ずサブエージェントに任せる
 （自己レビューバイアスの排除）。prompt には必ず以下を含める:
 
@@ -151,6 +178,9 @@ test-review はゲートという性質上、原則 3 を「指摘の管理」�
 - [`references/template.md`](references/template.md) の構成で
   `docs/test/<テスト対象名>/test-review-<工程>.md` を書き込む（判定・実施日・機械検査サマリ・
   未解消の指摘のみ。指摘ゼロなら判定と実施日だけの薄い記録になる）。
+- `spec` / `design-doc` も**記録の置き場所は `docs/test/<対象>/`** で他工程と揃える
+  （`test-review-spec.md` / `test-review-design-doc.md`）。テンプレの「レビュー対象」に
+  書くパスだけが `docs/dev/<対象>/spec.md` などになる。
 - 再レビュー時は同ファイルを更新する（履歴を増やさない）。解消済みの指摘は削除する（原則 3）。
 
 ### 手順 5: 終了条件の確認と完了宣言
@@ -160,6 +190,7 @@ test-review はゲートという性質上、原則 3 を「指摘の管理」�
 
 1. 機械検査が実施済み（手順 1）。
 2. 機械検査通過時は定性レビューが実施済みで、指摘が重み付きで提示済み（手順 2・3）。
+   `spec` / `design-doc` は定性レビューを行わないため、機械検査の結果提示をもって満たす。
 3. 判定（通過 / 条件付き通過 / 差し戻し）が利用者確認済みで記録に明記済み（手順 3・4）。
 4. `test-review-<工程>.md` が規約パスへ書き込み済みで、未解消の指摘だけが残っている（手順 4）。
 
