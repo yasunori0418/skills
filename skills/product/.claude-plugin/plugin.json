@@ -12,6 +12,7 @@
     "./basic-design",
     "./biz-translate",
     "./def-done",
+    "./doc-integrate",
     "./feature-spec",
     "./product-spec"
   ],
