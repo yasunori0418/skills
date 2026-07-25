@@ -8,6 +8,6 @@
   },
   "license": "MIT",
   "keywords": ["claude-code", "agentskills", "product"],
-  "skills": ["./biz-translate", "./product-spec"],
+  "skills": ["./biz-translate", "./def-done", "./product-spec"],
   "agents": ["./product-spec/agents/product-researcher.md"]
 }
