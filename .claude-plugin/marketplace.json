@@ -10,7 +10,7 @@
     {
       "name": "git-skills",
       "source": "./skills/git",
-      "description": "git 運用スキル群（commit-flow / diff-review / rebase-flow / reset-flow / parallel-worktree）と git-guard hook。",
+      "description": "git 運用スキル群（commit-flow / commit-plan / diff-review / rebase-flow / reset-flow / parallel-worktree / review-converge）と git-guard hook。",
       "author": {
         "name": "yasunori0418"
       },
@@ -50,7 +50,7 @@
     {
       "name": "workflow-skills",
       "source": "./skills/workflow",
-      "description": "エージェント非依存の作業運用スキル群（external-writes / test-targeted）。",
+      "description": "エージェント非依存の作業運用スキル群（dev-pipeline / external-writes / test-targeted）。",
       "author": {
         "name": "yasunori0418"
       },
@@ -60,7 +60,7 @@
     {
       "name": "product-skills",
       "source": "./skills/product",
-      "description": "プロダクト業務スキル群（biz-translate / product-spec）。",
+      "description": "プロダクト業務スキル群（basic-design / biz-translate / def-done / doc-integrate / feature-spec / product-spec）。",
       "author": {
         "name": "yasunori0418"
       },
@@ -70,7 +70,7 @@
     {
       "name": "testing-skills",
       "source": "./skills/testing",
-      "description": "ISTQB/JSTQB テストプロセススキル群（test-plan / test-monitor / test-analyze / test-design / test-implement / test-execute / test-report）。",
+      "description": "ISTQB/JSTQB テストプロセススキル群（test-plan / test-monitor / test-analyze / test-design / test-implement / test-execute / test-report / test-review）。",
       "author": {
         "name": "yasunori0418"
       },

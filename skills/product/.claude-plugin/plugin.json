@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "product-skills",
-  "description": "プロダクト業務スキル群（biz-translate / product-spec）。ビジネス翻訳と競合調査・仕様策定を扱う。",
-  "version": "0.2.2",
+  "description": "プロダクト業務スキル群（basic-design / biz-translate / def-done / doc-integrate / feature-spec / product-spec）。ビジネス翻訳・仕様策定に加え、シフトレフト開発プロセスの仕様・設計・完成の定義・ドキュメント統合を扱う。",
+  "version": "0.3.0",
   "author": {
     "name": "yasunori0418"
   },
