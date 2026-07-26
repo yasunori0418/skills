@@ -13,7 +13,7 @@ COLLECT="$SCRIPT_DIR/../collect-merge-state.sh"
 
 # 依存が欠けたまま走ると「何も出力せず exit 0」＝素通りになるため、先に確かめて
 # 明示的にスキップを宣言する（沈黙は CI 上で検知できない）。
-for dep in jq git mktemp chmod; do
+for dep in jq git; do
     command -v "$dep" >/dev/null 2>&1 || {
         echo "SKIP: $(basename "$0") — $dep が無い環境のためスキップ"
         exit 0
@@ -47,13 +47,14 @@ contains() { # label haystack needle
 stub="$TMP/bin"
 mkdir -p "$stub"
 
-# stub の shebang は実行中の bash の絶対パスを使う。`#!/usr/bin/env bash` だと
-# /usr/bin/env を持たない Nix sandbox で exit 126 になり、テストが黙って死ぬ。
-# （checked-in ファイルは patchShebangs が直すが、実行時生成の stub は直されない）
-BASH_ABS=$(command -v bash)
+# stub の shebang は実行中の bash の絶対パスで書く。checked-in の *.sh は
+# patchShebangs が nix store の bash へ書き換えてくれるが、ここで実行時に
+# 生成する stub は対象外で、Nix sandbox には /usr/bin/env が無いため
+# `#!/usr/bin/env bash` のままだと exit 126 になる。
+stub_bash=$(command -v bash)
 
 cat >"$stub/gh" <<EOF
-#!$BASH_ABS
+#!$stub_bash
 EOF
 cat >>"$stub/gh" <<'EOF'
 # gh pr list --state merged ... -> PR_LIST_JSON
@@ -75,7 +76,7 @@ esac
 EOF
 
 cat >"$stub/wt" <<EOF
-#!$BASH_ABS
+#!$stub_bash
 EOF
 cat >>"$stub/wt" <<'EOF'
 set -euo pipefail
@@ -86,7 +87,7 @@ esac
 EOF
 
 cat >"$stub/tmux" <<EOF
-#!$BASH_ABS
+#!$stub_bash
 EOF
 cat >>"$stub/tmux" <<'EOF'
 set -euo pipefail

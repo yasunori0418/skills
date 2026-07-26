@@ -27,12 +27,16 @@ set -euo pipefail
 
 MERGED_PR_LIMIT=30
 
+# 必須コマンドの存在確認（欠落は名指しで中断）。無い依存を回避する実装を持つより、
+# 先に落として何を入れれば動くかを伝える方が短く、挙動も読みやすい。
+missing=0
 for cmd in gh jq git; do
     command -v "$cmd" >/dev/null 2>&1 || {
-        echo "ERROR: $cmd が必要です" >&2
-        exit 1
+        printf 'error: `%s` が見つかりません（PATH に必要）\n' "$cmd" >&2
+        missing=1
     }
 done
+[ "$missing" -eq 0 ] || exit 1
 
 git rev-parse --git-dir >/dev/null 2>&1 || {
     echo "ERROR: git リポジトリ内で実行してください" >&2
@@ -140,11 +144,7 @@ fi
 
 # ブランチ名 -> tmux セッション名の sanitize は worktrunk と同じ規則
 # （英数・ハイフン・アンダースコア以外を "-" に落とす）。
-# bash の文字クラス置換で閉じる（tr への依存を避ける。理由は head と同じ）
-sanitize() {
-    local s="${1//[^a-zA-Z0-9_-]/-}"
-    printf '%s' "$s"
-}
+sanitize() { printf '%s' "${1//[^a-zA-Z0-9_-]/-}"; }
 
 # セッション内で claude が動いているかを見る。動いていれば「作業中」として
 # 既定を「残す」に倒す（後片付けのつもりで実行中の作業を殺さないため）。
@@ -167,8 +167,6 @@ candidates='[]'
 while IFS=$'\t' read -r number branch url title; do
     [ -n "$branch" ] || continue
 
-    # first(...) で jq 内に閉じる（外部 head に依存すると、coreutils を持たない
-    # Nix sandbox 等で落ちる）
     w=$(jq -c --arg b "$branch" 'first(.[] | select(.branch == $b)) // empty' <<<"$wts")
     has_local_branch=false
     git show-ref --verify --quiet "refs/heads/$branch" && has_local_branch=true

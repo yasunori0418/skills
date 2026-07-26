@@ -12,10 +12,14 @@
 #       いずれも消えていること。残っていれば RESIDUAL として列挙する。
 set -euo pipefail
 
-command -v jq >/dev/null 2>&1 || {
-    echo "ERROR: jq が必要です" >&2
-    exit 1
-}
+missing=0
+for cmd in jq git; do
+    command -v "$cmd" >/dev/null 2>&1 || {
+        printf 'error: `%s` が見つかりません（PATH に必要）\n' "$cmd" >&2
+        missing=1
+    }
+done
+[ "$missing" -eq 0 ] || exit 1
 git rev-parse --git-dir >/dev/null 2>&1 || {
     echo "ERROR: git リポジトリ内で実行してください" >&2
     exit 1

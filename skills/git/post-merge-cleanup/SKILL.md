@@ -17,6 +17,13 @@ gitignored なファイル（`.env` / `.direnv` / ビルド成果物）は復旧
 破壊操作を含むため `disable-model-invocation: true`。「PR をマージした」といった
 平叙文で勝手に発火せず、`/post-merge-cleanup` の明示実行時のみ動く。
 
+## 依存
+
+`gh` / `jq` / `git` が必須。`collect-merge-state.sh` が起動時に存在を確認し、欠けていれば
+名指しで中断する。無い依存を回避する実装は持たない — 何を入れれば動くかを伝えて
+落ちる方が短く、挙動も読みやすい。`wt`（worktrunk）と `tmux` は任意で、無ければ
+worktree 情報を `git worktree list` から取り、tmux セッションの対応付けは行わない。
+
 ## 設計の前提（判断の根拠）
 
 着手前にこの 3 点を頭に入れる。手順の理由がここにある。

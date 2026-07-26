@@ -22,12 +22,14 @@ set -euo pipefail
 print_only=false
 [ "${1:-}" = "--print-only" ] && print_only=true
 
-for cmd in jq; do
+missing=0
+for cmd in jq git; do
     command -v "$cmd" >/dev/null 2>&1 || {
-        echo "ERROR: $cmd が必要です" >&2
-        exit 1
+        printf 'error: `%s` が見つかりません（PATH に必要）\n' "$cmd" >&2
+        missing=1
     }
 done
+[ "$missing" -eq 0 ] || exit 1
 
 input=$(cat)
 if ! jq -e . >/dev/null 2>&1 <<<"$input"; then
