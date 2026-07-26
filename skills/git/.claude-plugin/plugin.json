@@ -13,6 +13,7 @@
     "./commit-plan",
     "./diff-review",
     "./parallel-worktree",
+    "./post-merge-cleanup",
     "./rebase-flow",
     "./reset-flow",
     "./review-converge"
