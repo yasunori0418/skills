@@ -12,9 +12,11 @@ diff-review の周回ごとの指摘一覧を状態ファイルへ記録し、�
         1 周回分の指摘を記録し、判定結果を JSON で stdout に出す。
         stdin は指摘の JSON 配列(または {"findings": [...]})。各要素:
             {"file": "src/a.py", "line": 42, "summary": "...",
-             "severity": "must", "scope": "in"}
+             "severity": "must", "scope": "in", "lens": "design"}
         severity は must / want+ / want / nit(既定 want)。
         scope は in / out(既定 in。out = タスク境界外 = 修正対象から除外)。
+        lens は diff-review の統合報告に付いたレンズタグ(任意。次周回の
+        レンズ絞り込み "next_lenses" に使う。省略すると絞り込みは働かない)。
         指摘は file:line + 要旨の正規化ハッシュで同一性を判定する。
 
     converge_state.py status --state <path>
@@ -40,6 +42,10 @@ diff-review の周回ごとの指摘一覧を状態ファイルへ記録し、�
 verdict の優先順位は oscillation > converged > limit-reached > continue。
 振動していても閾値以上の指摘が消えていれば収束を優先しないのは、打ち消し合いが
 起きた状態のまま終わらせないため。
+
+レンズ段階戦略("next_lenses"): continue の中間周回では、前周回で閾値以上・境界内の
+指摘を出したレンズだけを次周回の対象として返す。次が最終周回のとき・continue 以外・
+lens 情報が無いときは null(= 全レンズで徹底パス)を返す。
 
 依存は標準ライブラリのみ(Python 3.12+)。
 """
@@ -108,6 +114,7 @@ def parse_findings(payload: Any) -> list[dict[str, Any]]:
                 "summary": str(item.get("summary", "")),
                 "severity": str(item.get("severity", DEFAULT_THRESHOLD)),
                 "scope": scope,
+                "lens": str(item.get("lens", "")).strip(),
             }
         )
     return out
@@ -180,6 +187,27 @@ def detect_oscillation(rounds: list[dict[str, Any]], threshold: str) -> list[dic
     return sorted(oscillating.values(), key=lambda f: (f["kind"], f["file"], str(f["line"])))
 
 
+def next_lenses(
+    remaining: list[dict[str, Any]], verdict: str, round_no: int, max_rounds: int
+) -> list[str] | None:
+    """次周回で起動すべきレンズ。None は「全レンズ（徹底パス）」を意味する。
+
+    段階戦略: 中間周回は前周回で閾値以上・境界内の指摘を出したレンズだけを回し、
+    全レンズの徹底パスは初回と最終周回に限る。指摘の出なかったレンズは修正後も
+    指摘を出す見込みが薄く、全周回で全レンズを回すと周回数 x レンズ数の
+    レビューエージェントが走るため。
+
+    次の周回が無い（continue 以外）とき、次が最終周回のとき、レンズ情報が
+    1 件も付いていないときは絞り込まず None を返す（見落としを避ける側に倒す）。
+    """
+    if verdict != "continue":
+        return None
+    if round_no + 1 >= max_rounds:
+        return None
+    lenses = sorted({f["lens"] for f in remaining if f.get("lens")})
+    return lenses or None
+
+
 def evaluate(state: dict[str, Any]) -> dict[str, Any]:
     rounds = state["rounds"]
     threshold = state.get("threshold", DEFAULT_THRESHOLD)
@@ -211,6 +239,7 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
         "deferred": deferred,
         "deferred_count": len(deferred),
         "oscillating": oscillating,
+        "next_lenses": next_lenses(remaining, verdict, len(rounds), max_rounds),
     }
 
 

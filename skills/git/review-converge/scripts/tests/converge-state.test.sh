@@ -143,6 +143,35 @@ check "reset-removes-state" "absent" "$([ -f "$S" ] && echo present || echo abse
 python3 "$STATE_PY" status --state "$S" >/dev/null 2>&1
 check "status-after-reset" 1 $?
 
+# --- レンズ段階戦略(next_lenses) ---
+# 中間周回: 前周回で閾値以上・境界内の指摘を出したレンズだけを次周回の対象にする
+S="$WORK/lens-narrow.json"
+F_LENS='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severity":"must","lens":"design"},
+         {"file":"src/b.py","line":20,"summary":"nit だけのレンズ","severity":"nit","lens":"docs"}]'
+OUT=$(record "$S" "$F_LENS" --head aaa111 --max-rounds 5)
+has "lens-narrow-picked" "$OUT" '"design"'
+check "lens-narrow-excludes-nit-only-lens" "design" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["next_lenses"]))')"
+
+# 最終周回の直前(次が上限周回)は徹底パスへ戻す -> null(= 全レンズ)
+S="$WORK/lens-final.json"
+record "$S" "$F_MUST" --head r1 --max-rounds 3 >/dev/null
+OUT=$(record "$S" "$F_OTHER" --head r2 --max-rounds 3)
+check "lens-final-round-is-full-pass" "None" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["next_lenses"])')"
+
+# 続行しないとき(収束・上限・振動)は次周回が無いので null
+S="$WORK/lens-converged.json"
+OUT=$(record "$S" "$F_EMPTY" --head aaa111)
+check "lens-none-when-not-continue" "None" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["next_lenses"])')"
+
+# lens 未指定(diff-review がレンズタグを出さない場合)は絞り込めないので null
+S="$WORK/lens-absent.json"
+OUT=$(record "$S" "$F_MUST" --head aaa111 --max-rounds 5)
+check "lens-absent-falls-back-to-full" "None" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["next_lenses"])')"
+
 # --- 入力エラー ---
 S="$WORK/bad.json"
 printf 'not json' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
