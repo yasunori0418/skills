@@ -557,9 +557,9 @@ def test_worker_sections_always_has_standard_sections():
     assert "commit-flow" in sec
 
 
-def test_worker_sections_has_opus5_guard_sections():
-    """観点: Opus 5 の傾向（委任の積極化・スコープ拡大・ナレーション増）への抑制が
-    常に指示へ載る。detached tmux のワーカーは人の介入が無く、この 3 点の影響を最も受ける。"""
+def test_worker_sections_has_autonomy_guard_sections():
+    """観点: 委任・スコープ・ナレーションの抑制が常に指示へ載る。detached tmux の
+    ワーカーは人の介入が無く、境界 hook では境界内のスコープ拡大を止められない。"""
     plan = mk([{"id": "A", "branch": "feat-a", "prompt": "pA"}])
     sec = worker_sections(plan.tasks[0], "main", "main")
     assert "サブエージェント" in sec
