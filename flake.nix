@@ -77,9 +77,6 @@
                 nativeBuildInputs = [
                   pkgs.jq
                   pkgs.git
-                  # stub コマンドを PATH に置くテスト（post-merge-cleanup）が
-                  # chmod +x を要る。coreutils が無いと exit 126 で落ちる。
-                  pkgs.coreutils
                 ];
               }
               ''
