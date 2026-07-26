@@ -50,6 +50,9 @@ diff-review スキルを起動してレビューさせる。
   前周回差分に寄せることでトークン消費を抑える
 - レンズ指定はユーザーの依頼をそのまま引き継ぐ。無指定なら diff-review の既定に任せる
   (グラウンドトゥルース検出時は `spec` レンズが既定に昇格する)
+- **レンズ段階戦略(2 周目以降)**: 前周回の `record` 出力にある `next_lenses` に従う。
+  配列が入っていればそのレンズだけを diff-review に指定して起動し、`null` なら
+  レンズ絞り込みをせず通常どおり起動する(徹底パス)。**自分でレンズを足し引きしない**
 
 ### 2. 指摘を JSON へ落として記録する
 
@@ -60,8 +63,8 @@ python3 <SKILL_DIR>/scripts/converge_state.py record \
   --state <STATE> --head "$(git rev-parse HEAD)" \
   --threshold <--until で指定された閾値。既定 want> --max-rounds 5 <<'JSON'
 [
-  {"file": "src/a.py", "line": 42, "summary": "境界値が未処理", "severity": "must", "scope": "in"},
-  {"file": "other/x.py", "line": 7, "summary": "別タスクの問題", "severity": "want", "scope": "out"}
+  {"file": "src/a.py", "line": 42, "summary": "境界値が未処理", "severity": "must", "scope": "in", "lens": "design"},
+  {"file": "other/x.py", "line": 7, "summary": "別タスクの問題", "severity": "want", "scope": "out", "lens": "test"}
 ]
 JSON
 ```
@@ -70,6 +73,9 @@ JSON
   同じ指摘は同じ趣旨の要旨で書く(言い回しの揺れ・句読点・空白は正規化で吸収される)
 - `scope`: diff-review が付けたスコープ分類をそのまま写す。「境界外」なら `"out"`、それ以外は `"in"`。
   diff-review が分類を付けていない(タスク境界ファイルが無い)場合は全件 `"in"`
+- `lens`: 統合報告のレンズタグ(`[design]` 等)をそのまま写す。複数レンズが 1 件に統合されていたら
+  最も重い severity を出したレンズを 1 つ選ぶ。タグが無ければ省略してよい(その場合はレンズ絞り込みが働かず、
+  次周回は全レンズでの起動になる)
 - 指摘ゼロの周回は `[]` を渡す
 
 ### 3. verdict に従う
@@ -84,6 +90,9 @@ JSON
 | `oscillation` | 振動を検出。**ユーザーへエスカレーション**して停止する |
 
 `continue` のときの修正対象は `remaining`(閾値以上・境界内)のみ。`deferred`(境界外)は**修正しない**。
+次周回のレンズは同じ出力の `next_lenses` に従う(手順 1 のレンズ段階戦略)。中間周回は前周回で
+指摘を出したレンズだけを回し、最終周回は全レンズの徹底パスに戻る判定をスクリプトが行うので、
+**周回ごとのレンズ数を自分で決めない**。
 
 ### 4. エスカレーション(limit-reached / oscillation)
 
@@ -109,6 +118,7 @@ JSON
 
 ## 制約
 
-- diff-review の設計・出力形式を変更しない(呼ぶだけ)
+- diff-review の設計・出力形式を変更しない(呼ぶだけ)。レンズ段階戦略も
+  diff-review の read-only 単発設計には触れず、**こちらの呼び出し方だけ**で実現する
 - コミット・push はこのスキルの範囲外。修正のコミット粒度は commit-flow に従う
 - 状態ファイル以外への書き込みは、指摘に対する**コードの修正**のみ
