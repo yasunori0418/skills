@@ -214,5 +214,5 @@ worktree のパスは user config の `worktree-path` テンプレートで決�
 
 - **進捗確認**: `wt list`（worktree 一覧・状態）。詳細は `wt list --full`（CI・diffstat・LLM 要約）
 - **マージ**: `wt merge [target]`（current ブランチを target に squash & rebase してマージ、worktree 削除まで）。ただしローカル merge は PR レビューを飛ばすので、PR 運用中は GitHub 側マージを基本にする
-- **後始末**: `wt remove`（worktree 削除、マージ済みならブランチも削除）
+- **後始末**: 単発なら `wt remove`（worktree 削除、マージ済みならブランチも削除）。全レーンのマージが済んだ後の一括後片付けは `/post-merge-cleanup` を案内する（worktree・ブランチ・tmux セッションを承認ゲート付きでまとめて削除。dirty や未 push コミットの残るレーンは候補から外れるので、`wt remove` 単体では消えてしまう作業中 worktree を守れる）
 - **stacked の再 rebase**: 下段が変わったら上段を rebase する必要がある。`wt merge --rebase` か手動 `git rebase`。この環境に `wt sync`（worktrunk-sync）は無いので自動 restack は使えない

@@ -144,7 +144,7 @@ spec の `prompt` には**タスク固有の内容と完了条件だけ**を書�
 ### Phase 4: 監視・後始末
 
 - 進捗確認: `wt list`（各 worktree の状態・diff・CI を一覧）
-- マージ後: `wt remove` で worktree 削除（マージ済みブランチも削除）
+- マージ後: 単発なら `wt remove`（worktree 削除、マージ済みブランチも削除）。全レーンのマージが済んだら `/post-merge-cleanup` を案内する（worktree・ブランチ・tmux セッションをまとめて承認ゲート付きで片付け、未 push の残るレーンは保護される）
 - stacked の再 rebase: 下段が変わったら上段を rebase。`wt merge --rebase` か手動 `git rebase`（この環境に `wt sync`/worktrunk-sync は無い）
 
 ## 連携スキル・参照
