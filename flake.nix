@@ -77,6 +77,9 @@
                 nativeBuildInputs = [
                   pkgs.jq
                   pkgs.git
+                  # nix-store-lookup の収集スクリプトが store DB を引くため。
+                  # テストは偽の DB を sqlite3 で組み立てて検証する。
+                  pkgs.sqlite
                 ];
               }
               ''

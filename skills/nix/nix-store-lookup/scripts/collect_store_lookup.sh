@@ -45,7 +45,11 @@ set -euo pipefail
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-STORE_DB="/nix/var/nix/db/db.sqlite"
+# store の位置は環境変数で差し替えられる（既定は実運用の値）。
+# テストが偽の store と DB を使って、実環境では再現できない状態
+# （DB にあるがディスクに無い path 等）を検証するための差し込み口。
+NIX_STORE_DIR="${NIX_STORE_DIR:-/nix/store}"
+STORE_DB="${STORE_DB:-/nix/var/nix/db/db.sqlite}"
 
 query=""
 want_all=0
@@ -73,8 +77,8 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # ここで種別が決まれば、以降の解決経路は一意に定まる。
 classify() {
     case "$query" in
-        /nix/store/*.drv) echo "derivation"; return ;;
-        /nix/store/*) echo "store_path"; return ;;
+        "$NIX_STORE_DIR"/*.drv) echo "derivation"; return ;;
+        "$NIX_STORE_DIR"/*) echo "store_path"; return ;;
     esac
     # PATH 上のコマンドかどうか。nix 管理なら profile 経由の symlink を辿れば
     # store path が一意に出る（実測 0.005s / 最優先経路）。
@@ -94,6 +98,18 @@ exists_of() { # path -> "true" | "false"
     [ -e "$1" ] && echo true || echo false
 }
 
+# /nix/store/<hash>-<name>/further/path から store path 本体を切り出す。
+# sed の正規表現に $NIX_STORE_DIR を埋めるとパス中の記号が誤解釈されうるので、
+# 文字列操作で行う（テストが一時ディレクトリを store に見立てるため必要）。
+store_root_of() { # any path under the store -> store path root（該当しなければ空）
+    local p="$1" rest
+    case "$p" in
+        "$NIX_STORE_DIR"/*) rest="${p#"$NIX_STORE_DIR"/}" ;;
+        *) return 0 ;;
+    esac
+    printf '%s/%s' "$NIX_STORE_DIR" "${rest%%/*}"
+}
+
 # store path から drv / 出力パスを相互に辿る。失敗しても致命ではない。
 query_deriver() { nix-store --query --deriver "$1" 2>/dev/null || true; }
 query_outputs() { nix-store --query --outputs "$1" 2>/dev/null || true; }
@@ -103,9 +119,9 @@ case "$classified" in
         real=$(readlink -f "$(command -v "$query")" 2>/dev/null || true)
         if [ -n "$real" ]; then
             # /nix/store/<hash>-<name>/... から store path 本体を切り出す
-            root=$(printf '%s' "$real" | sed -E 's#^(/nix/store/[^/]+).*#\1#')
+            root=$(store_root_of "$real")
             case "$root" in
-                /nix/store/*)
+                ?*)
                     resolved_json=$(jq -cn \
                         --arg sp "$root" --arg bin "$real" \
                         --arg via 'readlink -f "$(command -v <cmd>)"' \
@@ -116,14 +132,14 @@ case "$classified" in
                     # nix 管理ではない（/usr/bin 等）。store path は存在しない。
                     resolved_json=$(jq -cn --arg bin "$real" \
                         '{store_path: null, resolved_file: $bin, via: "readlink -f", exists: true, note: "nix 管理外のコマンド（store path は無い）"}')
-                    warnings+=("'$query' は PATH 上にあるが nix store 配下ではない（$real）")
+                    warnings+=("'${query}' は PATH 上にあるが nix store 配下ではない（${real}）")
                     ;;
             esac
         fi
         ;;
 
     store_path)
-        root=$(printf '%s' "$query" | sed -E 's#^(/nix/store/[^/]+).*#\1#')
+        root=$(store_root_of "$query")
         resolved_json=$(jq -cn --arg sp "$root" \
             --arg drv "$(query_deriver "$root")" \
             --argjson ex "$(exists_of "$root")" \
@@ -233,7 +249,7 @@ if have nix-locate; then
             while IFS= read -r line; do
                 [ -n "$line" ] || continue
                 p=$(printf '%s' "$line" | awk '{print $NF}')
-                case "$p" in /nix/store/*) ;; *) continue ;; esac
+                case "$p" in "$NIX_STORE_DIR"/*) ;; *) continue ;; esac
                 printf '%s\t%s\t%s\n' "$(printf '%s' "$line" | awk '{print $1}')" "$p" "$(exists_of "$p")"
             done <<EOF | jq -Rsc '[splits("\n") | select(. != "") | split("\t")
                                    | {attr: .[0], path: .[1], exists_locally: (.[2] == "true")}]'
@@ -252,7 +268,7 @@ else
 fi
 
 # --- 環境の事実 ------------------------------------------------------------
-store_entries=$(ls /nix/store 2>/dev/null | wc -l | tr -d ' ')
+store_entries=$(ls "$NIX_STORE_DIR" 2>/dev/null | wc -l | tr -d ' ')
 db_valid=""
 if have sqlite3 && [ -r "$STORE_DB" ]; then
     db_valid=$(sqlite3 "file:${STORE_DB}?immutable=1" "select count(*) from ValidPaths;" 2>/dev/null || true)
