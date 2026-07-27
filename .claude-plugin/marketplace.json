@@ -128,6 +128,16 @@
       "tags": ["claude-code", "hooks", "guard", "sudo"]
     },
     {
+      "name": "yasunori0418-broad-scan-guard-hooks",
+      "source": "./hooks/broad-scan-guard-plugin",
+      "description": "find / fd によるルート（/）起点の全探索を deny し、$HOME 直下起点の探索に深さ制限を強制する hook。$HOME 配下のサブディレクトリ起点や rg / grep / ls は対象外。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "hooks",
+      "tags": ["claude-code", "hooks", "guard", "find", "search"]
+    },
+    {
       "name": "yasunori0418-task-boundary-hooks",
       "source": "./hooks/task-boundary-plugin",
       "description": "worktree の境界ファイル .claude/task-boundary.json が宣言する glob の外への Edit / Write / NotebookEdit を deny する hook。境界ファイルが無ければ沈黙する（fail-open）。",

@@ -74,6 +74,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 | `yasunori0418-askuserquestion-hooks`         | `./hooks/askuserquestion`             | AskUserQuestion のセッション単位無効化(#aq-off/#aq-on)と発火時のデスクトップ通知 |
 | `yasunori0418-webfetch-github-guard-hooks`   | `./hooks/webfetch-github-guard-plugin` | github.com への WebFetch を差し戻し gh へ誘導                 |
 | `yasunori0418-sudo-guard-hooks`              | `./hooks/sudo-guard-plugin`           | Bash の sudo 実行を禁止                                       |
+| `yasunori0418-broad-scan-guard-hooks`        | `./hooks/broad-scan-guard-plugin`     | find/fd のルート(`/`)起点の全探索を deny、`$HOME` 直下起点は深さ制限を強制($HOME 配下・rg/grep/ls は対象外) |
 | `yasunori0418-notify-stop-hooks`             | `./hooks/notify-stop-plugin`          | Stop 時のデスクトップ通知                                     |
 | `yasunori0418-task-boundary-hooks`           | `./hooks/task-boundary-plugin`        | 境界ファイル `.claude/task-boundary.json` の外への Edit/Write/NotebookEdit を deny(境界ファイルが無ければ沈黙) |
 | `shift-left-process`                         | `./bundles/shift-left-process`        | シフトレフト開発プロセスの 6 スキルバンドル(下記)             |
