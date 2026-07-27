@@ -1,12 +1,12 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "nix-skills",
-  "description": "Nix 運用スキル群（nix-cache-check / nix-devenv）。バイナリキャッシュ確認と flake-parts 開発環境構築を扱う。",
+  "description": "Nix 運用スキル群（nix-cache-check / nix-devenv / nix-store-lookup）。バイナリキャッシュ確認、flake-parts 開発環境構築、/nix/store の store path 特定を扱う。",
   "version": "0.2.2",
   "author": {
     "name": "yasunori0418"
   },
   "license": "MIT",
   "keywords": ["claude-code", "agentskills", "nix"],
-  "skills": ["./nix-cache-check", "./nix-devenv"]
+  "skills": ["./nix-cache-check", "./nix-devenv", "./nix-store-lookup"]
 }

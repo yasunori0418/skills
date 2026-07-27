@@ -65,7 +65,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 | -------------------------------------------- | ------------------------------------- | ------------------------------------------------------------ |
 | `git-skills`                                 | `./skills/git`                        | commit-flow / commit-plan / diff-review / rebase-flow / reset-flow / parallel-worktree / review-converge + git-guard hook |
 | `github-skills`                              | `./skills/github`                     | gh-ci-investigate / gh-fetch / gh-push / pr-create           |
-| `nix-skills`                                 | `./skills/nix`                        | nix-cache-check / nix-devenv                                 |
+| `nix-skills`                                 | `./skills/nix`                        | nix-cache-check / nix-devenv / nix-store-lookup              |
 | `claude-skills`                              | `./skills/claude`                     | Claude Code 固有: latency-triage / response-format / session-insights / tmp-output / project-session |
 | `workflow-skills`                            | `./skills/workflow`                   | エージェント非依存: dev-pipeline / external-writes / test-targeted |
 | `product-skills`                             | `./skills/product`                    | basic-design / biz-translate / def-done / doc-integrate / feature-spec / product-spec |
