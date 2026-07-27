@@ -61,7 +61,7 @@ date +%s > "$marker"
 echo "=== SAFETY ==="
 echo "branch: $name"
 echo "sha: $(git rev-parse HEAD)"
-echo "armed: $marker（30 分有効 — git reset が git-guard hook を通過可能になる）"
+echo "armed: ${marker}（30 分有効 — git reset が git-guard hook を通過可能になる）"
 if [ "$dirty" -gt 0 ]; then
     echo "NOTE: 未コミット変更 ${dirty} ファイルは safety branch では守られない（--hard で消えたら復旧不能）"
 fi

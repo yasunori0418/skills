@@ -55,7 +55,7 @@ parse_input() {
         \#[0-9]*)  PR="${in#\#}" ;;
         pr:[0-9]*) PR="${in#pr:}" ;;
         [0-9]*)    RUN_ID="$in" ;;
-        *) die "入力を解釈できません: $in（URL / run_id / #PR / 空 のいずれか）" ;;
+        *) die "入力を解釈できません: ${in}（URL / run_id / #PR / 空 のいずれか）" ;;
     esac
 }
 

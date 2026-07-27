@@ -247,7 +247,7 @@ dirty=0
 [ -z "$(git status --porcelain 2>/dev/null)" ] || dirty=1
 
 # fetch 本体。SSH 経路を優先し、失敗したら gh(HTTPS) 経路へフォールバックする。
-# 判定と同一の $SSH_CMD（BatchMode=yes 等）を使い、万一の非対話認証失敗時も
+# 判定と同一の ${SSH_CMD}（BatchMode=yes 等）を使い、万一の非対話認証失敗時も
 # パスフレーズ入力待ちに入らせず即失敗させる。fetch 本体はデータ転送があるため
 # timeout では包まない（接続段階は ConnectTimeout に委ねる）。
 # used_route に実際に成功した経路（ssh / gh）を残す。
@@ -341,7 +341,7 @@ case "$cmd" in
         if git rev-parse --verify -q "$tracking_ref" >/dev/null; then
             n="$(git rev-list --count "HEAD..$tracking_ref" 2>/dev/null || echo 0)"
             if [ "$n" -gt 0 ]; then
-                echo "OK: [$used_route] fetch 完了。未取り込みコミット $n 件（$tracking_ref）:"
+                echo "OK: [$used_route] fetch 完了。未取り込みコミット $n 件（${tracking_ref}）:"
                 git log --format='  %h %s' "HEAD..$tracking_ref"
                 echo "（取り込むには: gh-fetch.sh pull $branch [--merge|--rebase]）"
             else

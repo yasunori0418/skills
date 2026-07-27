@@ -103,7 +103,7 @@ echo "=== IN-PROGRESS OPERATIONS ==="
 op_found=no
 for p in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
     if [ -e "$(git rev-parse --git-path "$p")" ]; then
-        blocker "進行中の操作あり: $p（完了または中断してから実行する）"
+        blocker "進行中の操作あり: ${p}（完了または中断してから実行する）"
         op_found=yes
     fi
 done

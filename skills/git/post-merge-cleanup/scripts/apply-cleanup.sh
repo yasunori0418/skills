@@ -73,7 +73,7 @@ run() { # ラベル コマンド...
         # wt remove は dirty 拒否などで exit 1 を返す。ここで止めず記録して次へ進むのは、
         # 1 つの失敗で残りの承認済み対象が中途半端に残るのを避けるため。最終判断は
         # verify-cleanup.sh の突合に委ねる。
-        echo "FAILED: $label（後続の対象は継続。verify で最終確認すること）"
+        echo "FAILED: ${label}（後続の対象は継続。verify で最終確認すること）"
         failures=$((failures + 1))
     fi
 }

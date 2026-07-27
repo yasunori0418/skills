@@ -22,7 +22,7 @@ mode="$2"
 case "$mode" in
     hard | mixed | soft) ;;
     *)
-        echo "ERROR: mode は hard | mixed | soft のいずれか（指定: $mode）" >&2
+        echo "ERROR: mode は hard | mixed | soft のいずれか（指定: ${mode}）" >&2
         exit 1
         ;;
 esac
@@ -92,7 +92,7 @@ echo "=== IN-PROGRESS OPERATIONS ==="
 op_found=no
 for p in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
     if [ -e "$(git rev-parse --git-path "$p")" ]; then
-        blocker "進行中の操作あり: $p（reset で潰さず、--abort / --continue で終わらせること）"
+        blocker "進行中の操作あり: ${p}（reset で潰さず、--abort / --continue で終わらせること）"
         op_found=yes
     fi
 done

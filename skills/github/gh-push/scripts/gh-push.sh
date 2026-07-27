@@ -347,7 +347,7 @@ case "$cmd" in
             die "履歴が分岐しています。--force_with_lease を意図する場合のみ push ... --force を再実行してください（要ユーザー確認）"
         fi
 
-        # SSH 経路の素の push。判定と同一の $SSH_CMD（BatchMode=yes 等）を使い、
+        # SSH 経路の素の push。判定と同一の ${SSH_CMD}（BatchMode=yes 等）を使い、
         # 万一の非対話認証失敗時もパスフレーズ入力待ちに入らせず即失敗させる（非対話の担保）。
         # push 本体はデータ転送があるため timeout では包まない（接続段階は ConnectTimeout に委ねる）。
         # 成功時 git が remote-tracking ref を正しく更新するため手動整合は不要。
