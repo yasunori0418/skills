@@ -119,15 +119,30 @@ is_ssh_url() {
     esac
 }
 
-# SSH で全 head を非対話で引く。exit 0 なら「非対話 SSH 認証が通る」ことの
+# SSH で対象ブランチの head を非対話で引く。exit 0 なら「非対話 SSH 認証が通る」ことの
 # 直接の証拠。agent の鍵・パスフレーズ無しのディスク鍵・キーチェーン鍵を区別せず
-# 判定できる。出力（全 refs/heads）を stdout に返し、$branch の tip 抽出は呼び出し側で行う
-# （認証成功だがブランチ未作成なら tip は空になるが、それは exit 0 の「認証OK」と両立する）。
+# 判定できる。出力（0〜1 行）を stdout に返し、tip 抽出は呼び出し側で行う
+# （認証成功だがブランチ未作成なら出力は空になるが、それは exit 0 の「認証OK」と両立する）。
 # パイプで awk に食わせると認証失敗の exit code が握り潰されるため、ここでは
 # git の生の exit code をそのまま返す。
+#
+# refs/heads/*（全ブランチ）ではなく refs/heads/<branch> に絞る。全ブランチ一覧は
+# 使い道が無いうえ、ブランチ数の多いリポジトリでは出力が数百KB に達し、
+# 抽出側のパイプで SIGPIPE（exit 141）を誘発していた（tip 抽出参照）。
 ssh_ls_remote() {
     "${TIMEOUT_CMD[@]}" env GIT_SSH_COMMAND="$SSH_CMD" \
-        git ls-remote "$url" "refs/heads/*" 2>/dev/null
+        git ls-remote "$url" "refs/heads/$branch" 2>/dev/null
+}
+
+# ls-remote 出力（"<sha>\t<ref>" の行）の 1 行目から sha を取り出す。
+# awk / head へのパイプは使わない: 早期 exit するフィルタへ大きな出力を流すと
+# 上流が SIGPIPE で落ち、set -o pipefail + set -e により出力ゼロ・exit 141 で
+# スクリプト全体が即死する（実際に 2790 ブランチのリポジトリで発生した）。
+# bash のパラメータ展開だけで済ませればサブプロセスもパイプも生じない。
+first_sha() {
+    local out="$1" line
+    line="${out%%$'\n'*}"
+    printf '%s\n' "${line%%$'\t'*}"
 }
 
 cmd="${1:-preflight}"; shift || true
@@ -173,7 +188,7 @@ if is_ssh_url "$url"; then
         if ssh_heads="$(ssh_ls_remote)"; then
             ssh_ok=1
             ssh_cache_store "$host"
-            remote_tip="$(printf '%s\n' "$ssh_heads" | awk -v r="refs/heads/$branch" '$2==r{print $1; exit}')"
+            remote_tip="$(first_sha "$ssh_heads")"
         else
             gh_route_reason="非対話 SSH 認証テストに失敗"
         fi
@@ -205,9 +220,9 @@ tracking_ref="refs/remotes/$remote/$branch"
 #      ここで SSH が失敗したらキャッシュを破棄し gh 経路へ落とす（鍵失効などへの追従）。
 #   2. gh(HTTPS) 経路 → gh トークン経由で引く（public は gh 未認証でも HTTPS 変換だけで引ける）。
 if [ -z "$remote_tip" ] && [ "$ssh_cached" = 1 ]; then
-    # awk へ直接パイプすると ls-remote の exit code を握り潰すため、生出力を変数に受けてから抽出する。
+    # パイプで抽出すると ls-remote の exit code を握り潰すため、生出力を変数に受けてから抽出する。
     if ssh_one="$(GIT_SSH_COMMAND="$SSH_CMD" "${TIMEOUT_CMD[@]}" git ls-remote "$url" "refs/heads/$branch" 2>/dev/null)"; then
-        remote_tip="$(printf '%s\n' "$ssh_one" | awk 'NR==1{print $1}')"
+        remote_tip="$(first_sha "$ssh_one")"
     else
         # キャッシュは有効だったが今回 SSH が通らなかった。gh 経路へ降格する。
         ssh_ok=0; ssh_cached=0
@@ -216,7 +231,8 @@ if [ -z "$remote_tip" ] && [ "$ssh_cached" = 1 ]; then
     fi
 fi
 if [ -z "$remote_tip" ]; then
-    remote_tip="$(git "${CRED_RESET[@]}" ls-remote "$https" "refs/heads/$branch" 2>/dev/null | awk 'NR==1{print $1}')" || true
+    gh_one="$(git "${CRED_RESET[@]}" ls-remote "$https" "refs/heads/$branch" 2>/dev/null || true)"
+    remote_tip="$(first_sha "$gh_one")"
 fi
 
 # 取り込み方向の状態判定（push の逆向き）。
