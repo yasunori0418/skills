@@ -21,6 +21,8 @@ argument-hint: "[push 先ブランチ名（任意、省略時は現在のブラ�
 
 **なぜ SSH を先に試すか**: 「SSH で push できるか」は `ssh -o BatchMode=yes` の `ls-remote` を1回打って直接テストすれば決定論的に判定できる。非対話 SSH が通る環境（Linux で ssh-agent 常駐、macOS のキーチェーン連携、パスフレーズ無しのディスク鍵など）では素の push がそのまま通るため、余計なトークン経由を挟まない。判定の `ls-remote` は push 範囲算出に使うリモート tip 取得と兼ねるので、往復コストは増えない。`ssh-add -l`（agent の鍵一覧）では、agent が空でもディスク鍵やキーチェーン鍵で非対話認証できるケースを取りこぼすため使わない。
 
+判定の `ls-remote` は `refs/heads/<branch>` に限定する（`refs/heads/*` で全ブランチを引かない）。全一覧は使い道が無く、ブランチ数の多いリポジトリでは出力が数百KB に達して抽出処理を壊すため（後述の「異常終了の切り分け」参照）。
+
 **SSH 認証テストのメモ化**: 非対話 SSH 認証の成否は host 単位で決まりリポジトリ/ブランチに依存しないため、セッション内で一度成功したら結果を `/tmp/gh-ssh-authcache.<session_id>.<host>` に記録し、以降の preflight / push では実 `ls-remote` を省いて即 SSH 経路を採る（TTL 30 分・成功のみキャッシュ・セッション毎に独立）。キャッシュヒット時は tip を SSH で 1 ブランチ分だけ引く。実 push が成功すれば TTL を延長し、SSH が失敗（鍵失効等）すればキャッシュを破棄して gh 経路へ降格する。`$CLAUDE_SESSION_ID` が無い環境ではメモ化せず従来どおり毎回テストする。gh-fetch とキャッシュを共有する。
 
 ## 前提
@@ -67,6 +69,37 @@ bash <skill-dir>/scripts/gh-push.sh push [branch] --force [--expect=<sha>]
 force は両経路とも `--force-with-lease=<branch>:<現リモート tip>` の**明示 lease** で実行される（gh 経路の URL 直 push では引数なし `--force-with-lease` の比較対象となる remote-tracking ref が参照されず常に stale info で拒否されるため、明示 lease に統一している）。呼び出し元が「安全と確認済みのリモート tip」を持っている場合 — rebase-flow スキルからの委譲等 — は `--expect=<sha>` で渡す。確認時点以降に他者の push が挟まると実 tip と不一致になり、push 前に確実に停止する。
 
 gh 経路で push した場合、スクリプトは `refs/remotes/<remote>/<branch>` を手で進めて `git status` の ahead 表示を整合させる（URL 直 push では remote-tracking ref が自動更新されないため）。SSH 経路では git が更新するのでこの補正は行われない。実行結果の `OK: [ssh]` / `OK: [gh]` でどちらの経路を使ったか分かる。
+
+## 異常終了の切り分け
+
+スクリプトが `ERROR:` 以外の形で落ちたとき（**出力ゼロ + exit code が 0/1 以外**）は、
+サンドボックスや環境の制約と決めつけず、次の順で切り分ける。**素の `git push` へ
+逃げてはいけない**（force-with-lease の明示 lease・保護ブランチ判定を全て失う）。
+
+1. **exit code と stdout/stderr を分けて取る**。パイプ越しでは `$?` がスクリプトの
+   終了コードにならない。
+
+   ```bash
+   bash <skill-dir>/scripts/gh-push.sh preflight >/tmp/out 2>/tmp/err; echo "EXIT=$?"
+   ```
+
+2. **`bash -x` で最後に実行された行を見る**。出力は大きいのでファイルへ落とし末尾だけ読む。
+
+   ```bash
+   bash -x <skill-dir>/scripts/gh-push.sh preflight >/dev/null 2>/tmp/trace; tail -5 /tmp/trace
+   ```
+
+3. **exit 141 は SIGPIPE**（128+13）。`set -o pipefail` + `set -e` と組み合わさると、
+   パイプ上流が SIGPIPE を受けた時点でスクリプト全体が**出力ゼロのまま即死**する。
+   スクリプト冒頭を読んでも原因は見えないので、`bash -x` の最後の行を必ず見る。
+   スクリプト側の対処は「大きな出力を早期 `exit` するフィルタへパイプしない」
+   （`scripts/gh-push.sh` の `first_sha` はこのためにパイプを使わない）。
+
+4. 引数形式の疑いは `--help` では確かめられない（未知オプションとして `ERROR:` になる）。
+   本ファイルの「ワークフロー」節が唯一の仕様。
+
+`ERROR:` で止まった場合は環境要因ではなくスクリプトの意図的な停止なので、
+メッセージの指示（`gh auth login` / lease 不一致 / 保護ブランチ 等）に従う。
 
 ## 制約
 
