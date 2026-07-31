@@ -62,8 +62,64 @@ sum_numstat() {
     awk -F'\t' '{ if ($1 != "-") t += $1; if ($2 != "-") t += $2 } END { print t + 0 }'
 }
 
+# 規定パス外のグラウンドトゥルース候補の探索範囲(git pathspec ではなく find 相対パス)。
+# 「仕様・設計・テストケースらしい名前」だけを拾い、無関係な md を混ぜない。
+CANDIDATE_DIRS=(tmp_claude docs doc design specs spec)
+CANDIDATE_NAME_PATTERNS=('*spec*.md' '*basic-design*.md' '*basic_design*.md' '*test-case*.md' '*test_case*.md' '*要件*.md' '*仕様*.md')
+CANDIDATE_LIMIT=20 # これを超える候補は打ち切って件数だけ報告する(コンテキスト保護)
+
+# 規定パスのグラウンドトゥルース(既に確定として扱うもの)を相対パスで列挙する。
+emit_confirmed_paths() { # root target...
+    local root="$1" t p
+    shift
+    for t in "$@"; do
+        for p in "docs/dev/$t/spec.md" "docs/dev/$t/basic-design.md" "docs/test/$t/test-case.md"; do
+            if [[ -f "$root/$p" ]]; then
+                echo "$p"
+            fi
+        done
+    done
+    # 最後の候補が不在でも失敗扱いにしない(呼び出し側は set -e)
+    return 0
+}
+
+# 規定パス外の候補を探索して相対パスで列挙する(確定済みパスは除く)。
+# gitignored なファイル(tmp_claude/ 等)も対象にするため git ls-files は使わない。
+find_candidates() { # root confirmed_list
+    local root="$1" confirmed="$2"
+    local dir args=() first=1 p
+    for dir in "${CANDIDATE_DIRS[@]}"; do
+        [[ -d "$root/$dir" ]] || continue
+        args=()
+        local pat
+        for pat in "${CANDIDATE_NAME_PATTERNS[@]}"; do
+            if ((first)); then
+                args+=(-name "$pat")
+                first=0
+            else
+                args+=(-o -name "$pat")
+            fi
+        done
+        first=1
+        find "$root/$dir" -type f \( "${args[@]}" \) 2>/dev/null
+    done | sed "s|^$root/||" | sort -u | {
+        while IFS= read -r p; do
+            if ! printf '%s\n' "$confirmed" | grep -qxF -- "$p"; then
+                echo "$p"
+            fi
+        done
+        # 全件が確定済みで除外され尽くしても失敗扱いにしない(呼び出し側は set -e)
+        return 0
+    }
+}
+
 # グラウンドトゥルース(仕様・基本設計・テストケース)と タスク境界ファイルの機械検出。
 # 該当が 1 つも無ければ何も出力しない(節ごと出さない = 従来と完全一致の出力)。
+#
+# 3 系統を区別して出す:
+#   確定  = 規定パス(docs/dev/<対象>/spec.md 等)、または DIFF_REVIEW_GROUND_TRUTH で明示注入されたもの
+#   候補  = 規定パス外で見つかった仕様らしきファイル。採否はメインセッションがユーザーに確認する
+#   境界  = .claude/task-boundary.json
 emit_ground_truth() {
     local root
     root=$(git rev-parse --show-toplevel)
@@ -77,11 +133,33 @@ emit_ground_truth() {
         done
     fi
 
+    # 明示注入(改行 or ':' 区切りの相対/絶対パス)。存在しないパスは警告して落とす
+    local injected=() raw
+    if [[ -n "${DIFF_REVIEW_GROUND_TRUTH:-}" ]]; then
+        while IFS= read -r raw; do
+            [[ -n "$raw" ]] || continue
+            local abs="$raw"
+            [[ "$abs" != /* ]] && abs="$root/$raw"
+            if [[ -f "$abs" ]]; then
+                injected+=("${abs#"$root"/}")
+            else
+                echo "WARN: DIFF_REVIEW_GROUND_TRUTH のパスが存在しない: $raw" >&2
+            fi
+        done <<<"$(printf '%s' "$DIFF_REVIEW_GROUND_TRUTH" | tr ':' '\n')"
+    fi
+
     local boundary="$root/.claude/task-boundary.json"
     local has_boundary=0
     [[ -f "$boundary" ]] && has_boundary=1
 
-    if ((${#targets[@]} == 0)) && ((has_boundary == 0)); then
+    local confirmed candidates
+    confirmed=$(emit_confirmed_paths "$root" ${targets[@]+"${targets[@]}"})
+    if ((${#injected[@]})); then
+        confirmed=$(printf '%s\n%s\n' "$confirmed" "$(printf '%s\n' "${injected[@]}")" | grep -v '^$' | sort -u)
+    fi
+    candidates=$(find_candidates "$root" "$confirmed")
+
+    if [[ -z "$confirmed" ]] && [[ -z "$candidates" ]] && ((has_boundary == 0)); then
         return
     fi
 
@@ -95,6 +173,19 @@ emit_ground_truth() {
             fi
         done
     done
+    if ((${#injected[@]})); then
+        echo "明示指定(DIFF_REVIEW_GROUND_TRUTH):"
+        printf '  %s\n' "${injected[@]}"
+    fi
+    if [[ -n "$candidates" ]]; then
+        local count
+        count=$(printf '%s\n' "$candidates" | wc -l | tr -d ' ')
+        echo "候補(規定パス外。未確定。採否をユーザーに確認するまで判断基準に使わない): ${count}件"
+        printf '%s\n' "$candidates" | head -n "$CANDIDATE_LIMIT" | sed 's/^/  /'
+        if ((count > CANDIDATE_LIMIT)); then
+            echo "  (残り $((count - CANDIDATE_LIMIT)) 件は省略。DIFF_REVIEW_GROUND_TRUTH で対象を明示すること)"
+        fi
+    fi
     if ((has_boundary == 1)); then
         echo "タスク境界ファイル: .claude/task-boundary.json"
         sed 's/^/  /' "$boundary"
