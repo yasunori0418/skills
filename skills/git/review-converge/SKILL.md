@@ -1,8 +1,7 @@
 ---
 name: review-converge
-description: diff-review を指摘ゼロまで繰り返し、修正と再レビューの収束ループを回す `/review-converge [--until <閾値>]` の明示実行専用スキル。
+description: diff-review を指摘ゼロまで繰り返し、修正と再レビューの収束ループを回すスキル。「レビューを収束させて」「指摘ゼロまでレビューして」「レビューと修正を繰り返して」「レビュー対応を回して」など、単発のレビューではなく反復して潰し切ることを求められたときに使用する。単発の「レビューして」は diff-review の領分。`/review-converge [--until <閾値>]` で明示起動も可。
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[--until <must|want+|want|nit>]"
 license: MIT
 ---
@@ -29,11 +28,18 @@ diff-review の責務で、こちらはその read-only 単発設計に手を触
 
 ## 事前準備
 
-1. 状態ファイルのパスを決める。セッションの scratchpad ディレクトリ配下(無ければ
+1. **起動ゲート(モデル判断で起動したときのみ)**: このループは**修正コミットを伴い複数周回する**ため、
+   1 周目に入る前に「対象範囲(base-ref)・適用閾値・上限周回数(既定 5)・レンズ」を提示して
+   ユーザーの承認を取る。`/review-converge` で明示起動された場合はこのゲートを省略してよい
+2. 状態ファイルのパスを決める。セッションの scratchpad ディレクトリ配下(無ければ
    `$(git rev-parse --show-toplevel)/tmp_claude/`)に `review-converge-state.json` を置く。
    以降 `<STATE>` と呼ぶ
-2. 途中から再開ではなく新規に回す場合、既存の状態を消す:
+3. 途中から再開ではなく新規に回す場合、既存の状態を消す:
    `python3 <SKILL_DIR>/scripts/converge_state.py reset --state <STATE>`
+4. **グラウンドトゥルースの確定(全周回で固定する)**: 1 周目の diff-review が
+   `候補(規定パス外...)` を報告してきたら、そこで採否をユーザーに確認して**採用パスを確定させる**。
+   確定したパスは以降**全周回で同じものを diff-review に渡す**(周回ごとに再確認しない)。
+   周回途中で判断基準が変わると、同じ指摘が出たり消えたりして振動判定を汚染する
 
 ## ループ手順
 
