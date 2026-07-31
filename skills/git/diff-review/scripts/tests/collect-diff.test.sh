@@ -148,4 +148,78 @@ git -C "$D" commit --quiet -m "docs: spec"
 OUT=$(manifest "$D")
 check "nochanges" "NO_CHANGES" "$OUT"
 
+# --- 規定パス外の候補: gitignored な tmp_claude/ の仕様書も候補として出る ---
+# 実運用の失敗例(tmp_claude/<日付>_<対象>_spec.md が検出されずレビューが仕様を無視した)の回帰
+D="$WORK/candidate" && new_repo "$D"
+mkdir -p "$D/tmp_claude"
+printf 'tmp_claude/\n' >"$D/.gitignore"
+echo "# spec" >"$D/tmp_claude/20260715_batch_optimize_spec.md"
+OUT=$(manifest "$D")
+has "candidate-section" "$OUT" "== GROUND_TRUTH"
+has "candidate-header" "$OUT" "候補(規定パス外"
+has "candidate-path" "$OUT" "tmp_claude/20260715_batch_optimize_spec.md"
+hasnt "candidate-not-confirmed" "$OUT" "対象: "
+
+# --- 候補は未確定である旨が明記される(採否確認前に判断基準へ使わせない) ---
+has "candidate-unconfirmed-note" "$OUT" "採否をユーザーに確認するまで判断基準に使わない"
+
+# --- 仕様らしくない md は候補に入らない ---
+D="$WORK/candidate-noise" && new_repo "$D"
+mkdir -p "$D/docs"
+echo "# notes" >"$D/docs/notes.md"
+echo "# readme" >"$D/docs/architecture.md"
+OUT=$(manifest "$D")
+hasnt "candidate-noise-no-section" "$OUT" "== GROUND_TRUTH"
+
+# --- 明示注入: 確定側に出て候補には重複しない ---
+D="$WORK/injected" && new_repo "$D"
+mkdir -p "$D/tmp_claude"
+echo "# spec" >"$D/tmp_claude/my_spec.md"
+OUT=$(cd "$D" && DIFF_REVIEW_GROUND_TRUTH="tmp_claude/my_spec.md" "$COLLECT" manifest 2>/dev/null)
+has "injected-header" "$OUT" "明示指定(DIFF_REVIEW_GROUND_TRUTH)"
+has "injected-path" "$OUT" "tmp_claude/my_spec.md"
+hasnt "injected-not-candidate" "$OUT" "候補(規定パス外"
+
+# --- 明示注入: ':' 区切りで複数指定できる ---
+D="$WORK/injected-multi" && new_repo "$D"
+mkdir -p "$D/design"
+echo "# a" >"$D/design/a_spec.md"
+echo "# b" >"$D/design/b_basic-design.md"
+OUT=$(cd "$D" && DIFF_REVIEW_GROUND_TRUTH="design/a_spec.md:design/b_basic-design.md" "$COLLECT" manifest 2>/dev/null)
+has "injected-multi-a" "$OUT" "design/a_spec.md"
+has "injected-multi-b" "$OUT" "design/b_basic-design.md"
+
+# --- 明示注入: 存在しないパスは WARN して落とす(節は壊れない) ---
+D="$WORK/injected-missing" && new_repo "$D"
+ERR=$(cd "$D" && DIFF_REVIEW_GROUND_TRUTH="nope/x.md" "$COLLECT" manifest 2>&1 >/dev/null)
+has "injected-missing-warn" "$ERR" "DIFF_REVIEW_GROUND_TRUTH のパスが存在しない"
+OUT=$(cd "$D" && DIFF_REVIEW_GROUND_TRUTH="nope/x.md" "$COLLECT" manifest 2>/dev/null)
+hasnt "injected-missing-no-section" "$OUT" "== GROUND_TRUTH"
+
+# --- set -e 回帰: 規定パスの一部(basic-design/test-case)が不在でも manifest が完走する ---
+# emit_confirmed_paths / find_candidates の末尾が偽になり set -e で中断した不具合の回帰
+D="$WORK/partial-paths" && new_repo "$D"
+mkdir -p "$D/docs/dev/alpha"
+echo "# spec" >"$D/docs/dev/alpha/spec.md"
+check "partial-paths-exit" 0 "$(
+    manifest "$D" >/dev/null
+    echo $?
+)"
+OUT=$(manifest "$D")
+has "partial-paths-section" "$OUT" "docs/dev/alpha/spec.md"
+has "partial-paths-completes" "$OUT" "== SIZE =="
+
+# --- set -e 回帰: 候補が全件確定済みで除外され尽くしても完走する ---
+D="$WORK/all-confirmed" && new_repo "$D"
+mkdir -p "$D/docs/dev/alpha" "$D/docs/test/alpha"
+echo "# spec" >"$D/docs/dev/alpha/spec.md"
+echo "# design" >"$D/docs/dev/alpha/basic-design.md"
+echo "# cases" >"$D/docs/test/alpha/test-case.md"
+check "all-confirmed-exit" 0 "$(
+    manifest "$D" >/dev/null
+    echo $?
+)"
+OUT=$(manifest "$D")
+has "all-confirmed-completes" "$OUT" "== SIZE =="
+
 exit $fail
