@@ -21,7 +21,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 ```
 .
 ├── .claude-plugin/
-│   └── marketplace.json              # マーケットプレイス定義(14 プラグインを列挙)
+│   └── marketplace.json              # マーケットプレイス定義(16 プラグインを列挙)
 ├── flake.nix                         # 成果物 + treefmt(formatter) + checks(検証)
 ├── dev/flake.nix                     # 開発用 devShell (default / ci)
 ├── pkgs/
@@ -58,7 +58,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 
 ## Claude Code プラグインとして使う
 
-1 マーケットプレイス(`marketplace.json`)に **14 のプラグイン**(カテゴリ 8 + hook 5 +
+1 マーケットプレイス(`marketplace.json`)に **16 のプラグイン**(カテゴリ 8 + hook 7 +
 バンドル 1)を列挙している。利用者は必要なカテゴリ・hook だけを選んで install できる。
 
 | プラグイン                                   | source                                | 内容                                                         |
@@ -77,6 +77,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 | `yasunori0418-broad-scan-guard-hooks`        | `./hooks/broad-scan-guard-plugin`     | find/fd のルート(`/`)起点の全探索を deny、`$HOME` 直下起点は深さ制限を強制($HOME 配下・rg/grep/ls は対象外) |
 | `yasunori0418-notify-stop-hooks`             | `./hooks/notify-stop-plugin`          | Stop 時のデスクトップ通知                                     |
 | `yasunori0418-task-boundary-hooks`           | `./hooks/task-boundary-plugin`        | 境界ファイル `.claude/task-boundary.json` の外への Edit/Write/NotebookEdit を deny(境界ファイルが無ければ沈黙) |
+| `yasunori0418-teammate-leak-guard-hooks`     | `./hooks/teammate-leak-guard-plugin`  | Stop 時に稼働中のサブエージェント/チームメイトが残っていれば TaskStop を促す(idle は終了ではないため放置すると滞留する) |
 | `shift-left-process`                         | `./bundles/shift-left-process`        | シフトレフト開発プロセスの 6 スキルバンドル(下記)             |
 
 > **hook の分離方針**: git rebase/reset をスキル経由へ強制する `git-guard` は、

@@ -12,26 +12,27 @@ AI エージェント向けスキルを管理するリポジトリ。スキル�
 | レイヤー | 担当 | 実体 |
 | --- | --- | --- |
 | スキルの中身 | [agentskills.io](https://agentskills.io/specification) 標準 | `skills/<category>/<skill-name>/SKILL.md` |
-| 配布・パッケージング | Claude Code plugin | per-category `skills/<category>/.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`（14 プラグイン） |
+| 配布・パッケージング | Claude Code plugin | per-category `skills/<category>/.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`（16 プラグイン） |
 | Codex 連携 | 本リポジトリの慣習 | per-skill `agents/openai.yaml` |
 | claude-code サブエージェント（任意） | Claude Code plugin | per-skill `agents/<name>.md` |
 | 運用 hook | Claude Code plugin | skill 非依存: hook 単位プラグイン `hooks/<plugin>/hooks/hooks.json` / skill 連動: `skills/<category>/hooks/hooks.json` |
 
 ## プラグイン構成（カテゴリ別 N plugins）
 
-1 マーケットプレイス（`.claude-plugin/marketplace.json`）に 14 プラグイン
-（カテゴリ 8 + hook 5 + バンドル 1）を列挙し、利用者はカテゴリ単位・hook 単位・
+1 マーケットプレイス（`.claude-plugin/marketplace.json`）に 16 プラグイン
+（カテゴリ 8 + hook 7 + バンドル 1）を列挙し、利用者はカテゴリ単位・hook 単位・
 バンドル単位で install できる。
 
 - **カテゴリプラグイン**（8 個）: `skills/<category>/` が各プラグイン root。
   `skills/<category>/.claude-plugin/plugin.json`（`name: "<category>-skills"`）を置き、
   marketplace の `source` は `./skills/<category>`。`skills` / `agents` 参照は
   **category root からの相対**（`./<skill-name>` / `./<skill-name>/agents/<name>.md`）。
-- **hook プラグイン**（5 個）: skill 非依存の guard/通知 hook を **hook 単位**で
+- **hook プラグイン**（7 個）: skill 非依存の guard/通知 hook を **hook 単位**で
   独立プラグイン化し、利用者が個別に install / on-off できる。各プラグイン root は
   `hooks/<plugin>/`（`yasunori0418-askuserquestion-hooks` /
   `yasunori0418-webfetch-github-guard-hooks` / `yasunori0418-sudo-guard-hooks` /
-  `yasunori0418-notify-stop-hooks` / `yasunori0418-task-boundary-hooks`）。root 直下に
+  `yasunori0418-broad-scan-guard-hooks` / `yasunori0418-notify-stop-hooks` /
+  `yasunori0418-task-boundary-hooks` / `yasunori0418-teammate-leak-guard-hooks`）。root 直下に
   `.claude-plugin/plugin.json` と `hooks/hooks.json` を置き、実体は `hooks/<name>/main.sh`。
   marketplace の `source` は `./hooks/<plugin>`。skill は含まない。
 - **バンドルプラグイン**（1 個）: 用途別にスキルを束ねる `bundles/<bundle>/` root の
