@@ -1,0 +1,15 @@
+{
+  "description": "Stop 時に稼働中のサブエージェント/チームメイトが残っていれば停止を促す hook。",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/teammate-leak-guard/main.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
