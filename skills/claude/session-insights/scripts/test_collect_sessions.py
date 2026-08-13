@@ -17,6 +17,7 @@ import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 import collect_sessions as cs
 
@@ -366,6 +367,36 @@ class TestReports(unittest.TestCase):
         self.assertIn("compact", turns[3]["text"])
 
 
+class TestCcusageArgv(unittest.TestCase):
+    def test_daily_with_range(self):
+        argv = cs.ccusage_argv("2026-07-01", "2026-07-08", None)
+        self.assertEqual(
+            argv,
+            [
+                "claude",
+                "daily",
+                "--json",
+                "--timezone",
+                "Asia/Tokyo",
+                "--since",
+                "2026-07-01",
+                "--until",
+                "2026-07-08",
+            ],
+        )
+
+    def test_session_id_takes_precedence(self):
+        argv = cs.ccusage_argv(None, None, "abc123")
+        self.assertEqual(argv[:4], ["claude", "session", "--id", "abc123"])
+        self.assertIn("--json", argv)
+
+    def test_no_filters(self):
+        self.assertEqual(
+            cs.ccusage_argv(None, None, None),
+            ["claude", "daily", "--json", "--timezone", "Asia/Tokyo"],
+        )
+
+
 class TestSessionFilters(unittest.TestCase):
     def test_as_dict_omits_empty(self):
         f = cs.SessionFilters(project="x")
@@ -442,6 +473,27 @@ class TestCli(unittest.TestCase):
         rep = self.run_cli("paths")
         self.assertEqual(rep["projects"]["session_files"], 2)
         self.assertTrue(rep["entries"]["skills/"]["exists"])
+
+    def test_cost_reports_missing_ccusage(self):
+        """ccusage 不在時は理由と導入方法を返して非ゼロ終了する（黙って 0 円にしない）。"""
+        with mock.patch.object(cs, "find_ccusage", return_value=None):
+            buf = io.StringIO()
+            with redirect_stdout(buf), self.assertRaises(SystemExit) as cm:
+                cs.main(["--config-dir", str(self.root), "cost"])
+        self.assertEqual(cm.exception.code, 1)
+        rep = json.loads(buf.getvalue())
+        self.assertIn("ccusage", rep["error"])
+        self.assertIn("hint", rep)
+
+    def test_cost_passes_through_ccusage_json(self):
+        payload = {"daily": [{"date": "2026-07-01", "totalCost": 1.23}]}
+        with (
+            mock.patch.object(cs, "find_ccusage", return_value=["ccusage"]),
+            mock.patch.object(cs, "run_ccusage", return_value=payload) as runner,
+        ):
+            rep = self.run_cli("cost", "--since", "2026-07-01")
+        self.assertEqual(rep["data"], payload)
+        self.assertIn("--since", runner.call_args.args[1])
 
 
 if __name__ == "__main__":

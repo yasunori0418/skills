@@ -4,7 +4,7 @@
 Claude Code のセッション JSONL を機械的に読み出して JSON で標準出力に返す。
 分析 AI が生の JSONL を Grep/Read で無作為に漁らないための唯一の読み出し口。
 
-横断集計（ツール/スキル使用頻度・トークンとコスト・ツールエラーの分類・
+横断集計（ツール/スキル使用頻度・コンテキスト常時コスト・ツールエラーの分類・
 設定の棚卸し）は cclens へ委譲した。このスクリプトが担うのは、cclens が
 構造上持てない領域だけ:
 
@@ -13,6 +13,8 @@ Claude Code のセッション JSONL を機械的に読み出して JSON で標�
   - 生 transcript の時系列読み出し
   - compaction の発生記録（cclens は compaction を差分計算時に補正する
     ノイズとしてしか扱わず、発生回数・トリガーを残さない）
+  - 金額（USD）の取得。cclens はトークン量とコンテキスト増加は出すが USD 換算を
+    持たないため、cost サブコマンドが ccusage へ移譲する
 
 - 依存は stdlib のみ。Python バージョンは skill 直下の pyproject.toml（uv 管理）に
   従い、次の形で実行する（cwd 非依存。uv が .venv を skill 直下に構築する）:
@@ -27,6 +29,7 @@ Claude Code のセッション JSONL を機械的に読み出して JSON で標�
   paths       設定ディレクトリの解決結果とデータ配置の一覧
   sessions    セッション一覧（メタデータ + セッション単位の集計値）
   prompts     ユーザープロンプトの抽出（本文つき）
+  cost        トークン消費と金額（USD）を ccusage から取得
   transcript  単一セッションの会話を時系列で抽出
 
 設計: 「純粋層」と「副作用層」を分離している。
@@ -46,12 +49,15 @@ import argparse
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 JST = timezone(timedelta(hours=9), "JST")
 
@@ -555,6 +561,27 @@ def transcript_turns(records: Iterable[dict], max_chars: int, include_tools: boo
     return turns
 
 
+def ccusage_argv(since: str | None, until: str | None, session: str | None) -> list:
+    """フィルタ条件から ccusage の引数列を組み立てる（純粋）。
+
+    金額（USD）の算出は ccusage だけが持つ（モデル別価格表と重複レコードの排除）。
+    cclens はトークン量・コンテキスト増加は出すが USD 換算を持たないため、
+    コスト観点はここから ccusage へ移譲する。Claude Code のみを対象にするため
+    `claude` サブコマンド群を使い、日付グルーピングは JST に合わせる。
+    モデル別内訳は daily の modelBreakdowns に含まれる。
+    """
+    if session:
+        argv = ["claude", "session", "--id", session]
+    else:
+        argv = ["claude", "daily"]
+    argv += ["--json", "--timezone", "Asia/Tokyo"]
+    if since:
+        argv += ["--since", since]
+    if until:
+        argv += ["--until", until]
+    return argv
+
+
 # ============================================================
 # 副作用層: パス解決・ファイル走査・読み出し
 # ============================================================
@@ -641,6 +668,39 @@ def load_sessions(config_dir: Path, filters: SessionFilters) -> list:
         s.subagent_files = subagent_file_count(f)
         out.append(s)
     return out
+
+
+def find_ccusage() -> list | None:
+    """ccusage の起動コマンドを探す。直インストール → bunx → npx の順。"""
+    if shutil.which("ccusage"):
+        return ["ccusage"]
+    if shutil.which("bunx"):
+        return ["bunx", "ccusage"]
+    if shutil.which("npx"):
+        return ["npx", "-y", "ccusage"]
+    return None
+
+
+def run_ccusage(runner: list, argv: list, config_dir: Path) -> Any | None:
+    """ccusage を実行して JSON を返す。失敗時は None（呼び出し側で報告）。
+
+    --config-dir 上書き時も同じデータを見るよう CLAUDE_CONFIG_DIR を子プロセスに
+    引き渡す（ccusage は同環境変数を尊重する）。
+    """
+    env = dict(os.environ)
+    env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    try:
+        proc = subprocess.run(
+            runner + argv, capture_output=True, text=True, timeout=180, env=env, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
 
 
 def emit(obj) -> None:
@@ -740,6 +800,36 @@ def cmd_prompts(config_dir: Path, args) -> None:
     emit(prompts_report(stats, filters, args.limit, args.max_chars))
 
 
+def cmd_cost(config_dir: Path, args) -> None:
+    """金額（USD）を ccusage から取る。トークン量・skill 単位の内訳は cclens の領分。"""
+    runner = find_ccusage()
+    argv = ccusage_argv(args.since, args.until, args.session)
+    if runner is None:
+        emit(
+            {
+                "error": "ccusage が見つからない（金額算出は ccusage のみが持つ）",
+                "hint": "npx -y ccusage / bunx ccusage / インストールのいずれかを用意する",
+                "command": " ".join(["ccusage", *argv]),
+            }
+        )
+        sys.exit(1)
+    data = run_ccusage(runner, argv, config_dir)
+    if data is None:
+        emit({"error": "ccusage の実行に失敗", "command": " ".join(runner + argv)})
+        sys.exit(1)
+    emit(
+        {
+            "command": " ".join(runner + argv),
+            "note": (
+                "金額（USD）とトークン総量は ccusage の値を正とする"
+                "（重複レコードの排除とモデル別価格計算済み）。"
+                "skill 単位の消費・コンテキスト増加は cclens usage を使う"
+            ),
+            "data": data,
+        }
+    )
+
+
 def cmd_transcript(config_dir: Path, args) -> None:
     filters = SessionFilters(session=args.session, include_agents=True)
     files = find_session_files(config_dir, filters)
@@ -808,6 +898,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-chars", type=int, default=240, help="本文の切り詰め文字数（既定240、0で無制限）"
     )
 
+    sp = sub.add_parser("cost", help="トークン消費と金額（USD）を ccusage から取得")
+    sp.add_argument("--since", help="JST日付 YYYY-MM-DD")
+    sp.add_argument("--until", help="JST日付 YYYY-MM-DD（その日を含む）")
+    sp.add_argument("--session", help="セッションID（指定時は日次でなくセッション単位）")
+
     sp = sub.add_parser("transcript", help="単一セッションの会話抽出")
     sp.add_argument("--session", required=True, help="セッションIDの前方一致（一意になる長さで）")
     sp.add_argument(
@@ -829,6 +924,7 @@ def main(argv: list | None = None) -> int:
         "paths": lambda: cmd_paths(config_dir, source),
         "sessions": lambda: cmd_sessions(config_dir, args),
         "prompts": lambda: cmd_prompts(config_dir, args),
+        "cost": lambda: cmd_cost(config_dir, args),
         "transcript": lambda: cmd_transcript(config_dir, args),
     }
     handlers[args.cmd]()
