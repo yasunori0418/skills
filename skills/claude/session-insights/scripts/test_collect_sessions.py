@@ -355,35 +355,6 @@ class TestReports(unittest.TestCase):
         self.assertTrue(rep["prompts"][0]["text"].startswith("最初の"))
         self.assertEqual(rep["prompts"][0]["chars"], len("最初の依頼"))
 
-    def test_tools_report(self):
-        rep = cs.tools_report([self.stats], self.filters, by_project=True)
-        self.assertEqual(rep["tools"]["Bash"], 1)
-        self.assertEqual(rep["skills"], {"commit-flow": 1})
-        self.assertIn("-home-u-proj", rep["by_project"])
-
-    def test_usage_report_by_day(self):
-        rep = cs.usage_report([self.stats], self.filters, by="day")
-        self.assertEqual(rep["usage_total"]["input"], 110)
-        self.assertEqual(rep["compactions"]["count"], 1)
-        self.assertEqual(rep["compactions"]["avg_pre_tokens"], 150000)
-        self.assertIn("2026-07-01", rep["by_day"])
-
-    def test_errors_report(self):
-        rep = cs.errors_report([self.stats], self.filters, limit=10, max_chars=100)
-        self.assertEqual(rep["total_errors"], 1)
-        self.assertEqual(rep["by_tool"], {"Bash": 1})
-
-    def test_commands_report_with_history(self):
-        history = [
-            {"display": "/mcp", "timestamp": 1780000000000, "project": "/home/u/proj"},
-            {"display": "普通のプロンプト", "timestamp": 1780000000000, "project": "/home/u/proj"},
-            {"display": "/mcp", "timestamp": 1780000000000, "project": "/other"},
-        ]
-        rep = cs.commands_report([self.stats], history, cs.SessionFilters(project="proj"))
-        self.assertEqual(rep["from_transcripts"]["/commit-flow"], 1)
-        self.assertEqual(rep["from_history"]["total_prompts"], 2)
-        self.assertEqual(rep["from_history"]["slash_commands"], {"/mcp": 1})
-
     def test_transcript_turns(self):
         turns = cs.transcript_turns(synthetic_records(), max_chars=100, include_tools=True)
         roles = [t["role"] for t in turns]
@@ -393,70 +364,6 @@ class TestReports(unittest.TestCase):
         self.assertEqual(turns[0]["text"], "最初の依頼")
         self.assertEqual(turns[2]["tools"][0], {"tool": "Bash", "brief": "ls"})
         self.assertIn("compact", turns[3]["text"])
-
-
-class TestCcusageArgv(unittest.TestCase):
-    def test_daily_with_range(self):
-        argv = cs.ccusage_argv("2026-07-01", "2026-07-08", None)
-        self.assertEqual(
-            argv,
-            [
-                "claude",
-                "daily",
-                "--json",
-                "--timezone",
-                "Asia/Tokyo",
-                "--since",
-                "2026-07-01",
-                "--until",
-                "2026-07-08",
-            ],
-        )
-
-    def test_session_id_takes_precedence(self):
-        argv = cs.ccusage_argv(None, None, "abc123")
-        self.assertEqual(argv[:4], ["claude", "session", "--id", "abc123"])
-        self.assertIn("--json", argv)
-
-    def test_no_filters(self):
-        self.assertEqual(
-            cs.ccusage_argv(None, None, None),
-            ["claude", "daily", "--json", "--timezone", "Asia/Tokyo"],
-        )
-
-
-class TestConfigHelpers(unittest.TestCase):
-    def test_parse_frontmatter_text(self):
-        text = '---\nname: foo\ndescription: "説明 です"\ndisable-model-invocation: true\n---\n# 本文\nname: 偽物\n'
-        fm = cs.parse_frontmatter_text(text)
-        self.assertEqual(fm["name"], "foo")
-        self.assertEqual(fm["description"], "説明 です")
-        self.assertEqual(fm["disable-model-invocation"], "true")
-        self.assertNotIn("本文の name", fm.values())
-
-    def test_parse_frontmatter_no_marker(self):
-        self.assertEqual(cs.parse_frontmatter_text("# タイトルのみ"), {})
-
-    def test_redact_settings(self):
-        obj = {
-            "env": {"GITHUB_TOKEN": "abc", "MY_API_KEY": "xyz", "PLAIN": "ok"},
-            "list": [{"password": "p"}],
-            "count": 3,
-        }
-        red: dict = cs.redact_settings(obj)
-        self.assertEqual(red["env"]["GITHUB_TOKEN"], "«redacted»")
-        self.assertEqual(red["env"]["MY_API_KEY"], "«redacted»")
-        self.assertEqual(red["env"]["PLAIN"], "ok")
-        self.assertEqual(red["list"][0]["password"], "«redacted»")
-        self.assertEqual(red["count"], 3)
-
-    def test_skill_inventory_entry(self):
-        text = "---\nname: demo\ndescription: d\ndisable-model-invocation: true\n---\nbody"
-        e = cs.skill_inventory_entry("demo-dir", text, {"scripts"})
-        self.assertEqual(e["name"], "demo")
-        self.assertTrue(e["disable_model_invocation"])
-        self.assertTrue(e["has_scripts"])
-        self.assertFalse(e["has_references"])
 
 
 class TestSessionFilters(unittest.TestCase):
@@ -498,15 +405,8 @@ class TestCli(unittest.TestCase):
         with open(proj / "bbbb2222-0000-0000-0000-000000000000.jsonl", "w") as f:
             recs = [{"type": "agent-setting", "agentSetting": "Explore"}] + synthetic_records()
             f.writelines(json.dumps(rec, ensure_ascii=False) + "\n" for rec in recs)
-        (root / "history.jsonl").write_text(
-            json.dumps({"display": "/mcp", "timestamp": 1780000000000, "project": "/home/u/proj"})
-            + "\n"
-        )
+        # paths サブコマンドが配置を列挙できることの確認用
         (root / "skills" / "demo").mkdir(parents=True)
-        (root / "skills" / "demo" / "SKILL.md").write_text(
-            "---\nname: demo\ndescription: デモ\n---\n# demo\n"
-        )
-        (root / "settings.json").write_text(json.dumps({"env": {"MY_TOKEN": "secret"}}))
         self.root = root
 
     def tearDown(self):
@@ -533,28 +433,10 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rep["total_prompts"], 1)
         self.assertEqual(rep["prompts"][0]["text"], "最初の依頼")
 
-    def test_tools(self):
-        rep = self.run_cli("tools")
-        self.assertEqual(rep["skills"], {"commit-flow": 1})
-
-    def test_commands_reads_history(self):
-        rep = self.run_cli("commands")
-        self.assertEqual(rep["from_history"]["slash_commands"], {"/mcp": 1})
-
-    def test_config_redacts_and_lists_skills(self):
-        rep = self.run_cli("config")
-        self.assertEqual(rep["settings.json"]["env"]["MY_TOKEN"], "«redacted»")
-        self.assertEqual(rep["skills"][0]["name"], "demo")
-
     def test_transcript_by_prefix(self):
         rep = self.run_cli("transcript", "--session", "aaaa1111")
         self.assertEqual(rep["session"]["session_id"], "aaaa1111-0000-0000-0000-000000000000")
         self.assertEqual(rep["turns"][0]["text"], "最初の依頼")
-
-    def test_usage_builtin_engine_has_no_ccusage_section(self):
-        rep = self.run_cli("usage", "--engine", "builtin", "--by", "day")
-        self.assertEqual(rep["usage_total"]["input"], 110)
-        self.assertNotIn("ccusage", rep)
 
     def test_paths_runs(self):
         rep = self.run_cli("paths")

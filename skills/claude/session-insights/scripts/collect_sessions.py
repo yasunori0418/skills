@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """session-insights 収集 CLI（決定論）。
 
-Claude Code のユーザーデータ（セッション JSONL・設定・スキル定義・履歴）を
-機械的に読み出して JSON で標準出力に返す。分析 AI が生の JSONL を
-Grep/Read で無作為に漁らないための唯一の読み出し口。
+Claude Code のセッション JSONL を機械的に読み出して JSON で標準出力に返す。
+分析 AI が生の JSONL を Grep/Read で無作為に漁らないための唯一の読み出し口。
+
+横断集計（ツール/スキル使用頻度・トークンとコスト・ツールエラーの分類・
+設定の棚卸し）は cclens へ委譲した。このスクリプトが担うのは、cclens が
+構造上持てない領域だけ:
+
+  - プロンプト本文（cclens は instruct/steer/correct/question の 4 ラベルに
+    集約するのみで本文を保持しない）
+  - 生 transcript の時系列読み出し
+  - compaction の発生記録（cclens は compaction を差分計算時に補正する
+    ノイズとしてしか扱わず、発生回数・トリガーを残さない）
 
 - 依存は stdlib のみ。Python バージョンは skill 直下の pyproject.toml（uv 管理）に
   従い、次の形で実行する（cwd 非依存。uv が .venv を skill 直下に構築する）:
@@ -16,13 +25,8 @@ Grep/Read で無作為に漁らないための唯一の読み出し口。
 
 サブコマンド:
   paths       設定ディレクトリの解決結果とデータ配置の一覧
-  sessions    セッション一覧（メタデータ + 集計値）
-  prompts     ユーザープロンプトの抽出
-  tools       ツール / スキル / エージェント / MCP 使用の集計
-  usage       トークン使用量・compact・ターン時間の集計
-  commands    スラッシュコマンド使用の集計（transcript + history.jsonl）
-  errors      ツール実行エラーの抽出
-  config      設定・スキル・コマンド・エージェント・プラグインの棚卸し
+  sessions    セッション一覧（メタデータ + セッション単位の集計値）
+  prompts     ユーザープロンプトの抽出（本文つき）
   transcript  単一セッションの会話を時系列で抽出
 
 設計: 「純粋層」と「副作用層」を分離している。
@@ -42,20 +46,14 @@ import argparse
 import json
 import os
 import re
-import shutil
-import subprocess
 import sys
 from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
 
 JST = timezone(timedelta(hours=9), "JST")
-
-# 秘匿値をダンプに含めないためのキー名パターン（config サブコマンド用）
-SECRET_KEY_RE = re.compile(r"(?i)(token|secret|password|credential|api[_-]?key)")
 
 COMMAND_NAME_RE = re.compile(r"<command-name>([^<]+)</command-name>")
 
@@ -528,153 +526,6 @@ def prompts_report(stats: list, filters: SessionFilters, limit: int, max_chars: 
     }
 
 
-def tools_report(stats: list, filters: SessionFilters, by_project: bool) -> dict:
-    tools, skills, commands, agents, models = Counter(), Counter(), Counter(), Counter(), Counter()
-    per_project: dict = {}
-    for s in stats:
-        tools.update(s.tools)
-        skills.update(s.skills)
-        commands.update(s.commands)
-        agents.update(s.agents)
-        models.update(s.models)
-        per_project.setdefault(s.project, Counter()).update(s.tools)
-    mcp = {k: v for k, v in sorted(tools.items(), key=lambda kv: -kv[1]) if k.startswith("mcp__")}
-    result = {
-        "filters": filters.as_dict(),
-        "sessions_scanned": len(stats),
-        "tools": dict(tools.most_common()),
-        "mcp_tools": mcp,
-        "skills": dict(skills.most_common()),
-        "commands": dict(commands.most_common()),
-        "agents": dict(agents.most_common()),
-        "models": dict(models.most_common()),
-    }
-    if by_project:
-        result["by_project"] = {
-            proj: dict(c.most_common(10)) for proj, c in sorted(per_project.items())
-        }
-    return result
-
-
-def usage_report(stats: list, filters: SessionFilters, by: str | None) -> dict:
-    total = TokenUsage()
-    grouped: dict = {}
-    peak = []
-    compactions = []
-    turn_ms_all = []
-    for s in stats:
-        total = total + s.usage
-        compactions.extend(s.compactions)
-        turn_ms_all.extend(s.turn_ms)
-        peak.append(
-            {
-                "session_id": s.session_id[:8],
-                "project": s.project,
-                "peak_context": s.peak_context,
-                "compactions": len(s.compactions),
-            }
-        )
-        if by == "project":
-            key = s.project
-        elif by == "model":
-            key = s.models.most_common(1)[0][0] if s.models else "?"
-        elif by == "day":
-            key = s.first.astimezone(JST).strftime("%Y-%m-%d") if s.first else "?"
-        else:
-            key = None
-        if key is not None:
-            grouped[key] = grouped.get(key, TokenUsage()) + s.usage
-    peak.sort(key=lambda x: -x["peak_context"])
-    pre_tokens = [c.pre_tokens for c in compactions if isinstance(c.pre_tokens, (int, float))]
-    result = {
-        "filters": filters.as_dict(),
-        "sessions_scanned": len(stats),
-        "usage_total": total.as_dict(),
-        "compactions": {
-            "count": len(compactions),
-            "triggers": dict(Counter(c.trigger or "?" for c in compactions)),
-            "avg_pre_tokens": int(sum(pre_tokens) / len(pre_tokens)) if pre_tokens else None,
-        },
-        "turns": {
-            "count": len(turn_ms_all),
-            "avg": human_duration(sum(turn_ms_all) / len(turn_ms_all) / 1000)
-            if turn_ms_all
-            else None,
-            "max": human_duration(max(turn_ms_all) / 1000) if turn_ms_all else None,
-        },
-        "peak_context_top": peak[:15],
-    }
-    if grouped:
-        result[f"by_{by}"] = {k: v.as_dict() for k, v in sorted(grouped.items())}
-    return result
-
-
-def history_slash_counts(
-    entries: Iterable[dict], project: str | None, since: datetime | None
-) -> dict:
-    """history.jsonl のレコード列からスラッシュコマンド頻度を数える。"""
-    counts = Counter()
-    total = 0
-    for rec in entries:
-        if not isinstance(rec, dict):
-            continue
-        ts_ms = rec.get("timestamp")
-        if (
-            since
-            and isinstance(ts_ms, (int, float))
-            and datetime.fromtimestamp(ts_ms / 1000, tz=JST) < since
-        ):
-            continue
-        if project and project.lower() not in str(rec.get("project", "")).lower():
-            continue
-        total += 1
-        display = rec.get("display")
-        if isinstance(display, str) and display.startswith("/"):
-            counts[display.split()[0]] += 1
-    return {"total_prompts": total, "slash_commands": dict(counts.most_common())}
-
-
-def commands_report(stats: list, history_entries: Iterable[dict], filters: SessionFilters) -> dict:
-    from_transcripts = Counter()
-    for s in stats:
-        from_transcripts.update(s.commands)
-    return {
-        "filters": filters.as_dict(),
-        "from_transcripts": dict(from_transcripts.most_common()),
-        "from_history": history_slash_counts(
-            history_entries, filters.project, parse_jst_date(filters.since)
-        ),
-    }
-
-
-def errors_report(stats: list, filters: SessionFilters, limit: int, max_chars: int) -> dict:
-    items = []
-    by_tool = Counter()
-    total = 0
-    for s in stats:
-        for e in s.errors:
-            total += 1
-            by_tool[e.tool] += 1
-            if limit > 0 and len(items) >= limit:
-                continue
-            items.append(
-                {
-                    "ts": jst_str(e.ts),
-                    "session_id": s.session_id[:8],
-                    "project": s.project,
-                    "tool": e.tool,
-                    "error": truncate(e.message, max_chars),
-                }
-            )
-    return {
-        "filters": filters.as_dict(),
-        "total_errors": total,
-        "by_tool": dict(by_tool.most_common()),
-        "shown": len(items),
-        "errors": items,
-    }
-
-
 def transcript_turns(records: Iterable[dict], max_chars: int, include_tools: bool) -> list:
     """レコード列を表示用ターン列に変換する（順序保存）。"""
     turns = []
@@ -702,74 +553,6 @@ def transcript_turns(records: Iterable[dict], max_chars: int, include_tools: boo
         elif rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
             turns.append({"role": "system", "ts": ts, "text": "--- compact 発生 ---"})
     return turns
-
-
-def ccusage_argv(since: str | None, until: str | None, session: str | None) -> list:
-    """フィルタ条件から ccusage の引数列を組み立てる（純粋）。
-
-    トークン総量・コスト算出は ccusage（重複レコードの排除とモデル別価格計算を
-    持つ）へ移譲する。Claude Code のみを対象にするため `claude` サブコマンド群を
-    使い、日付グルーピングは JST に合わせる。モデル別内訳は daily の
-    modelBreakdowns に含まれる。project 別のグルーピング軸は ccusage に無いので
-    builtin 側（usage_report）が担う。
-    """
-    if session:
-        argv = ["claude", "session", "--id", session]
-    else:
-        argv = ["claude", "daily"]
-    argv += ["--json", "--timezone", "Asia/Tokyo"]
-    if since:
-        argv += ["--since", since]
-    if until:
-        argv += ["--until", until]
-    return argv
-
-
-def parse_frontmatter_text(text: str) -> dict:
-    """SKILL.md / command / agent の frontmatter を寛容にパースする。"""
-    out: dict = {}
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return out
-    for line in lines[1:80]:
-        if line.strip() == "---":
-            break
-        m = re.match(r"^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$", line)
-        if m:
-            out[m.group(1)] = m.group(2).strip().strip('"').strip("'")
-    return out
-
-
-def redact_settings(obj: Any) -> Any:
-    """settings 内の秘匿値らしきものを伏せる（キー名ベース）。"""
-    if isinstance(obj, dict):
-        return {
-            k: (
-                "«redacted»"
-                if SECRET_KEY_RE.search(k) and isinstance(v, str)
-                else redact_settings(v)
-            )
-            for k, v in obj.items()
-        }
-    if isinstance(obj, list):
-        return [redact_settings(v) for v in obj]
-    return obj
-
-
-def skill_inventory_entry(dir_name: str, skill_md_text: str, subdirs: set) -> dict:
-    """SKILL.md の本文と存在サブディレクトリ集合から棚卸しエントリを作る。"""
-    fm = parse_frontmatter_text(skill_md_text)
-    return {
-        "name": fm.get("name", dir_name),
-        "dir": dir_name,
-        "description_head": truncate(fm.get("description", ""), 120),
-        "disable_model_invocation": fm.get("disable-model-invocation") == "true",
-        "argument_hint": fm.get("argument-hint"),
-        "skill_md_lines": len(skill_md_text.splitlines()),
-        "has_scripts": "scripts" in subdirs,
-        "has_references": "references" in subdirs,
-        "has_assets": "assets" in subdirs,
-    }
 
 
 # ============================================================
@@ -858,53 +641,6 @@ def load_sessions(config_dir: Path, filters: SessionFilters) -> list:
         s.subagent_files = subagent_file_count(f)
         out.append(s)
     return out
-
-
-def read_json_file(path: Path):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def read_text_file(path: Path) -> str | None:
-    try:
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-
-
-def find_ccusage() -> list | None:
-    """ccusage の起動コマンドを探す。直インストール → bunx → npx の順。"""
-    if shutil.which("ccusage"):
-        return ["ccusage"]
-    if shutil.which("bunx"):
-        return ["bunx", "ccusage"]
-    if shutil.which("npx"):
-        return ["npx", "-y", "ccusage"]
-    return None
-
-
-def run_ccusage(runner: list, argv: list, config_dir: Path) -> Any | None:
-    """ccusage を実行して JSON を返す。失敗時は None（呼び出し側でフォールバック）。
-
-    --config-dir 上書き時も同じデータを見るよう CLAUDE_CONFIG_DIR を子プロセスに
-    引き渡す（ccusage は同環境変数を尊重する）。
-    """
-    env = dict(os.environ)
-    env["CLAUDE_CONFIG_DIR"] = str(config_dir)
-    try:
-        proc = subprocess.run(
-            runner + argv, capture_output=True, text=True, timeout=180, env=env
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if proc.returncode != 0:
-        return None
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return None
 
 
 def emit(obj) -> None:
@@ -1004,102 +740,6 @@ def cmd_prompts(config_dir: Path, args) -> None:
     emit(prompts_report(stats, filters, args.limit, args.max_chars))
 
 
-def cmd_tools(config_dir: Path, args) -> None:
-    filters = SessionFilters.from_args(args)
-    stats = load_sessions(config_dir, filters)
-    emit(tools_report(stats, filters, args.by_project))
-
-
-def cmd_usage(config_dir: Path, args) -> None:
-    filters = SessionFilters.from_args(args)
-    stats = load_sessions(config_dir, filters)
-    report = usage_report(stats, filters, args.by)
-    if args.engine != "builtin":
-        runner = find_ccusage()
-        argv = ccusage_argv(filters.since, filters.until, filters.session)
-        data = run_ccusage(runner, argv, config_dir) if runner else None
-        if data is None and args.engine == "ccusage":
-            emit({"error": "ccusage が実行できない（未インストール or 実行失敗）"})
-            sys.exit(1)
-        report["ccusage"] = {
-            "available": data is not None,
-            "command": " ".join((runner or ["ccusage"]) + argv),
-            "note": (
-                "トークン総量・コスト（USD）は ccusage の値を正とする"
-                "（重複排除とモデル別価格計算済み）。builtin の usage_total は"
-                "生レコードの単純合算で、peak_context / compactions の算出用"
-                if data is not None
-                else "ccusage 不在のため builtin 合算のみ（コスト算出なし）"
-            ),
-            "data": data,
-        }
-    emit(report)
-
-
-def cmd_commands(config_dir: Path, args) -> None:
-    filters = SessionFilters.from_args(args)
-    stats = load_sessions(config_dir, filters)
-    emit(commands_report(stats, iter_records(config_dir / "history.jsonl"), filters))
-
-
-def cmd_errors(config_dir: Path, args) -> None:
-    filters = SessionFilters.from_args(args)
-    stats = load_sessions(config_dir, filters)
-    emit(errors_report(stats, filters, args.limit, args.max_chars))
-
-
-def cmd_config(config_dir: Path) -> None:
-    skills = []
-    skills_dir = config_dir / "skills"
-    if skills_dir.is_dir():
-        for d in sorted(skills_dir.iterdir()):
-            text = read_text_file(d / "SKILL.md")
-            if text is None:
-                continue
-            subdirs = {c.name for c in d.iterdir() if c.is_dir()}
-            skills.append(skill_inventory_entry(d.name, text, subdirs))
-
-    def md_inventory(rel: str) -> list:
-        d = config_dir / rel
-        if not d.is_dir():
-            return []
-        out = []
-        for p in sorted(d.rglob("*.md")):
-            text = read_text_file(p) or ""
-            fm = parse_frontmatter_text(text)
-            out.append(
-                {
-                    "file": str(p.relative_to(d)),
-                    "description_head": truncate(fm.get("description", ""), 120),
-                }
-            )
-        return out
-
-    plugins = None
-    plugins_raw = read_json_file(config_dir / "plugins" / "installed_plugins.json")
-    if plugins_raw is not None:
-        plugins = redact_settings(plugins_raw)
-
-    claude_md_text = read_text_file(config_dir / "CLAUDE.md")
-    emit(
-        {
-            "config_dir": str(config_dir),
-            "settings.json": redact_settings(read_json_file(config_dir / "settings.json")),
-            "settings.local.json": redact_settings(
-                read_json_file(config_dir / "settings.local.json")
-            ),
-            "CLAUDE.md": {
-                "exists": claude_md_text is not None,
-                "lines": len(claude_md_text.splitlines()) if claude_md_text else 0,
-            },
-            "skills": skills,
-            "commands": md_inventory("commands"),
-            "agents": md_inventory("agents"),
-            "plugins": plugins,
-        }
-    )
-
-
 def cmd_transcript(config_dir: Path, args) -> None:
     filters = SessionFilters(session=args.session, include_agents=True)
     files = find_session_files(config_dir, filters)
@@ -1145,7 +785,10 @@ def add_filter_args(p: argparse.ArgumentParser, with_session: bool = True) -> No
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="collect_sessions.py",
-        description="Claude Code セッション/設定データの決定論収集 CLI（出力は JSON・時刻は JST）",
+        description=(
+            "Claude Code セッションの決定論収集 CLI（出力は JSON・時刻は JST）。"
+            "横断集計・設定棚卸し・エラー分類は cclens へ委譲する"
+        ),
     )
     p.add_argument(
         "--config-dir", help="設定ディレクトリの明示上書き（既定: $CLAUDE_CONFIG_DIR → ~/.claude）"
@@ -1164,30 +807,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "--max-chars", type=int, default=240, help="本文の切り詰め文字数（既定240、0で無制限）"
     )
-
-    sp = sub.add_parser("tools", help="ツール/スキル/エージェント/MCP 使用集計")
-    add_filter_args(sp)
-    sp.add_argument("--by-project", action="store_true", help="プロジェクト別内訳を含める")
-
-    sp = sub.add_parser("usage", help="トークン使用量・コスト・compact・ターン時間の集計")
-    add_filter_args(sp)
-    sp.add_argument("--by", choices=["project", "model", "day"], help="内訳の軸")
-    sp.add_argument(
-        "--engine",
-        choices=["auto", "builtin", "ccusage"],
-        default="auto",
-        help="トークン総量・コストの算出元（既定 auto: ccusage があれば移譲、無ければ builtin 合算）",
-    )
-
-    sp = sub.add_parser("commands", help="スラッシュコマンド使用集計")
-    add_filter_args(sp, with_session=False)
-
-    sp = sub.add_parser("errors", help="ツール実行エラー抽出")
-    add_filter_args(sp)
-    sp.add_argument("--limit", type=int, default=40, help="最大件数（既定40、0で無制限）")
-    sp.add_argument("--max-chars", type=int, default=200, help="エラー本文の切り詰め（既定200）")
-
-    sub.add_parser("config", help="設定・スキル・コマンド・エージェント・プラグイン棚卸し")
 
     sp = sub.add_parser("transcript", help="単一セッションの会話抽出")
     sp.add_argument("--session", required=True, help="セッションIDの前方一致（一意になる長さで）")
@@ -1210,11 +829,6 @@ def main(argv: list | None = None) -> int:
         "paths": lambda: cmd_paths(config_dir, source),
         "sessions": lambda: cmd_sessions(config_dir, args),
         "prompts": lambda: cmd_prompts(config_dir, args),
-        "tools": lambda: cmd_tools(config_dir, args),
-        "usage": lambda: cmd_usage(config_dir, args),
-        "commands": lambda: cmd_commands(config_dir, args),
-        "errors": lambda: cmd_errors(config_dir, args),
-        "config": lambda: cmd_config(config_dir),
         "transcript": lambda: cmd_transcript(config_dir, args),
     }
     handlers[args.cmd]()
