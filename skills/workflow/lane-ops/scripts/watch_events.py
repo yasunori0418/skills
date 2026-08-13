@@ -42,6 +42,7 @@ herdr socket の実測制約（protocol 19。スキーマには現れない）:
 
 このため受信側の型は 2 系統を分けて表現する。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -510,9 +511,7 @@ def main(argv: list[str]) -> int:
             )
             return 1
 
-        trigger = stream_events(
-            sock_path, subs, (known | ignored) if follow else None
-        )
+        trigger = stream_events(sock_path, subs, (known | ignored) if follow else None)
         if trigger is None:
             print("ERROR: herdr socket が切断された", file=sys.stderr)
             return 1
