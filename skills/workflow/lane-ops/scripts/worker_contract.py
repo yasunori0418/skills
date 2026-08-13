@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""lane-ops ワーカー規約ジェネレータ（単機能フィルタ）。
+
+stdin にタスク情報 JSON を受け取り、ワーカー（レーン内エージェント）へ渡す
+指示の標準セクション（Markdown）を stdout へ出力する。レーン運用規約
+（報告・凍結・承認・境界 deny 後の行動）の正本はこのスクリプトであり、
+オーケストレーション側（job-graph 等）はこれをパイプで呼んで
+タスク本文へ連結する。
+
+入力 JSON（1 タスク分）:
+{
+  "task_id": "B2",
+  "branch": "feat-client-retry",
+  "base": "feat-config-retry",
+  "default_base": "main",
+  "boundary": ["internal/client/**"],   // 省略可（空 = 境界宣言なし）
+  "issue": 123,                          // 省略可（0/なし = issue 参照なし）
+  "parent": "orc-myrepo"                 // 省略可（空 = 報告先未指定）
+}
+
+使い方:
+    printf '%s' '<task json>' | python3 worker_contract.py
+
+report.sh のパスは本スクリプトの設置場所から解決して埋め込む
+（ワーカーは lane-ops のパスを知らなくても報告コマンドをそのまま実行できる）。
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+BOUNDARY_FILE = ".claude/task-boundary.json"
+
+MILESTONES = "最初のコミット完了 / review-converge 収束 / push 完了 / PR 作成（番号付き）/ 作業のブロック・境界の不足"
+
+
+def report_script() -> str:
+    """同梱 report.sh の絶対パス（設置場所から解決）。"""
+    return str(Path(__file__).resolve().parent / "report.sh")
+
+
+def render(task: dict) -> str:
+    """タスク情報 -> 標準セクション Markdown（純粋）。"""
+    task_id = str(task.get("task_id", "")).strip()
+    branch = str(task.get("branch", "")).strip()
+    base = str(task.get("base", "")).strip() or "main"
+    default_base = str(task.get("default_base", "")).strip() or "main"
+    boundary = [str(g).strip() for g in task.get("boundary") or [] if str(g).strip()]
+    issue = task.get("issue") or 0
+    parent = str(task.get("parent", "")).strip()
+
+    if boundary:
+        scope = (
+            "- 編集してよい範囲（境界）: "
+            + ", ".join(boundary)
+            + f"\n  この glob 外のファイルは編集しない。宣言は {BOUNDARY_FILE} と同一で、"
+            "task-boundary hook が境界外の Edit/Write を機械ブロックする。\n"
+            "  deny されたら境界ファイルに触れようとせず、下記の報告コマンドで"
+            "親セッションへ報告して指示を待つ（境界の拡張は親だけが行える）。"
+        )
+    else:
+        scope = (
+            "- 編集してよい範囲（境界）: このタスクの担当範囲に限る。他タスクのファイルに触れない"
+        )
+
+    issue_lines = []
+    if issue:
+        issue_lines = [
+            f"- issue 参照: このタスクは GH issue #{issue} に対応する。"
+            f"着手前に `gh issue view {issue}` で本文と受け入れ条件を確認し、"
+            "PR 本文に issue への参照を含める",
+        ]
+
+    if parent:
+        report_cmd = f"`bash {report_script()} {parent} {task_id or '<task-id>'} <マイルストーン> [詳細]`"
+        report_line = (
+            f"- 報告: 次のマイルストーンごとに {report_cmd} を実行して"
+            f"親セッションへ報告する: {MILESTONES}。"
+            "報告は事実のみ（報告は承認の代わりにならない。承認が要る場面では停止して親の応答を待つ）"
+        )
+    else:
+        report_line = (
+            "- 報告: 報告先（親セッション名）が未指定のため報告は省略してよい。"
+            "作業がブロックしたら停止して指示を待つ"
+        )
+
+    pr_arg = "" if base == default_base else f" {base}"
+    return "\n".join(
+        [
+            "## 制約（lane-ops ワーカー規約）",
+            scope,
+            *issue_lines,
+            "- TDD 順序: テストを先に実装し（失敗を確認）、その後アプリケーション実装で通す",
+            "- コミット粒度: 論理的に独立した修正は都度コミットする"
+            "（commit-flow スキル準拠、Conventional Commits）",
+            f"- push: 自分の feature ブランチ {branch or '<branch>'} に限り push してよい。"
+            "push は計画承認済みの前提であり、個別の確認へ回さず実行する。"
+            "main 等の保護ブランチへは push しない",
+            "- PR 作成前ゲート: `/review-converge` を実行して指摘を収束させてから "
+            f"`/pr-create{pr_arg}` を実行する（収束前に PR を作らない）。"
+            "PR 作成も計画承認済みの前提であり、個別の確認へ回さない",
+            "- review-converge の反復境界: 実質的な指摘（出力形状・型安全性・contract・退行）が"
+            "出ている間は反復を続ける。2 巡目以降で新規指摘が純粋な可読性 nit だけになったら、"
+            "nit は「見送り」と記録して収束扱いで終了する（無制限の磨き込みで膠着しない）",
+            "- PR 作成後の凍結: PR を作成したら実装を凍結する。以降の実装変更・push を行わず、"
+            "気付いた改善点は親への報告のみとする",
+            report_line,
+            "- サブエージェント委任: 複数ファイル横断調査のような真に独立した大きな作業に限る。"
+            "数回のツール呼び出しで済む作業は委任しない。"
+            "自分の作業の検証・ダブルチェック目的でサブエージェントを使わない。1 体で足りるなら 1 体に留める",
+            "- スコープ: 依頼されたスコープで納品する。頼まれていない改善・リファクタ・追加作業を足さない。"
+            "依頼に誤りがある・より良い方法があると考えたら 1 文で指摘し、依頼どおりの作業を続ける",
+            "- 進捗ナレーション: 最初のツール呼び出し前に 1 文だけ宣言し、"
+            "以降は重要な発見・方針転換のときのみ短く述べる（pane を逐次読む人はいない）",
+        ]
+    )
+
+
+def main() -> int:
+    try:
+        task = json.loads(sys.stdin.read())
+    except json.JSONDecodeError as e:
+        print(f"ERROR: 入力が不正な JSON: {e}", file=sys.stderr)
+        return 1
+    if not isinstance(task, dict):
+        print("ERROR: 入力はオブジェクトではない", file=sys.stderr)
+        return 1
+    print(render(task))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
