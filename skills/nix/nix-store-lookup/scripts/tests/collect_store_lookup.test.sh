@@ -77,8 +77,15 @@ done
 BIN="$WORK/bin"
 mkdir -p "$BIN"
 
+# stub の shebang は実行中の bash の絶対パスで書く。checked-in の *.sh は
+# patchShebangs が nix store の bash へ書き換えてくれるが、ここで実行時に
+# 生成する stub は対象外で、Nix sandbox には /usr/bin/env が無いため
+# `#!/usr/bin/env bash` のままだと bad interpreter になり、stub が無言で
+# 失敗して resolved / upstream の検証が落ちる。
+stub_bash=$(command -v bash)
+
 cat > "$BIN/nix-store" <<STUB
-#!/usr/bin/env bash
+#!$stub_bash
 # --query --outputs <drv> / --query --deriver <path> だけを模す
 case "\$*" in
     *--outputs*) echo "$STORE/$H1-widget-1.0" ;;
@@ -89,7 +96,7 @@ STUB
 # upstream index の模擬。実在するもの 1 件と実在しないもの 1 件を返し、
 # 「nix-locate の結果はローカルに存在しないことがある」状況を再現する。
 cat > "$BIN/nix-locate" <<STUB
-#!/usr/bin/env bash
+#!$stub_bash
 echo "widget.out    123 x $STORE/$H1-widget-1.0/bin/widget"
 echo "ghost.out     456 x $STORE/$GHOST-widget-ghost-1.0/bin/widget"
 STUB
