@@ -35,7 +35,7 @@ def main() -> None:
     with urllib.request.urlopen(url, context=ctx) as resp:
         html = resp.read().decode("utf-8", errors="replace")
 
-    m = re.search(r"Last 25 log lines:.*?</em>", html, re.S)
+    m = re.search(r"Last 25 log lines:.*?</em>", html, re.DOTALL)
     if not m:
         print(
             "(失敗ステップのログが見つかりませんでした。ビルドが成功しているか、"
