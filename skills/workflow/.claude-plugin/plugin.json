@@ -1,12 +1,18 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "workflow-skills",
-  "description": "作業運用スキル群（dev-pipeline / external-writes / test-targeted / lane-ops）。シフトレフト開発パイプラインの導出・外部システムへの書き込み運用ルール・テスト絞り込み運用ルール・herdr エージェントレーンの操縦運用を扱う。",
+  "description": "作業運用スキル群（dev-pipeline / external-writes / test-targeted / lane-ops / job-graph）。シフトレフト開発パイプラインの導出・外部システムへの書き込み運用ルール・テスト絞り込み運用ルール・herdr エージェントレーンの操縦とグラフオーケストレーションを扱う。",
   "version": "0.4.0",
   "author": {
     "name": "yasunori0418"
   },
   "license": "MIT",
   "keywords": ["claude-code", "agentskills", "workflow"],
-  "skills": ["./dev-pipeline", "./external-writes", "./lane-ops", "./test-targeted"]
+  "skills": [
+    "./dev-pipeline",
+    "./external-writes",
+    "./job-graph",
+    "./lane-ops",
+    "./test-targeted"
+  ]
 }
