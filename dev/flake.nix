@@ -32,6 +32,7 @@
       url = "github:anthropics/skills";
       flake = false;
     };
+    cclens.url = "github:lambdalisue/cclens";
   };
 
   outputs =
@@ -56,6 +57,7 @@
               packages =
                 with pkgs;
                 let
+                  cclens = inputs'.cclens.packages.default;
                   formatter = inputs'.root.formatter;
                   skills-ref = inputs'.root.packages.skills-ref;
                   nput = inputs'.nput.packages.nput;
@@ -86,6 +88,8 @@
                   # 外部スキル（mattpocock/mizchi/anthropics）を .claude/skills/ へ配置する
                   # nput（project mode 用に pin）
                   nput
+
+                  cclens
                 ];
               shellHook = ''
                 export REPO_ROOT=$(git rev-parse --show-superproject-working-tree --show-toplevel)
