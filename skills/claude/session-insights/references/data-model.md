@@ -3,6 +3,9 @@
 `collect_sessions.py` が読むデータの構造と、その根拠・注意点。
 スクリプトの出力だけで分析が完結しない場合（新しいレコード型が現れた等）に参照する。
 
+横断集計は cclens が同じ生データを SQLite へ抽出したものを引く。両者の対応は
+[cclens ストアとの対応](#cclens-ストアとの対応) を参照。
+
 ## 設定ディレクトリの解決
 
 公式: https://code.claude.com/docs/en/claude-directory.md
