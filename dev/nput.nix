@@ -44,6 +44,20 @@ let
       src = inputs.anthropic-skills;
       subpath = "skills/skill-creator"; # 公式スキル作成・改善・評価フロー
     }
+
+    # lambdalisue/cclens
+    {
+      src = inputs.cclens;
+      subpath = "plugins/cclens/skills/doctor";
+    }
+    {
+      src = inputs.cclens;
+      subpath = "plugins/cclens/skills/optimize";
+    }
+    {
+      src = inputs.cclens;
+      subpath = "plugins/cclens/skills/query";
+    }
   ];
 
   # target = .claude/skills/<skill 名>（各 subpath の basename）。
