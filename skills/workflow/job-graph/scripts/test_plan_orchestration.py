@@ -193,11 +193,11 @@ def test_render_base_always_explicit():
     assert "--create br-A --base develop" in out
 
 
-def test_render_workspace_for_lane_start_and_tab_for_next_stage():
-    out = rendered([task("A"), task("B", deps=["A"])])
-    assert "herdr workspace create" in out
-    assert "herdr tab create --workspace" in out
-    assert ".result.workspace.workspace_id" in out
+def test_render_all_tasks_launch_as_tabs():
+    out = rendered([task("A"), task("B", deps=["A"]), task("C")])
+    # 並列・直列を問わず全 task が現在 workspace の tab（workspace は増やさない）
+    assert "herdr workspace create" not in out
+    assert out.count('herdr tab create --workspace "$HERDR_WORKSPACE_ID"') == 3
     assert ".result.root_pane.pane_id" in out
 
 

@@ -8,7 +8,10 @@ AI の責務は spec（特に depends_on の意味的判定と boundary の範�
 順序・base・クォート・ワーカー指示の標準セクションはこのスクリプトが保証する。
 
 設計上の要点:
-- 実行基盤は herdr（workspace = 並列レーン、tab = レーン内の直列段）
+- 実行基盤は herdr。全 task を親の現在 workspace の tab として起動する
+  （workspace はリポジトリ・調査ごとの長寿命コンテナであり増やさない。session は
+  ランタイム名前空間が分かれ、親の socket からレーンへ到達できなくなるため使わない。
+  直列チェーンのグルーピングは論理情報として LANES に出す）
 - stacked の起動ゲートは「前段の PR 作成」
 - worktree 生成は常に `wt switch --create --base <解決済み base>`（base は必ず明示する）
 - ワーカープロンプトは herdr pane へ流し込める長さに限界があるためファイル渡し
@@ -49,10 +52,10 @@ spec の形:
 - issue は任意の GitHub issue 番号。ワーカー指示に issue 参照と PR へのリンク指示が載る。
 - model / permission_mode / effort / boundary の意味は parallel-worktree と同じ。
 
-レーン割当（herdr トポロジ）:
-- 依存が無い、または親に複数の子がいる task は新しいレーン（workspace）を開始する。
-- 親の唯一の子である task は親のレーンに合流し、同じ workspace 内の新しい tab になる。
-- 直列チェーンは 1 workspace に段ごとの tab が並び、分岐すると workspace が増える。
+レーン割当（論理グルーピング。起動トポロジは全 task とも tab）:
+- 依存が無い、または親に複数の子がいる task は新しいレーンを開始する。
+- 親の唯一の子である task は親のレーンに合流する（直列チェーン）。
+- レーンは SCHEDULE/PR 戦略を読むための論理情報で、workspace の割当には使わない。
 
 終了コード: 致命的検証エラー（循環・未定義参照・重複・必須欠落）があれば 1、警告のみなら 0。
 
@@ -125,7 +128,7 @@ class Analysis:
     warnings: list[str]  # 続行可
     levels: dict[str, int]  # task id -> 起動ウェーブ（cycle 時は空）
     bases: dict[str, str]   # task id -> 解決済み base ブランチ（cycle 時は空）
-    lanes: tuple[tuple[str, ...], ...]  # レーン（workspace）ごとの task id 列（段順）
+    lanes: tuple[tuple[str, ...], ...]  # 論理レーンごとの task id 列（段順）
     lane_of: dict[str, int]  # task id -> レーン番号
 
 
@@ -229,10 +232,10 @@ def compute_levels(plan: Plan) -> dict[str, int]:
 
 
 def compute_lanes(plan: Plan, levels: dict[str, int]) -> tuple[tuple[tuple[str, ...], ...], dict[str, int]]:
-    """グラフ -> レーン（herdr workspace）割当。
+    """グラフ -> 論理レーン割当（直列チェーンのグルーピング。表示・計画用）。
 
     規則（決定論）: 依存無し、または親に複数の子がいる task は新レーンを開始。
-    親の唯一の子はレーンに合流（同 workspace の次 tab）。複数親は先頭親で判定。
+    親の唯一の子はレーンに合流。複数親は先頭親で判定。
     ウェーブ順・同ウェーブ内は id 順に処理するので入力順に依らない。
     """
     children: dict[str, list[str]] = {t.id: [] for t in plan.tasks}
@@ -458,11 +461,10 @@ def render(plan: Plan, an: Analysis, launch: Launch = Launch(), prompt_dir: str 
         kind = "独立・並列" if level == 0 else f"stacked {level}段目"
         out.append(f"  wave {level} ({kind}): {', '.join(wave)}")
 
-    out.append("\n=== LANES (herdr トポロジ: workspace = レーン / tab = 直列段) ===")
+    out.append("\n=== LANES (論理レーン: 直列チェーンのグルーピング。起動は全 task とも現在 workspace の tab) ===")
     for i, lane in enumerate(an.lanes):
-        label = sanitize(by_id[lane[0]].branch)
         chain = " -> ".join(lane)
-        out.append(f"  lane {i} (workspace: {label}): {chain}")
+        out.append(f"  lane {i}: {chain}")
 
     declared = [t for t in sorted(plan.tasks, key=lambda x: x.id) if t.boundary]
     if declared:
@@ -501,7 +503,6 @@ def render(plan: Plan, an: Analysis, launch: Launch = Launch(), prompt_dir: str 
         out.append("# --prompt-dir 未指定のため COMMANDS は出力しない。--prompt-dir を付けて再実行。")
         return "\n".join(out)
 
-    lane_started: set[int] = set()
     for level in range(max_level + 1):
         wave_tasks = [t for t in plan.tasks if an.levels[t.id] == level]
         if not wave_tasks:
@@ -519,23 +520,15 @@ def render(plan: Plan, an: Analysis, launch: Launch = Launch(), prompt_dir: str 
             base = an.bases[t.id]
             sess = sanitize(t.branch)
             lane = an.lane_of[t.id]
-            ws_var = shell_var("WS_", str(lane))
             pane_var = shell_var("PANE_", t.id)
             out.append(f"\n# --- {t.id} ({t.branch}) lane {lane} ---")
-            if lane not in lane_started:
-                lane_started.add(lane)
-                label = sanitize(by_id[an.lanes[lane][0]].branch)
-                out.append(
-                    f"resp=$(herdr workspace create --cwd \"$PWD\" --label {shlex.quote(label)} --no-focus)"
-                )
-                out.append(f"{ws_var}=$(printf '%s' \"$resp\" | jq -r '.result.workspace.workspace_id')")
-                out.append(f"{pane_var}=$(printf '%s' \"$resp\" | jq -r '.result.root_pane.pane_id')")
-            else:
-                out.append(
-                    f"resp=$(herdr tab create --workspace \"${ws_var}\""
-                    f" --cwd \"$PWD\" --label {shlex.quote(sess)} --no-focus)"
-                )
-                out.append(f"{pane_var}=$(printf '%s' \"$resp\" | jq -r '.result.root_pane.pane_id')")
+            # 全 task を親の現在 workspace の tab として起動する。workspace は
+            # $HERDR_WORKSPACE_ID で明示し、UI フォーカス依存を避ける。
+            out.append(
+                f"resp=$(herdr tab create --workspace \"$HERDR_WORKSPACE_ID\""
+                f" --cwd \"$PWD\" --label {shlex.quote(sess)} --no-focus)"
+            )
+            out.append(f"{pane_var}=$(printf '%s' \"$resp\" | jq -r '.result.root_pane.pane_id')")
             # claude 引数列: 起動フラグ -> --remote-control（オプトイン）->
             # プロンプト（ファイルから読む）。プロンプトは複数行のため直接埋め込まず
             # "$(cat <path>)" で pane の shell に展開させる（wt は EXECUTE_ARGS を

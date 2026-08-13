@@ -2,29 +2,25 @@
 
 `plan_orchestration.py` の `COMMANDS` 各ブロックがやっていることの解説。**このレシピを手で組み立てず、スクリプトの出力を使う。**
 
-## レーン開始（workspace 作成 + 1 段目起動）
+## task の起動（現在 workspace に tab 追加）
+
+並列・直列を問わず、全 task は親の現在 workspace の tab として起動する（workspace・session は増やさない）。
 
 ```bash
-resp=$(herdr workspace create --cwd "$PWD" --label refactor-logger --no-focus)
-WS_0=$(printf '%s' "$resp" | jq -r '.result.workspace.workspace_id')
+resp=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$PWD" --label refactor-logger --no-focus)
 PANE_A=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
 herdr pane run "$PANE_A" 'wt switch --create refactor-logger --base main -x claude -- "$(cat <prompt-dir>/A.md)"'
 ```
 
+- workspace は `$HERDR_WORKSPACE_ID`（herdr が親の pane へ注入する呼び出しコンテキスト）で明示し、UI フォーカス依存を避ける
 - `--no-focus` でユーザーの現在フォーカスを奪わない。ID は JSON 応答から jq で掴む（予測しない）
 - `wt switch --create` が worktree を作り、`-x claude` で wt プロセスが claude に置き換わる。herdr は pane 内の claude をエージェントとして自動認識する
 - **`--base` は常に明示**される。省略すると wt はリポジトリの default branch から切るため、spec の意図と食い違う事故が起きる
 - プロンプトは複数行のためファイル渡し。`"$(cat <path>)"` は pane の shell が展開し、wt が EXECUTE_ARGS として shell-escape して claude に 1 引数で渡す
 
-## 直列の次段（同 workspace に tab 追加）
+## 直列の次段
 
-```bash
-resp=$(herdr tab create --workspace "$WS_0" --cwd "$PWD" --label feat-next --no-focus)
-PANE_B=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
-herdr pane run "$PANE_B" 'wt switch --create feat-next --base refactor-logger -x claude -- "$(cat <prompt-dir>/B.md)"'
-```
-
-起動は**前段の PR 作成を確認してから**（`gh pr list --head <前段ブランチ>` が非空）。コミット数到達をゲートにしない（前段の amend で base がずれ restack を誘発する）。
+コマンドの形は同じ（`--base` が前段ブランチになるだけ）。起動は**前段の PR 作成を確認してから**（`gh pr list --head <前段ブランチ>` が非空）。コミット数到達をゲートにしない（前段の amend で base がずれ restack を誘発する）。
 
 ## 起動オプション
 
