@@ -51,6 +51,7 @@ import os
 import socket
 import sys
 import time
+from dataclasses import dataclass
 from typing import Literal, NotRequired, TypedDict, get_args
 
 # ---------------------------------------------------------------------------
@@ -215,6 +216,49 @@ RESUBSCRIBE_DELAY_SEC = 0.5
 PANE_SCOPED_TYPES = frozenset(
     {"pane.agent_status_changed", "pane.scroll_changed", "pane.output_matched"}
 )
+
+
+@dataclass(frozen=True)
+class Options:
+    """CLI 引数のパース結果。
+
+    panes が空なら自動追随モード（`pane.list` で全 pane を購読し、
+    エージェントが載った新 pane を `pane.created` 経由で取り込む）。
+    """
+
+    panes: tuple[str, ...] = ()
+    statuses: tuple[AgentStatus, ...] = ()
+    types: tuple[str, ...] = (DEFAULT_TYPE,)
+
+    @property
+    def follow(self) -> bool:
+        """全 pane 自動追随モードか（--pane 明示時はその pane に固定する）。"""
+        return not self.panes
+
+
+def parse_args(argv: list[str]) -> Options:
+    """コマンドライン引数 -> Options（純粋: パースのみ）。
+
+    --status は AgentStatus の値だけを受け付ける（不正値はサーバ往復前に弾く）。
+    """
+    parser = argparse.ArgumentParser(
+        prog="watch_events.py", description="herdr socket API イベント購読フィルタ"
+    )
+    parser.add_argument("--pane", action="append", default=[], metavar="PANE_ID")
+    parser.add_argument(
+        "--status",
+        action="append",
+        default=[],
+        metavar="STATUS",
+        choices=agent_statuses(),
+    )
+    parser.add_argument("--type", action="append", default=[], metavar="EVENT_TYPE")
+    ns = parser.parse_args(argv[1:])
+    return Options(
+        panes=tuple(ns.pane),
+        statuses=tuple(ns.status),
+        types=tuple(ns.type) or (DEFAULT_TYPE,),
+    )
 
 
 def build_subscriptions(
@@ -461,19 +505,7 @@ def stream_events(
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        prog="watch_events.py", description="herdr socket API イベント購読フィルタ"
-    )
-    parser.add_argument("--pane", action="append", default=[], metavar="PANE_ID")
-    parser.add_argument(
-        "--status",
-        action="append",
-        default=[],
-        metavar="STATUS",
-        choices=agent_statuses(),
-    )
-    parser.add_argument("--type", action="append", default=[], metavar="EVENT_TYPE")
-    ns = parser.parse_args(argv[1:])
+    opts = parse_args(argv)
 
     sock_path = os.environ.get("HERDR_SOCKET_PATH", "")
     if not sock_path:
@@ -483,12 +515,10 @@ def main(argv: list[str]) -> int:
         )
         return 1
 
-    types: list[str] = ns.type or [DEFAULT_TYPE]
-    # argparse の choices で AgentStatus の値だけに絞り込み済み。
-    statuses: list[AgentStatus] = ns.status
-    # --pane 明示時はその pane に固定し、省略時は pane.list + pane.created で追随する。
-    follow = not ns.pane
-    known: set[str] = set(ns.pane)
+    types = list(opts.types)
+    statuses = list(opts.statuses)
+    follow = opts.follow
+    known: set[str] = set(opts.panes)
 
     # 張り直しのきっかけになったが、次の列挙には現れなかった pane。
     # エージェント判定を通った直後に消えた場合の保険で、以後は張り直しの

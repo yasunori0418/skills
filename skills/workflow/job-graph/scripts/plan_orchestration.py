@@ -122,6 +122,23 @@ class Launch:
     parent_name: str = ""
 
 
+# 起動既定を何も指定しないときの Launch。frozen なので共有して安全。
+NO_LAUNCH_DEFAULTS = Launch()
+
+
+@dataclass(frozen=True)
+class Options:
+    """CLI 引数のパース結果。
+
+    spec / prompt_dir は入出力の指定、launch は全 worktree へ一律適用する
+    claude 起動の既定（task 個別指定があればそちらが優先される）。
+    """
+
+    spec: str
+    prompt_dir: str = ""
+    launch: Launch = NO_LAUNCH_DEFAULTS
+
+
 @dataclass(frozen=True)
 class Analysis:
     errors: list[str]   # 致命的（あれば commands を出さず exit 1）
@@ -408,6 +425,8 @@ def contract_sections(task: Task, base: str, default_base: str, launch: Launch) 
         input=payload,
         capture_output=True,
         text=True,
+        # 失敗は下で returncode を見て ContractError に変換する（例外送出に頼らない）。
+        check=False,
     )
     if proc.returncode != 0:
         raise ContractError(f"worker_contract.py が失敗: {proc.stderr.strip()}")
@@ -430,7 +449,9 @@ def shell_var(prefix: str, name: str) -> str:
     return prefix + re.sub(r"[^A-Za-z0-9_]+", "_", name)
 
 
-def render(plan: Plan, an: Analysis, launch: Launch = Launch(), prompt_dir: str = "") -> str:
+def render(
+    plan: Plan, an: Analysis, launch: Launch = NO_LAUNCH_DEFAULTS, prompt_dir: str = ""
+) -> str:
     """Plan + Analysis -> 人間/AI 向けテキスト出力（純粋）。
 
     COMMANDS は herdr の JSON 応答から ID を掴む shell ブロックで出力する（jq 必須）。
@@ -482,7 +503,7 @@ def render(plan: Plan, an: Analysis, launch: Launch = Launch(), prompt_dir: str 
             )
 
     if prompt_dir:
-        out.append(f"\n=== PROMPTS (書き出し済みワーカープロンプト) ===")
+        out.append("\n=== PROMPTS (書き出し済みワーカープロンプト) ===")
         for t in sorted(plan.tasks, key=lambda x: (an.levels[x.id], x.id)):
             out.append(f"  {t.id}: {prompt_path(prompt_dir, t)}")
 
@@ -600,7 +621,12 @@ def write_prompts(plan: Plan, an: Analysis, launch: Launch, prompt_dir: str) -> 
         )
 
 
-def main(argv: list[str]) -> int:
+def parse_args(argv: list[str]) -> Options:
+    """コマンドライン引数 -> Options（純粋: パースのみ）。
+
+    起動既定（--model / --permission-mode / --effort / --remote-control /
+    --parent-name）は Launch へまとめる。
+    """
     parser = argparse.ArgumentParser(
         prog="plan_orchestration.py",
         description="job-graph オーケストレーション・スケジューラ（決定論 CLI）",
@@ -645,26 +671,34 @@ def main(argv: list[str]) -> int:
         help="全 worktree の claude 既定 effort レベル。task 個別指定があればそちらが優先",
     )
     ns = parser.parse_args(argv[1:])
-    launch = Launch(
-        model=ns.model or "",
-        permission_mode=ns.permission_mode or "",
-        effort=ns.effort or "",
-        remote_control=ns.remote_control,
-        parent_name=ns.parent_name or "",
+    return Options(
+        spec=ns.spec,
+        prompt_dir=ns.prompt_dir,
+        launch=Launch(
+            model=ns.model or "",
+            permission_mode=ns.permission_mode or "",
+            effort=ns.effort or "",
+            remote_control=ns.remote_control,
+            parent_name=ns.parent_name or "",
+        ),
     )
+
+
+def main(argv: list[str]) -> int:
+    opts = parse_args(argv)
     try:
-        plan = parse_spec(read_spec(ns.spec))
+        plan = parse_spec(read_spec(opts.spec))
     except SpecError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
     an = analyze(plan)
-    if not an.errors and ns.prompt_dir:
+    if not an.errors and opts.prompt_dir:
         try:
-            write_prompts(plan, an, launch, ns.prompt_dir)
+            write_prompts(plan, an, opts.launch, opts.prompt_dir)
         except ContractError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 1
-    print(render(plan, an, launch, ns.prompt_dir))
+    print(render(plan, an, opts.launch, opts.prompt_dir))
     return 1 if an.errors else 0
 
 
