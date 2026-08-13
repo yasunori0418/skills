@@ -1,0 +1,29 @@
+{
+  "default_base": "main",
+  "tasks": [
+    {
+      "id": "A",
+      "branch": "refactor-logger",
+      "depends_on": [],
+      "prompt": "pkg/logger のインターフェースを整理する。完了条件: 既存テストが全て通ること。",
+      "boundary": ["pkg/logger/**"],
+      "issue": 123
+    },
+    {
+      "id": "B1",
+      "branch": "feat-config-retry",
+      "depends_on": [],
+      "prompt": "リトライ設定を config に追加する。完了条件: 設定の読み込みテストが通ること。",
+      "boundary": ["internal/config/**", "tests/config/**"]
+    },
+    {
+      "id": "B2",
+      "branch": "feat-client-retry",
+      "depends_on": ["B1"],
+      "prompt": "B1 のリトライ設定を使って client にリトライを実装する。完了条件: リトライの単体テストが通ること。",
+      "boundary": ["internal/client/**", "tests/client/**"],
+      "model": "opus",
+      "effort": "high"
+    }
+  ]
+}

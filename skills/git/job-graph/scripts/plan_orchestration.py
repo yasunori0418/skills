@@ -1,0 +1,687 @@
+#!/usr/bin/env python3
+"""job-graph オーケストレーション・スケジューラ（決定論 CLI）。
+
+AI が計画ファイル・epic issue から抽出した「タスク + 依存辺 + 境界宣言」を JSON spec と
+して受け取り、循環検出・base 解決・ウェーブ算出・レーン（herdr workspace/tab）割当・
+境界ファイル生成・ワーカー指示テンプレ付与・wt/herdr コマンド列生成を決定論的に行う。
+AI の責務は spec（特に depends_on の意味的判定と boundary の範囲決め）まで。ここから先の
+順序・base・クォート・ワーカー指示の標準セクションはこのスクリプトが保証する。
+
+parallel-worktree の plan_orchestration.py からのフォーク。主な差分:
+- 実行基盤が tmux ではなく herdr（workspace = 並列レーン、tab = レーン内の直列段）
+- stacked の起動ゲートは「前段のコミット完了」ではなく「前段の PR 作成」
+- worktree 生成は常に `wt switch --create --base <解決済み base>`（default_base が
+  worktree 生成に効かない旧バグを排除。base は必ず明示する）
+- ワーカープロンプトは herdr pane へ流し込める長さに限界があるためファイル渡し
+  （--prompt-dir 配下に <task-id>.md を書き出し、起動コマンドは "$(cat <path>)" で読む）
+- 各 claude を --name <sanitize済みブランチ名> で起動し、cross-session messaging で
+  親（オーケストレータ）へ到達可能にする
+- ワーカー標準セクションに PR 後凍結・review-converge 反復境界・push//pr-create
+  承認済み前提・SendMessage による親への報告義務を追加
+
+実行（cwd 非依存。uv が skill 直下の pyproject.toml から .venv を構築し、その中で実行）:
+    uv run --project "<skill-dir>" python "<skill-dir>/scripts/plan_orchestration.py" \
+        --prompt-dir <dir> <spec.json>
+    ... <spec.json> の代わりに - で stdin から読む
+    ... --parent-name <name> で親セッション名をワーカー指示に埋め込む
+    ... --remote-control を付けると各 claude を --remote-control <ブランチ名> でも起動する
+    ... --model / --permission-mode / --effort で各 claude の起動既定を切り替える
+
+依存は stdlib のみ。python バージョンは pyproject.toml の requires-python に従う。
+
+spec の形:
+{
+  "default_base": "main",
+  "tasks": [
+    {"id": "A",  "branch": "refactor-logger",  "depends_on": [],     "prompt": "...",
+     "boundary": ["pkg/logger/**"], "issue": 123},
+    {"id": "B1", "branch": "feat-config-retry", "depends_on": [],     "prompt": "..."},
+    {"id": "B2", "branch": "feat-client-retry", "depends_on": ["B1"], "prompt": "...",
+     "boundary": ["internal/client/**", "docs/dev/retry/**"],
+     "model": "opus", "permission_mode": "plan", "effort": "high"}
+  ]
+}
+
+- depends_on は「前段の成果物に依存する／その上に積む（stacked）」タスク id の配列。
+- 空 = 独立タスク（base はデフォルトブランチ、並列起動可）。
+- 親 1 つ = その親ブランチを base にした stacked 段。
+- 親 複数 = 単純な線形 stack 不可。WARNING（base は先頭親を仮採用）。
+- issue は任意の GitHub issue 番号。ワーカー指示に issue 参照と PR へのリンク指示が載る。
+- model / permission_mode / effort / boundary の意味は parallel-worktree と同じ。
+
+レーン割当（herdr トポロジ）:
+- 依存が無い、または親に複数の子がいる task は新しいレーン（workspace）を開始する。
+- 親の唯一の子である task は親のレーンに合流し、同じ workspace 内の新しい tab になる。
+- 直列チェーンは 1 workspace に段ごとの tab が並び、分岐すると workspace が増える。
+
+終了コード: 致命的検証エラー（循環・未定義参照・重複・必須欠落）があれば 1、警告のみなら 0。
+
+設計: 純粋関数（parse_spec / analyze / detect_cycle / compute_levels / compute_lanes /
+resolve_base / sanitize / worker_sections / render）には副作用を持たせない。
+I/O・終了コード・プロンプトファイル書き出しは read_spec / write_prompts / main にまとめる。
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import shlex
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+# claude CLI の受け付ける選択肢（`claude --help` 準拠）。
+# model は alias/フルネーム自由なので検証しない（存在チェックは claude 側に委ねる）。
+PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+
+class SpecError(Exception):
+    """spec の構造そのものが壊れていて解析不能な場合。"""
+
+
+@dataclass(frozen=True)
+class Task:
+    id: str
+    branch: str
+    depends_on: tuple[str, ...]
+    prompt: str
+    # 対応する GitHub issue 番号。0 = 未指定。
+    issue: int = 0
+    # claude 起動オプションの task 個別上書き。空文字 = 未指定（グローバル既定を使う）。
+    model: str = ""
+    permission_mode: str = ""
+    effort: str = ""
+    # 触ってよいパスの glob。空 = 境界宣言なし（境界ファイルを生成しない）。
+    boundary: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Plan:
+    default_base: str
+    tasks: tuple[Task, ...]
+
+
+@dataclass(frozen=True)
+class Launch:
+    """全 worktree に一律適用する claude 起動の既定（CLI フラグ由来）。
+
+    各 task の model/permission_mode/effort が空のとき、ここの値をフォールバックに使う。
+    parent_name は cross-session messaging の報告先（オーケストレータのセッション名）。
+    """
+    model: str = ""
+    permission_mode: str = ""
+    effort: str = ""
+    remote_control: bool = False
+    parent_name: str = ""
+
+
+@dataclass(frozen=True)
+class Analysis:
+    errors: list[str]   # 致命的（あれば commands を出さず exit 1）
+    warnings: list[str]  # 続行可
+    levels: dict[str, int]  # task id -> 起動ウェーブ（cycle 時は空）
+    bases: dict[str, str]   # task id -> 解決済み base ブランチ（cycle 時は空）
+    lanes: tuple[tuple[str, ...], ...]  # レーン（workspace）ごとの task id 列（段順）
+    lane_of: dict[str, int]  # task id -> レーン番号
+
+
+def parse_spec(data: object) -> Plan:
+    """JSON 由来の値 -> Plan。構造が壊れていれば SpecError。"""
+    if not isinstance(data, dict):
+        raise SpecError("spec はオブジェクトではない")
+    tasks_raw = data.get("tasks")
+    if not isinstance(tasks_raw, list) or not tasks_raw:
+        raise SpecError("tasks が空、または配列ではない")
+    tasks = []
+    for t in tasks_raw:
+        if not isinstance(t, dict):
+            raise SpecError(f"task はオブジェクトではない: {t!r}")
+        deps_raw = t.get("depends_on", []) or []
+        if not isinstance(deps_raw, list):
+            raise SpecError(f"depends_on は配列でない: {t.get('id')!r}")
+        bounds_raw = t.get("boundary", []) or []
+        if not isinstance(bounds_raw, list):
+            raise SpecError(f"boundary は配列でない: {t.get('id')!r}")
+        issue_raw = t.get("issue", 0) or 0
+        if not isinstance(issue_raw, int) or issue_raw < 0:
+            raise SpecError(f"issue は非負整数でない: {t.get('id')!r}")
+        tasks.append(
+            Task(
+                id=str(t.get("id", "")).strip(),
+                branch=str(t.get("branch", "")).strip(),
+                depends_on=tuple(str(d).strip() for d in deps_raw),
+                prompt=str(t.get("prompt", "")).strip(),
+                issue=issue_raw,
+                model=str(t.get("model", "")).strip(),
+                permission_mode=str(t.get("permission_mode", "")).strip(),
+                effort=str(t.get("effort", "")).strip(),
+                boundary=tuple(g for g in (str(b).strip() for b in bounds_raw) if g),
+            )
+        )
+    default_base = str(data.get("default_base", "main")).strip() or "main"
+    return Plan(default_base=default_base, tasks=tuple(tasks))
+
+
+def sanitize(name: str) -> str:
+    """セッション名・--name 向けに英数・ハイフン以外を - に。"""
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-") or "wt"
+
+
+def detect_cycle(plan: Plan) -> list[str] | None:
+    """依存グラフの循環を DFS で検出。あれば経路を返し、無ければ None。"""
+    graph = {t.id: list(t.depends_on) for t in plan.tasks}
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {k: WHITE for k in graph}
+
+    def dfs(node: str, stack: list[str]) -> list[str] | None:
+        color[node] = GRAY
+        for dep in graph.get(node, []):
+            if dep not in color:
+                continue  # 未定義参照は validate 側で報告
+            if color[dep] == GRAY:
+                return stack + [node, dep]
+            if color[dep] == WHITE:
+                cycle = dfs(dep, stack + [node])
+                if cycle is not None:
+                    return cycle
+        color[node] = BLACK
+        return None
+
+    for k in graph:
+        if color[k] == WHITE:
+            cycle = dfs(k, [])
+            if cycle is not None:
+                return cycle
+    return None
+
+
+def compute_levels(plan: Plan) -> dict[str, int]:
+    """各タスクの依存レベル（起動ウェーブ）。level=0 は独立。要・非循環。"""
+    by_id = {t.id: t for t in plan.tasks}
+    memo: dict[str, int] = {}
+
+    def lvl(tid: str) -> int:
+        if tid in memo:
+            return memo[tid]
+        deps = by_id[tid].depends_on
+        memo[tid] = 0 if not deps else 1 + max(lvl(d) for d in deps)
+        return memo[tid]
+
+    return {t.id: lvl(t.id) for t in plan.tasks}
+
+
+def compute_lanes(plan: Plan, levels: dict[str, int]) -> tuple[tuple[tuple[str, ...], ...], dict[str, int]]:
+    """グラフ -> レーン（herdr workspace）割当。
+
+    規則（決定論）: 依存無し、または親に複数の子がいる task は新レーンを開始。
+    親の唯一の子はレーンに合流（同 workspace の次 tab）。複数親は先頭親で判定。
+    ウェーブ順・同ウェーブ内は id 順に処理するので入力順に依らない。
+    """
+    children: dict[str, list[str]] = {t.id: [] for t in plan.tasks}
+    for t in plan.tasks:
+        for d in t.depends_on:
+            if d in children:
+                children[d].append(t.id)
+    lane_of: dict[str, int] = {}
+    lanes: list[list[str]] = []
+    for t in sorted(plan.tasks, key=lambda x: (levels[x.id], x.id)):
+        parent = t.depends_on[0] if t.depends_on else ""
+        if parent and parent in lane_of and len(children[parent]) == 1:
+            lane = lane_of[parent]
+            lane_of[t.id] = lane
+            lanes[lane].append(t.id)
+        else:
+            lane_of[t.id] = len(lanes)
+            lanes.append([t.id])
+    return tuple(tuple(l) for l in lanes), lane_of
+
+
+def resolve_base(task: Task, by_id: dict[str, Task], default_base: str) -> str:
+    """依存なし -> デフォルト base。依存あり -> 先頭親のブランチ。"""
+    if not task.depends_on:
+        return default_base
+    return by_id[task.depends_on[0]].branch
+
+
+def analyze(plan: Plan) -> Analysis:
+    """検証 + レベル/base/レーン算出を 1 つの純粋関数に集約。"""
+    errors: list[str] = []
+    warnings: list[str] = []
+    ids = [t.id for t in plan.tasks]
+    branches = [t.branch for t in plan.tasks]
+
+    for t in plan.tasks:
+        if not t.id:
+            errors.append(f"id が空のタスクがある: {t!r}")
+        if not t.branch:
+            errors.append(f"branch が空: id={t.id!r}")
+        if t.permission_mode and t.permission_mode not in PERMISSION_MODES:
+            errors.append(
+                f"task {t.id} の permission_mode '{t.permission_mode}' が不正"
+                f"（{', '.join(PERMISSION_MODES)} のいずれか）"
+            )
+        if t.effort and t.effort not in EFFORT_LEVELS:
+            errors.append(
+                f"task {t.id} の effort '{t.effort}' が不正"
+                f"（{', '.join(EFFORT_LEVELS)} のいずれか）"
+            )
+    dup_ids = sorted({x for x in ids if ids.count(x) > 1 and x})
+    if dup_ids:
+        errors.append(f"id が重複: {dup_ids}")
+    dup_br = sorted({x for x in branches if branches.count(x) > 1 and x})
+    if dup_br:
+        errors.append(f"branch が重複: {dup_br}")
+
+    idset = set(ids)
+    for t in plan.tasks:
+        for d in t.depends_on:
+            if d not in idset:
+                errors.append(f"task {t.id} の depends_on '{d}' が未定義")
+        if t.id in t.depends_on:
+            errors.append(f"task {t.id} が自分自身に依存")
+        if len(t.depends_on) > 1:
+            warnings.append(
+                f"task {t.id} は複数親 {list(t.depends_on)} に依存。単純な線形 stack 不可。"
+                "integration ブランチか逐次 rebase を検討（base は先頭親を仮採用）"
+            )
+
+    cycle = detect_cycle(plan)
+    if cycle is not None:
+        errors.append(f"依存に循環: {' -> '.join(cycle)}")
+
+    if errors:
+        return Analysis(errors=errors, warnings=warnings, levels={}, bases={}, lanes=(), lane_of={})
+
+    by_id = {t.id: t for t in plan.tasks}
+    levels = compute_levels(plan)
+    bases = {t.id: resolve_base(t, by_id, plan.default_base) for t in plan.tasks}
+    lanes, lane_of = compute_lanes(plan, levels)
+    return Analysis(
+        errors=[], warnings=warnings, levels=levels, bases=bases, lanes=lanes, lane_of=lane_of
+    )
+
+
+def launch_flags(task: Task, launch: Launch) -> list[str]:
+    """その task の claude 起動フラグ列（prompt より前に置く分）を組む。
+
+    優先順は task 個別指定 > グローバル既定（Launch）。どちらも空なら flag を出さず、
+    claude のデフォルト（呼び出し元の設定）に委ねる。
+    """
+    model = task.model or launch.model
+    permission_mode = task.permission_mode or launch.permission_mode
+    effort = task.effort or launch.effort
+    flags: list[str] = []
+    if model:
+        flags += ["--model", model]
+    if permission_mode:
+        flags += ["--permission-mode", permission_mode]
+    if effort:
+        flags += ["--effort", effort]
+    return flags
+
+
+BOUNDARY_FILE = ".claude/task-boundary.json"
+
+# 境界ファイルを worktree ローカルかつ gitignored に置くための bootstrap。
+# 引数は $1=境界 JSON 本文（1 行）。cwd は wt switch 後の worktree ルート。
+# 方式・選定理由は parallel-worktree と同一（references/orchestration.md 参照）。
+# set -e は意図的（fail-closed）: 境界の無い状態でガードレール無しに claude を
+# 起動するより、起動せず pane に失敗を残す方が安全。
+BOUNDARY_BOOTSTRAP = (
+    "set -e; "
+    f"mkdir -p {shlex.quote(BOUNDARY_FILE.rsplit('/', 1)[0])}; "
+    f"printf '%s\\n' \"$1\" > {shlex.quote(BOUNDARY_FILE)}; "
+    'ex="$(git rev-parse --path-format=absolute --git-path info/exclude)"; '
+    'mkdir -p "$(dirname "$ex")"; '
+    f"pat='/{BOUNDARY_FILE}'; "
+    'grep -qxF "$pat" "$ex" 2>/dev/null || printf \'%s\\n\' "$pat" >> "$ex"; '
+    "shift; "
+    'exec claude "$@"'
+)
+
+
+def boundary_json(task: Task) -> str:
+    """task の境界宣言 -> 境界ファイル（.claude/task-boundary.json）の内容（1 行）。
+
+    書式は task-boundary hook の公開契約（task_id / branch / allow）。herdr pane へ
+    1 コマンドで流し込むため改行を含めない（JSON として等価）。
+    """
+    return json.dumps(
+        {"task_id": task.id, "branch": task.branch, "allow": list(task.boundary)},
+        ensure_ascii=False,
+    )
+
+
+def worker_sections(task: Task, base: str, default_base: str, launch: Launch) -> str:
+    """ワーカーへ渡す指示の標準セクション（常設テンプレ）。
+
+    parallel-worktree 版との差分（nput 運用の実証済み教訓の昇格）:
+    - push と /pr-create は計画承認済みの前提で実行してよい（個別確認へ回さない）
+    - review-converge に反復境界を与える（nit 磨き込みでの膠着・費用暴走の防止）
+    - PR 作成後は実装を凍結する（PR 後の無断 push の再発防止）
+    - マイルストーンごとに SendMessage で親セッションへ報告する（push 型監視）
+    """
+    if task.boundary:
+        scope = (
+            "- 編集してよい範囲（境界）: "
+            + ", ".join(task.boundary)
+            + f"\n  この glob 外のファイルは編集しない。宣言は {BOUNDARY_FILE} と同一で、"
+            "task-boundary hook が境界外の Edit/Write を機械ブロックする。\n"
+            "  境界を広げる必要が出たら自分で境界ファイルを書き換えず、親セッションに報告して指示を待つ。"
+        )
+    else:
+        scope = (
+            "- 編集してよい範囲（境界）: このタスクの担当範囲に限る。他タスクのファイルに触れない"
+        )
+    pr_arg = "" if base == default_base else f" {base}"
+    if launch.parent_name:
+        report_to = f"親セッション `{launch.parent_name}`"
+    else:
+        report_to = (
+            "親セッション（ListAgents でオーケストレータらしきセッションを特定する。"
+            "特定できなければ報告は省略してよい。親は herdr 経由でも監視している）"
+        )
+    issue_line = []
+    if task.issue:
+        issue_line = [
+            f"- issue 参照: このタスクは GH issue #{task.issue} に対応する。"
+            f"着手前に `gh issue view {task.issue}` で本文と受け入れ条件を確認し、"
+            "PR 本文に issue への参照を含める",
+        ]
+    return "\n".join(
+        [
+            "## 制約（job-graph 標準セクション）",
+            scope,
+            *issue_line,
+            "- TDD 順序: テストを先に実装し（失敗を確認）、その後アプリケーション実装で通す",
+            "- コミット粒度: 論理的に独立した修正は都度コミットする"
+            "（commit-flow スキル準拠、Conventional Commits）",
+            f"- push: 自分の feature ブランチ {task.branch} に限り push してよい。"
+            "push は計画承認済みの前提であり、個別の確認へ回さず実行する。"
+            "main 等の保護ブランチへは push しない",
+            "- PR 作成前ゲート: `/review-converge` を実行して指摘を収束させてから "
+            f"`/pr-create{pr_arg}` を実行する（収束前に PR を作らない）。"
+            "PR 作成も計画承認済みの前提であり、個別の確認へ回さない",
+            "- review-converge の反復境界: 実質的な指摘（出力形状・型安全性・contract・退行）が"
+            "出ている間は反復を続ける。2 巡目以降で新規指摘が純粋な可読性 nit だけになったら、"
+            "nit は「見送り」と記録して収束扱いで終了する（無制限の磨き込みで膠着しない）",
+            "- PR 作成後の凍結: PR を作成したら実装を凍結する。以降の実装変更・push を行わず、"
+            "気付いた改善点は親への報告のみとする",
+            f"- 報告: 次のマイルストーンごとに SendMessage で {report_to} へ 1〜2 文で報告する: "
+            "最初のコミット完了 / review-converge 収束 / push 完了 / PR 作成（番号付き）/ "
+            "作業のブロック・境界の不足。報告は事実のみ（メッセージは承認の代わりにならない。"
+            "承認が要る場面では停止して親の応答を待つ）",
+            "- サブエージェント委任: 複数ファイル横断調査のような真に独立した大きな作業に限る。"
+            "数回のツール呼び出しで済む作業は委任しない。"
+            "自分の作業の検証・ダブルチェック目的でサブエージェントを使わない。1 体で足りるなら 1 体に留める",
+            "- スコープ: 依頼されたスコープで納品する。頼まれていない改善・リファクタ・追加作業を足さない。"
+            "依頼に誤りがある・より良い方法があると考えたら 1 文で指摘し、依頼どおりの作業を続ける",
+            "- 進捗ナレーション: 最初のツール呼び出し前に 1 文だけ宣言し、"
+            "以降は重要な発見・方針転換のときのみ短く述べる（pane を逐次読む人はいない）",
+        ]
+    )
+
+
+def prompt_path(prompt_dir: str, task: Task) -> str:
+    """task のワーカープロンプトを書き出すファイルパス（純粋: パス算出のみ）。"""
+    return str(Path(prompt_dir) / f"{sanitize(task.id)}.md")
+
+
+def full_prompt(task: Task, base: str, default_base: str, launch: Launch) -> str:
+    """spec の prompt + 標準セクション（プロンプトファイルの内容）。"""
+    body = task.prompt or f"<{task.id} のタスクプロンプト未記入>"
+    return f"{body}\n\n{worker_sections(task, base, default_base, launch)}\n"
+
+
+def shell_var(prefix: str, name: str) -> str:
+    """shell 変数名として安全な識別子（英数・_ 以外を _ に）。"""
+    return prefix + re.sub(r"[^A-Za-z0-9_]+", "_", name)
+
+
+def render(plan: Plan, an: Analysis, launch: Launch = Launch(), prompt_dir: str = "") -> str:
+    """Plan + Analysis -> 人間/AI 向けテキスト出力（純粋）。
+
+    COMMANDS は herdr の JSON 応答から ID を掴む shell ブロックで出力する（jq 必須）。
+    workspace / tab の作成→root pane への `wt switch --create ... -x claude` 流し込み、
+    stacked の PR 作成ゲート、プロンプトのファイル渡しまでを列挙する。
+    """
+    out: list[str] = []
+    out.append("=== VALIDATION ===")
+    out.append(f"tasks: {len(plan.tasks)}  default_base: {plan.default_base}")
+    if an.errors:
+        for e in an.errors:
+            out.append(f"ERROR: {e}")
+        out.append("\n致命的エラーのため schedule/commands は出力しない。spec を修正して再実行。")
+        return "\n".join(out)
+    if an.warnings:
+        for w in an.warnings:
+            out.append(f"WARNING: {w}")
+    else:
+        out.append("ok（致命的問題なし）")
+
+    by_id = {t.id: t for t in plan.tasks}
+    max_level = max(an.levels.values())
+
+    out.append("\n=== SCHEDULE (起動ウェーブ) ===")
+    out.append("同一ウェーブ内は並列起動可。後続ウェーブは依存親の『PR 作成』を確認してから起動する。")
+    for level in range(max_level + 1):
+        wave = sorted(t.id for t in plan.tasks if an.levels[t.id] == level)
+        kind = "独立・並列" if level == 0 else f"stacked {level}段目"
+        out.append(f"  wave {level} ({kind}): {', '.join(wave)}")
+
+    out.append("\n=== LANES (herdr トポロジ: workspace = レーン / tab = 直列段) ===")
+    for i, lane in enumerate(an.lanes):
+        label = sanitize(by_id[lane[0]].branch)
+        chain = " -> ".join(lane)
+        out.append(f"  lane {i} (workspace: {label}): {chain}")
+
+    declared = [t for t in sorted(plan.tasks, key=lambda x: x.id) if t.boundary]
+    if declared:
+        out.append(f"\n=== BOUNDARY (各 worktree に生成する {BOUNDARY_FILE}) ===")
+        out.append(
+            "worktree ローカル・gitignored（git rev-parse --git-path info/exclude へ追記）。"
+            "task-boundary hook が境界外の Edit/Write を機械ブロックする。"
+        )
+        for t in declared:
+            out.append(f"  {t.id} ({t.branch}): {', '.join(t.boundary)}")
+        undeclared = sorted(t.id for t in plan.tasks if not t.boundary)
+        if undeclared:
+            out.append(
+                f"  境界宣言なし（境界ファイルを生成しない・hook は沈黙）: {', '.join(undeclared)}"
+            )
+
+    if prompt_dir:
+        out.append(f"\n=== PROMPTS (書き出し済みワーカープロンプト) ===")
+        for t in sorted(plan.tasks, key=lambda x: (an.levels[x.id], x.id)):
+            out.append(f"  {t.id}: {prompt_path(prompt_dir, t)}")
+
+    defaults = []
+    if launch.model:
+        defaults.append(f"model={launch.model}")
+    if launch.permission_mode:
+        defaults.append(f"permission-mode={launch.permission_mode}")
+    if launch.effort:
+        defaults.append(f"effort={launch.effort}")
+    if launch.remote_control:
+        defaults.append("remote-control（各 claude を --remote-control <ブランチ名> でも起動）")
+    if launch.parent_name:
+        defaults.append(f"parent={launch.parent_name}")
+    launch_note = f" [起動既定: {'; '.join(defaults)}]" if defaults else ""
+    out.append(f"\n=== COMMANDS (列挙のみ。実行前に plan 承認。jq 必須){launch_note} ===")
+    if not prompt_dir:
+        out.append("# --prompt-dir 未指定のため COMMANDS は出力しない。--prompt-dir を付けて再実行。")
+        return "\n".join(out)
+
+    lane_started: set[int] = set()
+    for level in range(max_level + 1):
+        wave_tasks = [t for t in plan.tasks if an.levels[t.id] == level]
+        if not wave_tasks:
+            continue
+        if level == 0:
+            out.append(f"\n# wave {level}: 独立タスク。まとめて並列起動してよい")
+        else:
+            parents = sorted({by_id[d].branch for t in wave_tasks for d in t.depends_on})
+            checks = " / ".join(f"gh pr list --head {shlex.quote(b)}" for b in parents)
+            out.append(
+                f"\n# wave {level}: 前段 [{', '.join(parents)}] の PR 作成を確認してから起動"
+                f"（{checks}）"
+            )
+        for t in sorted(wave_tasks, key=lambda x: x.id):
+            base = an.bases[t.id]
+            sess = sanitize(t.branch)
+            lane = an.lane_of[t.id]
+            ws_var = shell_var("WS_", str(lane))
+            pane_var = shell_var("PANE_", t.id)
+            out.append(f"\n# --- {t.id} ({t.branch}) lane {lane} ---")
+            if lane not in lane_started:
+                lane_started.add(lane)
+                label = sanitize(by_id[an.lanes[lane][0]].branch)
+                out.append(
+                    f"resp=$(herdr workspace create --cwd \"$PWD\" --label {shlex.quote(label)} --no-focus)"
+                )
+                out.append(f"{ws_var}=$(printf '%s' \"$resp\" | jq -r '.result.workspace.workspace_id')")
+                out.append(f"{pane_var}=$(printf '%s' \"$resp\" | jq -r '.result.root_pane.pane_id')")
+            else:
+                out.append(
+                    f"resp=$(herdr tab create --workspace \"${ws_var}\""
+                    f" --cwd \"$PWD\" --label {shlex.quote(sess)} --no-focus)"
+                )
+                out.append(f"{pane_var}=$(printf '%s' \"$resp\" | jq -r '.result.root_pane.pane_id')")
+            # claude 引数列: 起動フラグ -> --name（cross-session messaging）->
+            # --remote-control（オプトイン）-> プロンプト（ファイルから読む）。
+            # プロンプトは複数行のため直接埋め込まず "$(cat <path>)" で pane の shell に
+            # 展開させる（wt は EXECUTE_ARGS を shell-escape して exec するので安全）。
+            ppath = prompt_path(prompt_dir, t)
+            rc_args = f" --remote-control {shlex.quote(sess)}" if launch.remote_control else ""
+            flags = launch_flags(t, launch)
+            flags_str = ("".join(f" {shlex.quote(a)}" for a in flags))
+            prompt_ref = f'"$(cat {shlex.quote(ppath)})"'
+            if t.boundary:
+                # 境界宣言ありは -x bash の bootstrap 経由（worktree 生成後・claude 起動前に
+                # 境界ファイルを置く）。境界 JSON は 1 行なので positional で渡す。
+                inner = (
+                    f"wt switch --create {shlex.quote(t.branch)} --base {shlex.quote(base)}"
+                    f" -x bash -- -c {shlex.quote(BOUNDARY_BOOTSTRAP)}"
+                    f" {shlex.quote('wt-boundary-' + t.id)} {shlex.quote(boundary_json(t))}"
+                    f"{flags_str} --name {shlex.quote(sess)}{rc_args} {prompt_ref}"
+                )
+            else:
+                inner = (
+                    f"wt switch --create {shlex.quote(t.branch)} --base {shlex.quote(base)}"
+                    f" -x claude --{flags_str} --name {shlex.quote(sess)}{rc_args} {prompt_ref}"
+                )
+            out.append(f"herdr pane run \"${pane_var}\" {shlex.quote(inner)}")
+
+    out.append("\n=== PR (各ワーカーが実装・コミット後、/review-converge 収束後に自分で実行) ===")
+    for t in sorted(plan.tasks, key=lambda x: (an.levels[x.id], x.id)):
+        base = an.bases[t.id]
+        arg = "" if base == plan.default_base else f" {base}"
+        note = "（base 省略=デフォルト）" if base == plan.default_base else "（stacked: base=前段）"
+        out.append(f"# {t.id} ({t.branch}): /pr-create{arg}   {note}")
+
+    out.append("\n=== MONITOR (親のゲート監視の要点) ===")
+    out.append("# 承認待ち検知: herdr agent wait <pane> --until blocked --timeout <ms>")
+    out.append("# 画面確認:     herdr agent read <pane> --source recent-unwrapped --lines 120")
+    out.append("# 完了の裏取り: gh pr list --head <branch> / git ls-remote origin <branch>")
+    out.append("# ワーカーからの SendMessage 報告は自己申告。必ず上記で機械検証してから次段を起動する")
+
+    return "\n".join(out)
+
+
+# ============================================================
+# 副作用（I/O・終了コード）
+# ============================================================
+
+
+def read_spec(arg: str) -> object:
+    """spec を読み JSON を返す。読めない/不正なら SpecError。"""
+    if arg == "-":
+        raw = sys.stdin.read()
+    else:
+        try:
+            with open(arg, encoding="utf-8") as f:
+                raw = f.read()
+        except OSError as e:
+            raise SpecError(f"spec を読めない: {e}") from e
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise SpecError(f"spec が不正な JSON: {e}") from e
+
+
+def write_prompts(plan: Plan, an: Analysis, launch: Launch, prompt_dir: str) -> None:
+    """各 task のワーカープロンプト（本文 + 標準セクション）を prompt_dir へ書き出す。"""
+    Path(prompt_dir).mkdir(parents=True, exist_ok=True)
+    for t in plan.tasks:
+        Path(prompt_path(prompt_dir, t)).write_text(
+            full_prompt(t, an.bases[t.id], plan.default_base, launch), encoding="utf-8"
+        )
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="plan_orchestration.py",
+        description="job-graph オーケストレーション・スケジューラ（決定論 CLI）",
+    )
+    parser.add_argument("spec", help="spec.json のパス、または - で stdin から読む")
+    parser.add_argument(
+        "--prompt-dir",
+        default="",
+        metavar="DIR",
+        help="ワーカープロンプトの書き出し先。指定すると <DIR>/<task-id>.md を生成し、"
+        "COMMANDS がそれを参照する（未指定なら COMMANDS は出力しない）",
+    )
+    parser.add_argument(
+        "--parent-name",
+        default="",
+        metavar="NAME",
+        help="オーケストレータ（親）セッション名。ワーカーの SendMessage 報告先として"
+        "標準セクションに埋め込む",
+    )
+    parser.add_argument(
+        "--remote-control",
+        action="store_true",
+        help="各 worktree の claude を --remote-control <ブランチ名> でも起動し、"
+        "claude.ai 等からリモート接続できるようにする",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        metavar="MODEL",
+        help="全 worktree の claude 既定モデル。task 個別の model 指定があればそちらが優先",
+    )
+    parser.add_argument(
+        "--permission-mode",
+        default=None,
+        choices=PERMISSION_MODES,
+        help="全 worktree の claude 既定パーミッションモード。task 個別指定があればそちらが優先",
+    )
+    parser.add_argument(
+        "--effort",
+        default=None,
+        choices=EFFORT_LEVELS,
+        help="全 worktree の claude 既定 effort レベル。task 個別指定があればそちらが優先",
+    )
+    ns = parser.parse_args(argv[1:])
+    launch = Launch(
+        model=ns.model or "",
+        permission_mode=ns.permission_mode or "",
+        effort=ns.effort or "",
+        remote_control=ns.remote_control,
+        parent_name=ns.parent_name or "",
+    )
+    try:
+        plan = parse_spec(read_spec(ns.spec))
+    except SpecError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    an = analyze(plan)
+    if not an.errors and ns.prompt_dir:
+        write_prompts(plan, an, launch, ns.prompt_dir)
+    print(render(plan, an, launch, ns.prompt_dir))
+    return 1 if an.errors else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
