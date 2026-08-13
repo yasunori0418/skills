@@ -2,19 +2,44 @@
 # launch.sh — /project-session の決定論バックエンド。
 #
 # ghq 管理下のプロジェクトを 1 つ選び、そのディレクトリで（ブランチを変えず・
-# worktree も作らず）claude を detached tmux セッションとして起動する。
-# ghq 照合・セッション名決定・tmux 起動という機械的に確定できる処理を
+# worktree も作らず）claude を detached セッションとして起動する。
+# ghq 照合・セッション名決定・セッション起動という機械的に確定できる処理を
 # ここへ集約し、SKILL.md 側でロジックを二重管理しない。
 #
+# マルチプレクサ backend は実行環境から自動判定する（detect_backend）:
+#   - herdr: HERDR_ENV=1（herdr 管理下の pane から起動された）。現在の
+#     workspace に tab を足し、その root pane で claude を起動する
+#   - tmux:  それ以外。detached な tmux セッションとして起動する
+# PROJECT_SESSION_BACKEND で明示的に上書きもできる。
+#
 # 純関数（sanitize/resolve_matches/session_base_name/next_session_name/
-# inject_remote_control）は外部コマンド（ghq/tmux/claude）を呼ばず、入力は
-# 引数と stdin のみ。これにより CI sandbox（jq/git のみ、ghq/tmux/claude 無し）で
+# inject_remote_control/detect_backend）は外部コマンド（ghq/tmux/herdr/claude）を
+# 呼ばず、入力は引数と stdin のみ。これにより CI sandbox（jq/git のみ、
+# ghq/tmux/herdr/claude 無し）で
 # `source launch.sh` してテストできる。impure な処理は main とサブコマンドに閉じ、
 # 末尾の source ガードで「直接実行時のみ main」を担保する。
 set -euo pipefail
 
+# detect_backend [env_value] [override]
+# 使用するマルチプレクサ backend 名（herdr | tmux）を決める。
+#   override（PROJECT_SESSION_BACKEND）が非空ならそれを最優先で採用する。
+#   env_value（HERDR_ENV）が 1 なら herdr、それ以外は tmux。
+# 外部コマンドを呼ばないので単体テストできる。
+detect_backend() {
+    local env_value="${1:-}" override="${2:-}"
+    if [ -n "$override" ]; then
+        printf '%s' "$override"
+        return 0
+    fi
+    if [ "$env_value" = "1" ]; then
+        printf 'herdr'
+    else
+        printf 'tmux'
+    fi
+}
+
 # sanitize <name>
-# tmux セッション名向けに [^A-Za-z0-9_-]+ を - に置換し前後の - を除去する。
+# セッション名・ラベル向けに [^A-Za-z0-9_-]+ を - に置換し前後の - を除去する。
 # 空になったら session を返す（parallel-worktree の sanitize と同じ規則）。
 sanitize() {
     local name="$1" out
@@ -138,6 +163,65 @@ inject_remote_control() {
     printf '%s\0' "${out[@]}"
 }
 
+# ---- impure: backend 別の処理 ---------------------------------------------
+
+# backend_required_tools <backend>
+# その backend で PATH に必要なコマンドを 1 行 1 件で返す。
+backend_required_tools() {
+    case "$1" in
+    herdr) printf 'herdr\nghq\nclaude\n' ;;
+    *) printf 'tmux\nghq\nclaude\n' ;;
+    esac
+}
+
+# backend_existing_names <backend>
+# 既存セッション名（tmux）/ tab ラベル（herdr）を 1 行 1 件で返す。
+# 取得できない場合（サーバ未起動など）は空扱いにする。
+backend_existing_names() {
+    case "$1" in
+    herdr)
+        herdr tab list --workspace "${HERDR_WORKSPACE_ID:-}" 2>/dev/null |
+            jq -r '.result.tabs[]?.label // empty' 2>/dev/null || true
+        ;;
+    *)
+        tmux list-sessions -F '#{session_name}' 2>/dev/null || true
+        ;;
+    esac
+}
+
+# backend_launch <backend> <sess> <abs_path> <inner>
+# claude を detached に起動する。inner は shell へ渡す単一コマンド文字列。
+backend_launch() {
+    local backend="$1" sess="$2" abs_path="$3" inner="$4"
+    case "$backend" in
+    herdr)
+        # 現在の workspace に tab を足し、その root pane で claude を起動する。
+        # workspace はリポジトリ単位の長寿命コンテナなので増やさない。
+        local resp pane
+        resp=$(herdr tab create --workspace "${HERDR_WORKSPACE_ID:-}" \
+            --cwd "$abs_path" --label "$sess" --no-focus) || return 1
+        pane=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
+        if [ -z "$pane" ] || [ "$pane" = "null" ]; then
+            printf 'error: herdr tab の root pane を取得できません\n' >&2
+            return 1
+        fi
+        herdr pane run "$pane" "$inner"
+        ;;
+    *)
+        tmux new-session -d -s "$sess" -c "$abs_path" "$inner"
+        ;;
+    esac
+}
+
+# backend_attach_hint <backend> <sess>
+# 起動したセッションへ合流する方法を 1 行で返す。
+backend_attach_hint() {
+    case "$1" in
+    herdr) printf 'herdr（tab ラベル: %s）に切り替える' "$2" ;;
+    *) printf 'tmux attach -t %s' "$2" ;;
+    esac
+}
+
 # ---- impure: サブコマンド / main ------------------------------------------
 
 # cmd_list — ghq list をそのまま 1 行 1 件で出力（引数省略時の一覧提示用）。
@@ -180,14 +264,19 @@ cmd_launch() {
     shift
     local -a claude_args=("$@")
 
-    # 1. 必須コマンドの存在確認（欠落は名指しでエラー）。
+    # 1. backend 判定 + 必須コマンドの存在確認（欠落は名指しでエラー）。
+    local backend
+    backend=$(detect_backend "${HERDR_ENV:-}" "${PROJECT_SESSION_BACKEND:-}")
     local tool missing=0
-    for tool in tmux ghq claude; do
+    while IFS= read -r tool; do
+        [ -n "$tool" ] || continue
         if ! command -v "$tool" >/dev/null 2>&1; then
-            printf 'error: `%s` が見つかりません（PATH に必要）\n' "$tool" >&2
+            # shellcheck disable=SC2016
+            printf 'error: `%s` が見つかりません（PATH に必要 / backend=%s）\n' \
+                "$tool" "$backend" >&2
             missing=1
         fi
-    done
+    done < <(backend_required_tools "$backend")
     [ "$missing" -eq 0 ] || return 1
 
     # 2. resolve と同じ解決。一意でなければ resolve と同じ出力・exit code で中断。
@@ -218,10 +307,10 @@ cmd_launch() {
         return 1
     fi
 
-    # 4. セッション名決定（既存一覧は tmux から。サーバ未起動は空扱い）。
+    # 4. セッション名決定（既存一覧は backend から。取得不能時は空扱い）。
     local base existing sess
     base=$(printf '%s\n' "$list" | session_base_name "$relpath")
-    existing=$(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+    existing=$(backend_existing_names "$backend")
     sess=$(printf '%s\n' "$existing" | next_session_name "$base")
 
     # 5. inject_remote_control で claude 引数を確定（NUL 区切りで受け取る）。
@@ -230,10 +319,10 @@ cmd_launch() {
         mapfile -d '' final_args < <(inject_remote_control "$sess" "${claude_args[@]}")
     fi
 
-    # 6. tmux 起動。shell-command は単一文字列で渡す。クォートは printf '%q ' で機械生成。
+    # 6. 起動。shell-command は単一文字列で渡す。クォートは printf '%q ' で機械生成。
     local inner
     inner=$(printf '%q ' claude "${final_args[@]}")
-    tmux new-session -d -s "$sess" -c "$abs_path" "$inner"
+    backend_launch "$backend" "$sess" "$abs_path" "$inner" || return 1
 
     # 7. 結果報告（AI はこれをそのまま報告素材にする）。
     local branch dirty_count dirty args_report
@@ -253,12 +342,13 @@ cmd_launch() {
     fi
 
     printf 'SESSION: %s\n' "$sess"
+    printf 'BACKEND: %s\n' "$backend"
     printf 'PROJECT: %s\n' "$relpath"
     printf 'PATH: %s\n' "$abs_path"
     printf 'BRANCH: %s\n' "$branch"
     printf 'DIRTY: %s\n' "$dirty"
     printf 'CLAUDE_ARGS: %s\n' "$args_report"
-    printf 'ATTACH: tmux attach -t %s\n' "$sess"
+    printf 'ATTACH: %s\n' "$(backend_attach_hint "$backend" "$sess")"
 }
 
 main() {

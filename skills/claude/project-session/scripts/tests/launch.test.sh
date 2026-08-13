@@ -110,4 +110,13 @@ check "inject:preserve-trailing-inject" "nput" "${_out[3]}"
 mapfile -d '' _out < <(inject_remote_control 'nput' --remote-control --remote-control)
 check "inject:only-first" "--remote-control nput --remote-control" "${_out[*]}"
 
+# detect_backend: HERDR_ENV=1 なら herdr、それ以外は tmux にフォールバック。
+check "backend:herdr-env" "herdr" "$(detect_backend 1 '')"
+check "backend:unset" "tmux" "$(detect_backend '' '')"
+check "backend:env-zero" "tmux" "$(detect_backend 0 '')"
+check "backend:env-other" "tmux" "$(detect_backend yes '')"
+# override（PROJECT_SESSION_BACKEND）は環境より優先する。
+check "backend:override-tmux" "tmux" "$(detect_backend 1 tmux)"
+check "backend:override-herdr" "herdr" "$(detect_backend '' herdr)"
+
 exit "$fail"
