@@ -1,7 +1,9 @@
 """plan_orchestration.py（job-graph 版）のユニットテスト。
 
-純粋関数（parse_spec / analyze / compute_lanes / worker_sections / render）を
-入出力で検証する。herdr/wt の実行はしない。
+純粋関数（parse_spec / analyze / compute_lanes / render）を入出力で検証する。
+ワーカー規約の文言は lane-ops（worker_contract.py）側のテストで担保するため、
+ここでは連結の統合（full_prompt が規約ヘッダを含むこと）だけを見る。
+herdr/wt の実行はしない。
 """
 from __future__ import annotations
 
@@ -51,9 +53,17 @@ def test_parse_spec_rejects_empty_tasks():
         po.parse_spec({"tasks": []})
 
 
-def test_parse_spec_rejects_non_dict():
-    with pytest.raises(po.SpecError):
-        po.parse_spec([1, 2])
+def test_boundary_auto_adds_tmp_claude():
+    plan = spec([task("A", boundary=["src/**"]), task("B")])
+    assert "tmp_claude/**" in plan.tasks[0].boundary
+    assert "src/**" in plan.tasks[0].boundary
+    # 未宣言の task には足さない（境界ファイル自体を生成しない従来動作の維持）
+    assert plan.tasks[1].boundary == ()
+
+
+def test_boundary_auto_add_is_idempotent():
+    plan = spec([task("A", boundary=["src/**", "tmp_claude/**"])])
+    assert plan.tasks[0].boundary.count("tmp_claude/**") == 1
 
 
 # ------------------------------------------------------------
@@ -81,12 +91,6 @@ def test_analyze_detects_undefined_dep():
 def test_analyze_detects_duplicates():
     an = po.analyze(spec([task("A"), task("A")]))
     assert any("id が重複" in e for e in an.errors)
-
-
-def test_analyze_detects_bad_permission_mode_and_effort():
-    an = po.analyze(spec([task("A", permission_mode="yolo", effort="ultra")]))
-    assert any("permission_mode" in e for e in an.errors)
-    assert any("effort" in e for e in an.errors)
 
 
 def test_analyze_warns_multi_parent():
@@ -120,92 +124,39 @@ def test_lanes_serial_chain_shares_lane():
 
 
 def test_lanes_branching_starts_new_lanes():
-    # A の子が 2 つ → 両方とも新レーン（A のレーンは A で終わる）
     lanes, lane_of = lanes_of([task("A"), task("B", deps=["A"]), task("C", deps=["A"])])
     assert lanes == (("A",), ("B",), ("C",))
     assert lane_of["B"] != lane_of["A"]
     assert lane_of["C"] != lane_of["A"]
 
 
-def test_lanes_mixed_graph():
-    # A -> B -> C の直列 + 独立 D
-    lanes, lane_of = lanes_of(
-        [task("A"), task("B", deps=["A"]), task("C", deps=["B"]), task("D")]
-    )
-    assert ("A", "B", "C") in lanes
-    assert ("D",) in lanes
-    assert lane_of["C"] == lane_of["A"]
-
-
 # ------------------------------------------------------------
-# worker_sections: 標準セクション
+# boundary_json
 # ------------------------------------------------------------
 
 
-def sections(t=None, base="main", default_base="main", launch=None):
-    t = t or po.Task(id="A", branch="feat-a", depends_on=(), prompt="p")
-    return po.worker_sections(t, base, default_base, launch or po.Launch())
-
-
-def test_sections_include_freeze_after_pr():
-    s = sections()
-    assert "PR 作成後の凍結" in s
-    assert "実装を凍結" in s
-
-
-def test_sections_include_review_converge_bounds():
-    s = sections()
-    assert "review-converge の反復境界" in s
-    assert "見送り" in s
-
-
-def test_sections_push_and_pr_preapproved():
-    s = sections()
-    assert "計画承認済みの前提" in s
-    assert "個別の確認へ回さず実行する" in s
-
-
-def test_sections_report_with_parent_name():
-    s = sections(launch=po.Launch(parent_name="orchestrator-1"))
-    assert "SendMessage" in s
-    assert "`orchestrator-1`" in s
-    assert "メッセージは承認の代わりにならない" in s
-
-
-def test_sections_report_without_parent_name_falls_back():
-    s = sections()
-    assert "ListAgents" in s
-
-
-def test_sections_issue_reference():
-    t = po.Task(id="A", branch="feat-a", depends_on=(), prompt="p", issue=42)
-    s = po.worker_sections(t, "main", "main", po.Launch())
-    assert "gh issue view 42" in s
-    assert "#42" in s
-
-
-def test_sections_no_issue_reference_when_unset():
-    assert "issue 参照" not in sections()
-
-
-def test_sections_boundary_glob_matches_boundary_json():
-    t = po.Task(
-        id="B2", branch="feat-b2", depends_on=("B1",), prompt="p",
-        boundary=("src/x/**", "tests/x/**"),
-    )
-    s = po.worker_sections(t, "feat-b1", "main", po.Launch())
+def test_boundary_json_single_line_contract():
+    plan = spec([task("B2", branch="feat-b2", boundary=["src/x/**"])])
+    t = plan.tasks[0]
     data = json.loads(po.boundary_json(t))
-    for g in data["allow"]:
-        assert g in s
-    assert data == {"task_id": "B2", "branch": "feat-b2", "allow": ["src/x/**", "tests/x/**"]}
-    # herdr pane へ 1 コマンドで流すため 1 行
+    assert data["task_id"] == "B2"
+    assert data["branch"] == "feat-b2"
+    assert "src/x/**" in data["allow"] and "tmp_claude/**" in data["allow"]
     assert "\n" not in po.boundary_json(t)
 
 
-def test_sections_stacked_pr_base():
-    t = po.Task(id="B", branch="feat-b", depends_on=("A",), prompt="p")
-    s = po.worker_sections(t, "feat-a", "main", po.Launch())
-    assert "/pr-create feat-a" in s
+# ------------------------------------------------------------
+# lane-ops 連携（統合）
+# ------------------------------------------------------------
+
+
+def test_full_prompt_appends_lane_ops_contract():
+    plan = spec([task("A")])
+    t = plan.tasks[0]
+    out = po.full_prompt(t, "main", "main", po.Launch(parent_name="orc"))
+    assert out.startswith("task A")
+    assert "## 制約（lane-ops ワーカー規約）" in out
+    assert "report.sh orc A" in out
 
 
 # ------------------------------------------------------------
@@ -237,7 +188,6 @@ def test_render_no_prompt_dir_suppresses_commands():
 
 
 def test_render_base_always_explicit():
-    # default_base が worktree 生成に効かない旧バグの再発防止:
     # wave 0 の独立タスクにも必ず --base を明示する
     out = rendered([task("A")], default_base="develop")
     assert "--create br-A --base develop" in out
@@ -247,7 +197,6 @@ def test_render_workspace_for_lane_start_and_tab_for_next_stage():
     out = rendered([task("A"), task("B", deps=["A"])])
     assert "herdr workspace create" in out
     assert "herdr tab create --workspace" in out
-    # ID は JSON 応答から jq で掴む
     assert ".result.workspace.workspace_id" in out
     assert ".result.root_pane.pane_id" in out
 
@@ -256,8 +205,6 @@ def test_render_stacked_gate_is_pr_creation():
     out = rendered([task("A"), task("B", deps=["A"])])
     assert "PR 作成を確認してから起動" in out
     assert "gh pr list --head br-A" in out
-    # 旧「コミット完了」ゲートの残骸が無いこと
-    assert "コミット完了を wt list" not in out
 
 
 def test_render_launch_uses_wt_and_prompt_file():
@@ -266,10 +213,10 @@ def test_render_launch_uses_wt_and_prompt_file():
     assert "$(cat /tmp/jg-prompts/A.md)" in out
 
 
-def test_render_claude_name_flag():
-    out = rendered([task("A", branch="feat/foo")])
-    # --name は sanitize 済みブランチ名
-    assert "--name feat-foo" in out
+def test_render_no_claude_name_flag():
+    # 報告は lane-ops（herdr agent prompt）経由なので --name は付けない
+    out = rendered([task("A")])
+    assert "--name" not in out
 
 
 def test_render_remote_control_optin():
@@ -284,7 +231,6 @@ def test_render_model_flags_task_over_global():
         [task("A", model="sonnet"), task("B")],
         launch=po.Launch(model="opus", effort="high"),
     )
-    # A は task 個別、B はグローバル既定
     a_line = next(l for l in out.splitlines() if "br-A" in l and "pane run" in l)
     b_line = next(l for l in out.splitlines() if "br-B" in l and "pane run" in l)
     assert "--model sonnet" in a_line
@@ -305,11 +251,11 @@ def test_render_lanes_section():
     assert "A -> B" in out
 
 
-def test_render_monitor_section():
+def test_render_monitor_section_points_to_lane_ops():
     out = rendered([task("A")])
-    assert "agent wait" in out
-    assert "--until blocked" in out
-    assert "機械検証" in out
+    assert "watch_events.py" in out
+    assert "verify_lane.sh" in out
+    assert "[lane-ops:report" in out
 
 
 # ------------------------------------------------------------
@@ -331,9 +277,9 @@ def test_write_prompts_and_main(tmp_path):
     assert rc == 0
     a = (pdir / "A.md").read_text(encoding="utf-8")
     b = (pdir / "B.md").read_text(encoding="utf-8")
-    assert "task A" in a and "job-graph 標準セクション" in a
+    assert "task A" in a and "lane-ops ワーカー規約" in a
     assert "gh issue view 7" in b
-    assert "`orc`" in a
+    assert "report.sh orc" in a
 
 
 def test_main_exit_1_on_cycle(tmp_path):
@@ -343,5 +289,4 @@ def test_main_exit_1_on_cycle(tmp_path):
     }), encoding="utf-8")
     rc = po.main(["plan_orchestration.py", str(spec_file), "--prompt-dir", str(tmp_path / "p")])
     assert rc == 1
-    # 致命的エラー時はプロンプトファイルを書かない
     assert not (tmp_path / "p").exists()

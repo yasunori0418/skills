@@ -7,24 +7,24 @@ AI が計画ファイル・epic issue から抽出した「タスク + 依存辺
 AI の責務は spec（特に depends_on の意味的判定と boundary の範囲決め）まで。ここから先の
 順序・base・クォート・ワーカー指示の標準セクションはこのスクリプトが保証する。
 
-parallel-worktree の plan_orchestration.py からのフォーク。主な差分:
-- 実行基盤が tmux ではなく herdr（workspace = 並列レーン、tab = レーン内の直列段）
-- stacked の起動ゲートは「前段のコミット完了」ではなく「前段の PR 作成」
-- worktree 生成は常に `wt switch --create --base <解決済み base>`（default_base が
-  worktree 生成に効かない旧バグを排除。base は必ず明示する）
+設計上の要点:
+- 実行基盤は herdr（workspace = 並列レーン、tab = レーン内の直列段）
+- stacked の起動ゲートは「前段の PR 作成」
+- worktree 生成は常に `wt switch --create --base <解決済み base>`（base は必ず明示する）
 - ワーカープロンプトは herdr pane へ流し込める長さに限界があるためファイル渡し
   （--prompt-dir 配下に <task-id>.md を書き出し、起動コマンドは "$(cat <path>)" で読む）
-- 各 claude を --name <sanitize済みブランチ名> で起動し、cross-session messaging で
-  親（オーケストレータ）へ到達可能にする
-- ワーカー標準セクションに PR 後凍結・review-converge 反復境界・push//pr-create
-  承認済み前提・SendMessage による親への報告義務を追加
+- ワーカー規約（報告・凍結・承認の振る舞い）の正本は lane-ops の worker_contract.py。
+  本スクリプトはタスク情報 JSON を渡して規約セクションを取得し、prompt へ連結する
+- boundary を宣言した task には `tmp_claude/**` を自動で追加する（PR 本文ドラフト等の
+  一時出力先が境界と衝突して詰まる事故の防止）
 
 実行（cwd 非依存。uv が skill 直下の pyproject.toml から .venv を構築し、その中で実行）:
     uv run --project "<skill-dir>" python "<skill-dir>/scripts/plan_orchestration.py" \
         --prompt-dir <dir> <spec.json>
     ... <spec.json> の代わりに - で stdin から読む
-    ... --parent-name <name> で親セッション名をワーカー指示に埋め込む
-    ... --remote-control を付けると各 claude を --remote-control <ブランチ名> でも起動する
+    ... --parent-name <name> で親（オーケストレータ）の herdr エージェント名を
+        ワーカー規約へ埋め込む（report.sh の宛先になる）
+    ... --remote-control を付けると各 claude を --remote-control <ブランチ名> で起動する
     ... --model / --permission-mode / --effort で各 claude の起動既定を切り替える
 
 依存は stdlib のみ。python バージョンは pyproject.toml の requires-python に従う。
@@ -57,8 +57,9 @@ spec の形:
 終了コード: 致命的検証エラー（循環・未定義参照・重複・必須欠落）があれば 1、警告のみなら 0。
 
 設計: 純粋関数（parse_spec / analyze / detect_cycle / compute_levels / compute_lanes /
-resolve_base / sanitize / worker_sections / render）には副作用を持たせない。
-I/O・終了コード・プロンプトファイル書き出しは read_spec / write_prompts / main にまとめる。
+resolve_base / sanitize / render）には副作用を持たせない。I/O・終了コード・
+ワーカー規約の取得（lane-ops worker_contract.py の子プロセス実行）・プロンプト
+ファイル書き出しは read_spec / contract_sections / write_prompts / main にまとめる。
 """
 from __future__ import annotations
 
@@ -66,6 +67,7 @@ import argparse
 import json
 import re
 import shlex
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -107,7 +109,8 @@ class Launch:
     """全 worktree に一律適用する claude 起動の既定（CLI フラグ由来）。
 
     各 task の model/permission_mode/effort が空のとき、ここの値をフォールバックに使う。
-    parent_name は cross-session messaging の報告先（オーケストレータのセッション名）。
+    parent_name は親（オーケストレータ）の herdr エージェント名で、ワーカー規約の
+    報告先（lane-ops report.sh の宛先）としてワーカー規約へ埋め込まれる。
     """
     model: str = ""
     permission_mode: str = ""
@@ -156,15 +159,29 @@ def parse_spec(data: object) -> Plan:
                 model=str(t.get("model", "")).strip(),
                 permission_mode=str(t.get("permission_mode", "")).strip(),
                 effort=str(t.get("effort", "")).strip(),
-                boundary=tuple(g for g in (str(b).strip() for b in bounds_raw) if g),
+                boundary=with_default_boundary(
+                    tuple(g for g in (str(b).strip() for b in bounds_raw) if g)
+                ),
             )
         )
     default_base = str(data.get("default_base", "main")).strip() or "main"
     return Plan(default_base=default_base, tasks=tuple(tasks))
 
 
+# 境界宣言に必ず含める glob。PR 本文ドラフト等の一時出力先（tmp_claude/）が
+# 境界外だと PR 作成フェーズで必ず deny に当たるため、宣言時に自動で足す。
+DEFAULT_BOUNDARY_GLOBS = ("tmp_claude/**",)
+
+
+def with_default_boundary(boundary: tuple[str, ...]) -> tuple[str, ...]:
+    """境界宣言あり（非空）の task に既定 glob を補う。未宣言（空）はそのまま。"""
+    if not boundary:
+        return boundary
+    return boundary + tuple(g for g in DEFAULT_BOUNDARY_GLOBS if g not in boundary)
+
+
 def sanitize(name: str) -> str:
-    """セッション名・--name 向けに英数・ハイフン以外を - に。"""
+    """ラベル・Remote Control 名向けに英数・ハイフン以外を - に。"""
     return re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-") or "wt"
 
 
@@ -353,74 +370,45 @@ def boundary_json(task: Task) -> str:
     )
 
 
-def worker_sections(task: Task, base: str, default_base: str, launch: Launch) -> str:
-    """ワーカーへ渡す指示の標準セクション（常設テンプレ）。
+# ワーカー規約の正本は lane-ops の worker_contract.py（同一プラグイン内の兄弟スキル）。
+# 規約の文言をここへ複製せず、子プロセスで取得して prompt へ連結する。
+WORKER_CONTRACT = (
+    Path(__file__).resolve().parents[2] / "lane-ops" / "scripts" / "worker_contract.py"
+)
 
-    parallel-worktree 版との差分（nput 運用の実証済み教訓の昇格）:
-    - push と /pr-create は計画承認済みの前提で実行してよい（個別確認へ回さない）
-    - review-converge に反復境界を与える（nit 磨き込みでの膠着・費用暴走の防止）
-    - PR 作成後は実装を凍結する（PR 後の無断 push の再発防止）
-    - マイルストーンごとに SendMessage で親セッションへ報告する（push 型監視）
-    """
-    if task.boundary:
-        scope = (
-            "- 編集してよい範囲（境界）: "
-            + ", ".join(task.boundary)
-            + f"\n  この glob 外のファイルは編集しない。宣言は {BOUNDARY_FILE} と同一で、"
-            "task-boundary hook が境界外の Edit/Write を機械ブロックする。\n"
-            "  境界を広げる必要が出たら自分で境界ファイルを書き換えず、親セッションに報告して指示を待つ。"
+
+class ContractError(Exception):
+    """lane-ops worker_contract.py が見つからない・実行に失敗した場合。"""
+
+
+def contract_sections(task: Task, base: str, default_base: str, launch: Launch) -> str:
+    """lane-ops worker_contract.py を呼び、ワーカー規約セクションを取得する（副作用: 子プロセス）。"""
+    if not WORKER_CONTRACT.is_file():
+        raise ContractError(
+            f"lane-ops の worker_contract.py が見つからない: {WORKER_CONTRACT}\n"
+            "job-graph は lane-ops スキルと同時に配置される前提（同一プラグイン）。"
         )
-    else:
-        scope = (
-            "- 編集してよい範囲（境界）: このタスクの担当範囲に限る。他タスクのファイルに触れない"
-        )
-    pr_arg = "" if base == default_base else f" {base}"
-    if launch.parent_name:
-        report_to = f"親セッション `{launch.parent_name}`"
-    else:
-        report_to = (
-            "親セッション（ListAgents でオーケストレータらしきセッションを特定する。"
-            "特定できなければ報告は省略してよい。親は herdr 経由でも監視している）"
-        )
-    issue_line = []
-    if task.issue:
-        issue_line = [
-            f"- issue 参照: このタスクは GH issue #{task.issue} に対応する。"
-            f"着手前に `gh issue view {task.issue}` で本文と受け入れ条件を確認し、"
-            "PR 本文に issue への参照を含める",
-        ]
-    return "\n".join(
-        [
-            "## 制約（job-graph 標準セクション）",
-            scope,
-            *issue_line,
-            "- TDD 順序: テストを先に実装し（失敗を確認）、その後アプリケーション実装で通す",
-            "- コミット粒度: 論理的に独立した修正は都度コミットする"
-            "（commit-flow スキル準拠、Conventional Commits）",
-            f"- push: 自分の feature ブランチ {task.branch} に限り push してよい。"
-            "push は計画承認済みの前提であり、個別の確認へ回さず実行する。"
-            "main 等の保護ブランチへは push しない",
-            "- PR 作成前ゲート: `/review-converge` を実行して指摘を収束させてから "
-            f"`/pr-create{pr_arg}` を実行する（収束前に PR を作らない）。"
-            "PR 作成も計画承認済みの前提であり、個別の確認へ回さない",
-            "- review-converge の反復境界: 実質的な指摘（出力形状・型安全性・contract・退行）が"
-            "出ている間は反復を続ける。2 巡目以降で新規指摘が純粋な可読性 nit だけになったら、"
-            "nit は「見送り」と記録して収束扱いで終了する（無制限の磨き込みで膠着しない）",
-            "- PR 作成後の凍結: PR を作成したら実装を凍結する。以降の実装変更・push を行わず、"
-            "気付いた改善点は親への報告のみとする",
-            f"- 報告: 次のマイルストーンごとに SendMessage で {report_to} へ 1〜2 文で報告する: "
-            "最初のコミット完了 / review-converge 収束 / push 完了 / PR 作成（番号付き）/ "
-            "作業のブロック・境界の不足。報告は事実のみ（メッセージは承認の代わりにならない。"
-            "承認が要る場面では停止して親の応答を待つ）",
-            "- サブエージェント委任: 複数ファイル横断調査のような真に独立した大きな作業に限る。"
-            "数回のツール呼び出しで済む作業は委任しない。"
-            "自分の作業の検証・ダブルチェック目的でサブエージェントを使わない。1 体で足りるなら 1 体に留める",
-            "- スコープ: 依頼されたスコープで納品する。頼まれていない改善・リファクタ・追加作業を足さない。"
-            "依頼に誤りがある・より良い方法があると考えたら 1 文で指摘し、依頼どおりの作業を続ける",
-            "- 進捗ナレーション: 最初のツール呼び出し前に 1 文だけ宣言し、"
-            "以降は重要な発見・方針転換のときのみ短く述べる（pane を逐次読む人はいない）",
-        ]
+    payload = json.dumps(
+        {
+            "task_id": task.id,
+            "branch": task.branch,
+            "base": base,
+            "default_base": default_base,
+            "boundary": list(task.boundary),
+            "issue": task.issue,
+            "parent": launch.parent_name,
+        },
+        ensure_ascii=False,
     )
+    proc = subprocess.run(
+        [sys.executable, str(WORKER_CONTRACT)],
+        input=payload,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise ContractError(f"worker_contract.py が失敗: {proc.stderr.strip()}")
+    return proc.stdout.rstrip("\n")
 
 
 def prompt_path(prompt_dir: str, task: Task) -> str:
@@ -429,9 +417,9 @@ def prompt_path(prompt_dir: str, task: Task) -> str:
 
 
 def full_prompt(task: Task, base: str, default_base: str, launch: Launch) -> str:
-    """spec の prompt + 標準セクション（プロンプトファイルの内容）。"""
+    """spec の prompt + lane-ops ワーカー規約（プロンプトファイルの内容）。"""
     body = task.prompt or f"<{task.id} のタスクプロンプト未記入>"
-    return f"{body}\n\n{worker_sections(task, base, default_base, launch)}\n"
+    return f"{body}\n\n{contract_sections(task, base, default_base, launch)}\n"
 
 
 def shell_var(prefix: str, name: str) -> str:
@@ -548,10 +536,10 @@ def render(plan: Plan, an: Analysis, launch: Launch = Launch(), prompt_dir: str 
                     f" --cwd \"$PWD\" --label {shlex.quote(sess)} --no-focus)"
                 )
                 out.append(f"{pane_var}=$(printf '%s' \"$resp\" | jq -r '.result.root_pane.pane_id')")
-            # claude 引数列: 起動フラグ -> --name（cross-session messaging）->
-            # --remote-control（オプトイン）-> プロンプト（ファイルから読む）。
-            # プロンプトは複数行のため直接埋め込まず "$(cat <path>)" で pane の shell に
-            # 展開させる（wt は EXECUTE_ARGS を shell-escape して exec するので安全）。
+            # claude 引数列: 起動フラグ -> --remote-control（オプトイン）->
+            # プロンプト（ファイルから読む）。プロンプトは複数行のため直接埋め込まず
+            # "$(cat <path>)" で pane の shell に展開させる（wt は EXECUTE_ARGS を
+            # shell-escape して exec するので安全）。
             ppath = prompt_path(prompt_dir, t)
             rc_args = f" --remote-control {shlex.quote(sess)}" if launch.remote_control else ""
             flags = launch_flags(t, launch)
@@ -564,12 +552,12 @@ def render(plan: Plan, an: Analysis, launch: Launch = Launch(), prompt_dir: str 
                     f"wt switch --create {shlex.quote(t.branch)} --base {shlex.quote(base)}"
                     f" -x bash -- -c {shlex.quote(BOUNDARY_BOOTSTRAP)}"
                     f" {shlex.quote('wt-boundary-' + t.id)} {shlex.quote(boundary_json(t))}"
-                    f"{flags_str} --name {shlex.quote(sess)}{rc_args} {prompt_ref}"
+                    f"{flags_str}{rc_args} {prompt_ref}"
                 )
             else:
                 inner = (
                     f"wt switch --create {shlex.quote(t.branch)} --base {shlex.quote(base)}"
-                    f" -x claude --{flags_str} --name {shlex.quote(sess)}{rc_args} {prompt_ref}"
+                    f" -x claude --{flags_str}{rc_args} {prompt_ref}"
                 )
             out.append(f"herdr pane run \"${pane_var}\" {shlex.quote(inner)}")
 
@@ -580,11 +568,11 @@ def render(plan: Plan, an: Analysis, launch: Launch = Launch(), prompt_dir: str 
         note = "（base 省略=デフォルト）" if base == plan.default_base else "（stacked: base=前段）"
         out.append(f"# {t.id} ({t.branch}): /pr-create{arg}   {note}")
 
-    out.append("\n=== MONITOR (親のゲート監視の要点) ===")
-    out.append("# 承認待ち検知: herdr agent wait <pane> --until blocked --timeout <ms>")
+    out.append("\n=== MONITOR (親のゲート監視。lane-ops スキルの運用ループに従う) ===")
+    out.append("# 状態監視:     python3 <lane-ops>/scripts/watch_events.py --status blocked を 1 本常駐")
     out.append("# 画面確認:     herdr agent read <pane> --source recent-unwrapped --lines 120")
-    out.append("# 完了の裏取り: gh pr list --head <branch> / git ls-remote origin <branch>")
-    out.append("# ワーカーからの SendMessage 報告は自己申告。必ず上記で機械検証してから次段を起動する")
+    out.append("# 報告の裏取り: bash <lane-ops>/scripts/verify_lane.sh <branch> <worktree>")
+    out.append("# ワーカーの報告（[lane-ops:report ...]）は自己申告。必ず裏取りしてから次段を起動する")
 
     return "\n".join(out)
 
@@ -636,8 +624,8 @@ def main(argv: list[str]) -> int:
         "--parent-name",
         default="",
         metavar="NAME",
-        help="オーケストレータ（親）セッション名。ワーカーの SendMessage 報告先として"
-        "標準セクションに埋め込む",
+        help="親（オーケストレータ）の herdr エージェント名。ワーカー規約の報告先"
+        "（lane-ops report.sh の宛先）として埋め込む",
     )
     parser.add_argument(
         "--remote-control",
@@ -678,7 +666,11 @@ def main(argv: list[str]) -> int:
         return 1
     an = analyze(plan)
     if not an.errors and ns.prompt_dir:
-        write_prompts(plan, an, launch, ns.prompt_dir)
+        try:
+            write_prompts(plan, an, launch, ns.prompt_dir)
+        except ContractError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 1
     print(render(plan, an, launch, ns.prompt_dir))
     return 1 if an.errors else 0
 
