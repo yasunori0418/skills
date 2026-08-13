@@ -20,7 +20,6 @@ from pathlib import Path
 
 import collect_sessions as cs
 
-
 # ============================================================
 # 合成レコードのヘルパ
 # ============================================================
@@ -494,13 +493,11 @@ class TestCli(unittest.TestCase):
         proj = root / "projects" / "-home-u-proj"
         proj.mkdir(parents=True)
         with open(proj / "aaaa1111-0000-0000-0000-000000000000.jsonl", "w") as f:
-            for rec in synthetic_records():
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            f.writelines(json.dumps(rec, ensure_ascii=False) + "\n" for rec in synthetic_records())
         # Agent 起動由来のセッション（既定で除外されるべき）
         with open(proj / "bbbb2222-0000-0000-0000-000000000000.jsonl", "w") as f:
             recs = [{"type": "agent-setting", "agentSetting": "Explore"}] + synthetic_records()
-            for rec in recs:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            f.writelines(json.dumps(rec, ensure_ascii=False) + "\n" for rec in recs)
         (root / "history.jsonl").write_text(
             json.dumps({"display": "/mcp", "timestamp": 1780000000000, "project": "/home/u/proj"})
             + "\n"

@@ -46,10 +46,11 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any
 
 JST = timezone(timedelta(hours=9), "JST")
 
@@ -64,7 +65,7 @@ COMMAND_NAME_RE = re.compile(r"<command-name>([^<]+)</command-name>")
 # ============================================================
 
 
-def parse_ts(value) -> Optional[datetime]:
+def parse_ts(value) -> datetime | None:
     """ISO8601（Z 終端可）を datetime に。解釈できなければ None。"""
     if not isinstance(value, str) or not value:
         return None
@@ -74,7 +75,7 @@ def parse_ts(value) -> Optional[datetime]:
         return None
 
 
-def parse_jst_date(value: Optional[str]) -> Optional[datetime]:
+def parse_jst_date(value: str | None) -> datetime | None:
     """YYYY-MM-DD を JST 0時の datetime に。None/不正は None。"""
     if not value:
         return None
@@ -84,14 +85,14 @@ def parse_jst_date(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def jst_str(dt: Optional[datetime], seconds: bool = False) -> Optional[str]:
+def jst_str(dt: datetime | None, seconds: bool = False) -> str | None:
     if dt is None:
         return None
     fmt = "%Y-%m-%d %H:%M:%S JST" if seconds else "%Y-%m-%d %H:%M JST"
     return dt.astimezone(JST).strftime(fmt)
 
 
-def human_duration(sec: Optional[float]) -> Optional[str]:
+def human_duration(sec: float | None) -> str | None:
     if sec is None or sec < 0:
         return None
     m, s = divmod(int(sec), 60)
@@ -109,7 +110,7 @@ def truncate(text: str, max_chars: int) -> str:
     return text[:max_chars] + f"…(+{len(text) - max_chars}字)"
 
 
-def in_range(dt: datetime, since: Optional[datetime], until: Optional[datetime]) -> bool:
+def in_range(dt: datetime, since: datetime | None, until: datetime | None) -> bool:
     """since <= dt < until+1日 の判定（until はその日を含む）。"""
     if since and dt < since:
         return False
@@ -133,7 +134,7 @@ class TokenUsage:
     cache_creation: int = 0
 
     @classmethod
-    def from_api_usage(cls, u) -> "TokenUsage":
+    def from_api_usage(cls, u) -> TokenUsage:
         if not isinstance(u, dict):
             return cls()
 
@@ -148,7 +149,7 @@ class TokenUsage:
             cache_creation=num("cache_creation_input_tokens"),
         )
 
-    def __add__(self, other: "TokenUsage") -> "TokenUsage":
+    def __add__(self, other: TokenUsage) -> TokenUsage:
         return TokenUsage(
             input=self.input + other.input,
             output=self.output + other.output,
@@ -167,21 +168,21 @@ class TokenUsage:
 
 @dataclass(frozen=True)
 class PromptEntry:
-    ts: Optional[datetime]
+    ts: datetime | None
     text: str
 
 
 @dataclass(frozen=True)
 class ToolErrorEntry:
-    ts: Optional[datetime]
+    ts: datetime | None
     tool: str
     message: str
 
 
 @dataclass(frozen=True)
 class Compaction:
-    trigger: Optional[str]
-    pre_tokens: Optional[int]
+    trigger: str | None
+    pre_tokens: int | None
 
     def as_dict(self) -> dict:
         return {"trigger": self.trigger, "pre_tokens": self.pre_tokens}
@@ -193,14 +194,14 @@ class SessionStats:
 
     session_id: str
     project: str
-    cwd: Optional[str] = None
-    git_branch: Optional[str] = None
-    version: Optional[str] = None
-    title: Optional[str] = None
-    agent_type: Optional[str] = None  # Agent/Task 起動由来なら subagent type
-    agent_name: Optional[str] = None
-    first: Optional[datetime] = None
-    last: Optional[datetime] = None
+    cwd: str | None = None
+    git_branch: str | None = None
+    version: str | None = None
+    title: str | None = None
+    agent_type: str | None = None  # Agent/Task 起動由来なら subagent type
+    agent_name: str | None = None
+    first: datetime | None = None
+    last: datetime | None = None
     prompts: list = field(default_factory=list)  # list[PromptEntry]
     assistant_msgs: int = 0
     tools: Counter = field(default_factory=Counter)
@@ -224,7 +225,7 @@ class SessionStats:
         return bool(self.agent_type or self.agent_name)
 
     @property
-    def duration_sec(self) -> Optional[float]:
+    def duration_sec(self) -> float | None:
         if self.first and self.last:
             return (self.last - self.first).total_seconds()
         return None
@@ -234,14 +235,14 @@ class SessionStats:
 class SessionFilters:
     """セッション選択条件。ファイル発見（副作用層）と共有する値オブジェクト。"""
 
-    project: Optional[str] = None
-    since: Optional[str] = None  # YYYY-MM-DD (JST)
-    until: Optional[str] = None
-    session: Optional[str] = None  # ID 前方一致
+    project: str | None = None
+    since: str | None = None  # YYYY-MM-DD (JST)
+    until: str | None = None
+    session: str | None = None  # ID 前方一致
     include_agents: bool = False
 
     @classmethod
-    def from_args(cls, args) -> "SessionFilters":
+    def from_args(cls, args) -> SessionFilters:
         return cls(
             project=getattr(args, "project", None),
             since=getattr(args, "since", None),
@@ -269,7 +270,7 @@ class SessionFilters:
 # ============================================================
 
 
-def prompt_text(rec: dict) -> Optional[str]:
+def prompt_text(rec: dict) -> str | None:
     """type=user レコードから「人間が打った実プロンプト」の本文を返す。
 
     tool_result・メタ挿入・スラッシュコマンドのエコー・compact 要約・
@@ -555,7 +556,7 @@ def tools_report(stats: list, filters: SessionFilters, by_project: bool) -> dict
     return result
 
 
-def usage_report(stats: list, filters: SessionFilters, by: Optional[str]) -> dict:
+def usage_report(stats: list, filters: SessionFilters, by: str | None) -> dict:
     total = TokenUsage()
     grouped: dict = {}
     peak = []
@@ -609,7 +610,7 @@ def usage_report(stats: list, filters: SessionFilters, by: Optional[str]) -> dic
 
 
 def history_slash_counts(
-    entries: Iterable[dict], project: Optional[str], since: Optional[datetime]
+    entries: Iterable[dict], project: str | None, since: datetime | None
 ) -> dict:
     """history.jsonl のレコード列からスラッシュコマンド頻度を数える。"""
     counts = Counter()
@@ -700,7 +701,7 @@ def transcript_turns(records: Iterable[dict], max_chars: int, include_tools: boo
     return turns
 
 
-def ccusage_argv(since: Optional[str], until: Optional[str], session: Optional[str]) -> list:
+def ccusage_argv(since: str | None, until: str | None, session: str | None) -> list:
     """フィルタ条件から ccusage の引数列を組み立てる（純粋）。
 
     トークン総量・コスト算出は ccusage（重複レコードの排除とモデル別価格計算を
@@ -773,7 +774,7 @@ def skill_inventory_entry(dir_name: str, skill_md_text: str, subdirs: set) -> di
 # ============================================================
 
 
-def resolve_config_dir(override: Optional[str], env: Optional[dict] = None) -> tuple:
+def resolve_config_dir(override: str | None, env: dict | None = None) -> tuple:
     """設定ディレクトリと、その決定根拠を返す。env は注入可能（テスト用）。"""
     environ = env if env is not None else os.environ
     if override:
@@ -863,14 +864,14 @@ def read_json_file(path: Path):
         return None
 
 
-def read_text_file(path: Path) -> Optional[str]:
+def read_text_file(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
 
 
-def find_ccusage() -> Optional[list]:
+def find_ccusage() -> list | None:
     """ccusage の起動コマンドを探す。直インストール → bunx → npx の順。"""
     if shutil.which("ccusage"):
         return ["ccusage"]
@@ -881,7 +882,7 @@ def find_ccusage() -> Optional[list]:
     return None
 
 
-def run_ccusage(runner: list, argv: list, config_dir: Path) -> Optional[Any]:
+def run_ccusage(runner: list, argv: list, config_dir: Path) -> Any | None:
     """ccusage を実行して JSON を返す。失敗時は None（呼び出し側でフォールバック）。
 
     --config-dir 上書き時も同じデータを見るよう CLAUDE_CONFIG_DIR を子プロセスに
@@ -1195,7 +1196,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: list | None = None) -> int:
     args = build_parser().parse_args(argv)
     config_dir, source = resolve_config_dir(args.config_dir)
     if not config_dir.is_dir():
