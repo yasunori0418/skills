@@ -115,8 +115,8 @@ contains "deny-msg-boundary-path" "$MSG" "$WT/.claude/task-boundary.json"
 contains "deny-msg-glob-1" "$MSG" "src/client/**"
 contains "deny-msg-glob-2" "$MSG" "tests/client/**"
 contains "deny-msg-glob-3" "$MSG" "config/*.toml"
-contains "deny-msg-unlock-user-edit" "$MSG" "ユーザーが"
-contains "deny-msg-unlock-手順" "$MSG" "allow を手で編集"
+contains "deny-msg-unlock-report" "$MSG" "report.sh"
+contains "deny-msg-unlock-手順" "$MSG" "widen_boundary.sh"
 
 # --- 境界ファイル自身への書き込み -> deny（自己解錠の封じ） ----------------
 check "deny-self-unlock" "deny" "$(decision "$WT" Write "$WT/.claude/task-boundary.json")"
@@ -124,7 +124,8 @@ check "deny-self-unlock-edit" "deny" "$(decision "$WT" Edit "$WT/.claude/task-bo
 SELF_MSG=$(reason "$WT" Edit "$WT/.claude/task-boundary.json")
 contains "self-msg-self-unlock" "$SELF_MSG" "自己解錠"
 contains "self-msg-path" "$SELF_MSG" "$WT/.claude/task-boundary.json"
-contains "self-msg-unlock-手順" "$SELF_MSG" "ユーザーが"
+contains "self-msg-unlock-report" "$SELF_MSG" "report.sh"
+contains "self-msg-unlock-手順" "$SELF_MSG" "widen_boundary.sh"
 
 # allow に境界ファイル自身を含めても deny される（自己解錠の封じが優先）
 WT2="$TMP/wt2"
