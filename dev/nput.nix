@@ -18,10 +18,6 @@ let
     # mattpocock/skills
     {
       src = inputs.matt-skills;
-      subpath = "skills/productivity/writing-great-skills"; # SKILL.md 執筆の語彙・原則リファレンス
-    }
-    {
-      src = inputs.matt-skills;
       subpath = "skills/productivity/grilling"; # 曖昧な設計判断を1問ずつ・推奨案付きで詰める
     }
     {
