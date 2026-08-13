@@ -299,7 +299,7 @@ def prompt_text(rec: dict) -> str | None:
         return None
     if "<command-name>" in text or "<local-command-stdout>" in text:
         return None
-    if text.startswith("<task-notification>") or text.startswith("<system-reminder>"):
+    if text.startswith(("<task-notification>", "<system-reminder>")):
         return None
     return text
 
@@ -619,9 +619,12 @@ def history_slash_counts(
         if not isinstance(rec, dict):
             continue
         ts_ms = rec.get("timestamp")
-        if since and isinstance(ts_ms, (int, float)):
-            if datetime.fromtimestamp(ts_ms / 1000, tz=JST) < since:
-                continue
+        if (
+            since
+            and isinstance(ts_ms, (int, float))
+            and datetime.fromtimestamp(ts_ms / 1000, tz=JST) < since
+        ):
+            continue
         if project and project.lower() not in str(rec.get("project", "")).lower():
             continue
         total += 1
