@@ -1,6 +1,6 @@
 ---
 name: project-session
-description: "ghq 管理下のプロジェクトを 1 つ選び、そのディレクトリでブランチを変えずに claude を detached セッション（herdr 管理下なら tab、それ以外は tmux）として起動する。`/project-session` の明示実行専用。"
+description: "ghq 管理下のプロジェクトを 1 つ選び、そのディレクトリでブランチを変えずに claude を detached セッション（herdr 管理下なら新しい workspace、それ以外は tmux）として起動する。`/project-session` の明示実行専用。"
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[プロジェクト名(部分一致可)] [claudeへ渡す引数...]"
@@ -18,7 +18,7 @@ claude を **detached セッション**として起動する単発オーケス�
 
 | backend | 条件 | 起動先 |
 | --- | --- | --- |
-| `herdr` | `HERDR_ENV=1`（herdr 管理下の pane から実行） | 現在の workspace に tab を追加し、その root pane で claude を起動 |
+| `herdr` | `HERDR_ENV=1`（herdr 管理下の pane から実行） | プロジェクト用の新しい workspace を作成し、その root pane で claude を起動 |
 | `tmux` | それ以外 | detached な tmux セッション |
 
 `PROJECT_SESSION_BACKEND` に `herdr` / `tmux` を設定すれば明示的に上書きもできる（通常は不要）。
@@ -55,7 +55,7 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
   BRANCH: main
   DIRTY: clean | N files
   CLAUDE_ARGS: (無し | 実際に渡した引数列)
-  ATTACH: tmux attach -t nput | herdr（tab ラベル: nput）に切り替える
+  ATTACH: tmux attach -t nput | herdr（workspace ラベル: nput）に切り替える
   ```
 
 ## フロー
@@ -77,16 +77,16 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
 - **セッション名**: repo 名を sanitize（`[^A-Za-z0-9_-]+`→`-`、前後 `-` 除去。例 `arto.vim`→`arto-vim`）。
   ghq list 内で repo 名（basename）が重複する場合のみ `owner-repo`（例 `NixOS-nixpkgs`）。
 - **同名セッション**: 使用中なら `<base>-2`, `<base>-3`… の最初の空き番号を suffix する。
-  既存名は backend から引く（tmux はセッション名、herdr は現在 workspace の tab ラベル）。
+  既存名は backend から引く（tmux はセッション名、herdr は workspace ラベル）。
 - **`--remote-control` 補完**: 値なしの `--remote-control`（末尾、または直後が `-` 始まり）のときだけ、
   実セッション名（suffix 込み）を値として自動注入する。ユーザーが値を書いた場合は触らない（最初の 1 個のみ）。
 - **事前チェック**: backend に必要なコマンド（`herdr` または `tmux`）と `ghq`/`claude` の欠落のみ中断。
   現在ブランチ・dirty は報告するだけで止めない。
-- **herdr backend**: workspace は増やさず、現在の workspace（`$HERDR_WORKSPACE_ID`）に tab を足す。
-  `--no-focus` で起動するので画面は奪われない。
+- **herdr backend**: プロジェクトごとに新しい workspace を作る（workspace はリポジトリ単位の
+  長寿命コンテナ）。`--no-focus` で起動するので画面は奪われない。
 
 ## 連携スキル
 
 - `parallel-worktree`: worktree を分けて複数セッションを並列・stacked に回したいときはこちら（本スキルは単発版）。
-- `lane-ops`: herdr backend で起動した tab を親から監視・操縦したいときはこちら（起動は本スキル、
+- `lane-ops`: herdr backend で起動した workspace を親から監視・操縦したいときはこちら（起動は本スキル、
   起動後の操縦・承認代行は lane-ops の領分）。

@@ -7,8 +7,8 @@
 # ここへ集約し、SKILL.md 側でロジックを二重管理しない。
 #
 # マルチプレクサ backend は実行環境から自動判定する（detect_backend）:
-#   - herdr: HERDR_ENV=1（herdr 管理下の pane から起動された）。現在の
-#     workspace に tab を足し、その root pane で claude を起動する
+#   - herdr: HERDR_ENV=1（herdr 管理下の pane から起動された）。プロジェクト用の
+#     新しい workspace を作り、その root pane で claude を起動する
 #   - tmux:  それ以外。detached な tmux セッションとして起動する
 # PROJECT_SESSION_BACKEND で明示的に上書きもできる。
 #
@@ -175,13 +175,13 @@ backend_required_tools() {
 }
 
 # backend_existing_names <backend>
-# 既存セッション名（tmux）/ tab ラベル（herdr）を 1 行 1 件で返す。
+# 既存セッション名（tmux）/ workspace ラベル（herdr）を 1 行 1 件で返す。
 # 取得できない場合（サーバ未起動など）は空扱いにする。
 backend_existing_names() {
     case "$1" in
     herdr)
-        herdr tab list --workspace "${HERDR_WORKSPACE_ID:-}" 2>/dev/null |
-            jq -r '.result.tabs[]?.label // empty' 2>/dev/null || true
+        herdr workspace list 2>/dev/null |
+            jq -r '.result.workspaces[]?.label // empty' 2>/dev/null || true
         ;;
     *)
         tmux list-sessions -F '#{session_name}' 2>/dev/null || true
@@ -195,14 +195,16 @@ backend_launch() {
     local backend="$1" sess="$2" abs_path="$3" inner="$4"
     case "$backend" in
     herdr)
-        # 現在の workspace に tab を足し、その root pane で claude を起動する。
-        # workspace はリポジトリ単位の長寿命コンテナなので増やさない。
+        # プロジェクト用の新しい workspace を作り、その root pane で claude を
+        # 起動する。workspace はリポジトリ単位の長寿命コンテナなので、別の
+        # プロジェクトを開くときは現在の workspace に tab を足すのではなく
+        # workspace を増やす。
         local resp pane
-        resp=$(herdr tab create --workspace "${HERDR_WORKSPACE_ID:-}" \
+        resp=$(herdr workspace create \
             --cwd "$abs_path" --label "$sess" --no-focus) || return 1
         pane=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
         if [ -z "$pane" ] || [ "$pane" = "null" ]; then
-            printf 'error: herdr tab の root pane を取得できません\n' >&2
+            printf 'error: herdr workspace の root pane を取得できません\n' >&2
             return 1
         fi
         herdr pane run "$pane" "$inner"
@@ -217,7 +219,7 @@ backend_launch() {
 # 起動したセッションへ合流する方法を 1 行で返す。
 backend_attach_hint() {
     case "$1" in
-    herdr) printf 'herdr（tab ラベル: %s）に切り替える' "$2" ;;
+    herdr) printf 'herdr（workspace ラベル: %s）に切り替える' "$2" ;;
     *) printf 'tmux attach -t %s' "$2" ;;
     esac
 }
