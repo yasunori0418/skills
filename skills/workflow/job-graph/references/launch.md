@@ -2,25 +2,34 @@
 
 `plan_orchestration.py` の `COMMANDS` 各ブロックがやっていることの解説。**このレシピを手で組み立てず、スクリプトの出力を使う。**
 
-## task の起動（現在 workspace に tab 追加）
+## レーン先頭の起動（workspace 作成）
 
-並列・直列を問わず、全 task は親の現在 workspace の tab として起動する（workspace・session は増やさない）。
+レーン（直列チェーン）ごとに workspace を 1 つ立てる。レーン先頭の task は `herdr workspace create` の root pane で起動する。
 
 ```bash
-resp=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$PWD" --label refactor-logger --no-focus)
+resp=$(herdr workspace create --cwd "$PWD" --label refactor-logger --no-focus)
+WS_LANE_0=$(printf '%s' "$resp" | jq -r '.result.workspace.workspace_id')
 PANE_A=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
 herdr pane run "$PANE_A" 'wt switch --create refactor-logger --base main -x claude -- "$(cat <prompt-dir>/A.md)"'
 ```
 
-- workspace は `$HERDR_WORKSPACE_ID`（herdr が親の pane へ注入する呼び出しコンテキスト）で明示し、UI フォーカス依存を避ける
+- workspace のラベルはレーン先頭のブランチ名。並列レーンは workspace が並ぶ
 - `--no-focus` でユーザーの現在フォーカスを奪わない。ID は JSON 応答から jq で掴む（予測しない）
 - `wt switch --create` が worktree を作り、`-x claude` で wt プロセスが claude に置き換わる。herdr は pane 内の claude をエージェントとして自動認識する
 - **`--base` は常に明示**される。省略すると wt はリポジトリの default branch から切るため、spec の意図と食い違う事故が起きる
 - プロンプトは複数行のためファイル渡し。`"$(cat <path>)"` は pane の shell が展開し、wt が EXECUTE_ARGS として shell-escape して claude に 1 引数で渡す
 
-## 直列の次段
+## 直列の次段（同 workspace への tab 追加）
 
-コマンドの形は同じ（`--base` が前段ブランチになるだけ）。起動は**前段の PR 作成を確認してから**（`gh pr list --head <前段ブランチ>` が非空）。コミット数到達をゲートにしない（前段の amend で base がずれ restack を誘発する）。
+stacked の後続段は、そのレーンの workspace へ `herdr tab create` で tab を足して起動する。workspace ID はレーン先頭のラベルから `herdr workspace list` で再解決する（wave 間で shell が変わっても動くように。変数の持ち越しに依存しない）。
+
+```bash
+WS_LANE_0=$(herdr workspace list | jq -r '.result.workspaces[] | select(.label == "refactor-logger") | .workspace_id' | head -n1)
+resp=$(herdr tab create --workspace "$WS_LANE_0" --cwd "$PWD" --label refactor-logger-2 --no-focus)
+PANE_B=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
+```
+
+起動コマンドの形はレーン先頭と同じ（`--base` が前段ブランチになるだけ）。起動は**前段の PR 作成を確認してから**（`gh pr list --head <前段ブランチ>` が非空）。コミット数到達をゲートにしない（前段の amend で base がずれ restack を誘発する）。
 
 ## 起動オプション
 

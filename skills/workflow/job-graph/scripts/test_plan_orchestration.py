@@ -193,11 +193,16 @@ def test_render_base_always_explicit():
     assert "--create br-A --base develop" in out
 
 
-def test_render_all_tasks_launch_as_tabs():
+def test_render_lane_head_creates_workspace_and_stacked_adds_tab():
     out = rendered([task("A"), task("B", deps=["A"]), task("C")])
-    # 並列・直列を問わず全 task が現在 workspace の tab（workspace は増やさない）
-    assert "herdr workspace create" not in out
-    assert out.count('herdr tab create --workspace "$HERDR_WORKSPACE_ID"') == 3
+    # レーン先頭（A・C）は workspace create、stacked の後続段（B）は
+    # レーンの workspace への tab create
+    assert out.count("herdr workspace create") == 2
+    assert out.count('herdr tab create --workspace "$WS_LANE_0"') == 1
+    assert "$HERDR_WORKSPACE_ID" not in out
+    # 後続段の workspace ID はレーン先頭のラベルから再解決する
+    assert 'herdr workspace list | jq -r \'.result.workspaces[] | select(.label == "br-A")' in out
+    assert ".result.workspace.workspace_id" in out
     assert ".result.root_pane.pane_id" in out
 
 

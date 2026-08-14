@@ -1,6 +1,6 @@
 ---
 name: job-graph
-description: "計画ファイルまたは epic issue からタスクの依存グラフ（直列・並列混在）を組み、worktrunk の worktree と herdr の tab 上で各タスクの claude を起動して stacked PR 作成まで完遂するオーケストレーション（HERDR_ENV=1 必須）。`/job-graph` の明示実行専用。"
+description: "計画ファイルまたは epic issue からタスクの依存グラフ（直列・並列混在）を組み、worktrunk の worktree と herdr のレーン別 workspace（stacked は tab）上で各タスクの claude を起動して stacked PR 作成まで完遂するオーケストレーション（HERDR_ENV=1 必須）。`/job-graph` の明示実行専用。"
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[計画ファイルのパス | epic issue 番号] [--parent-name <name>] [--remote-control] [--model <model>] [--permission-mode <mode>] [--effort <level>]"
@@ -20,7 +20,7 @@ allowed-tools: Bash, Read, AskUserQuestion, ExitPlanMode
 5. **push と PR 作成は計画承認済みの前提。** Phase 1 の plan 承認がそのまま push・`/pr-create` の承認を兼ねる。親は計画の範囲内である限り、各レーンの対話ゲートに自分で応答し、個別にユーザーへ確認しない。ユーザーへ上げるのは**計画の範囲外だけ**（境界の拡大要求・スコープ逸脱・計画の前提と実態の食い違い）。
 6. **レーンの操縦・監視・承認代行は lane-ops スキルに従う。** 指示送信・blocked 検知・報告受信・機械検証・境界拡張はすべて lane-ops の運用ループとスクリプトで行う。job-graph が定めるのはグラフと起動までであり、運用規約を重複して定義しない。
 
-herdr 上では**全 task を親の現在 workspace の tab として起動する**（並列も直列も tab。workspace はリポジトリ・調査ごとの長寿命コンテナなので増やさず、session はランタイム名前空間が分かれて親の socket からレーンへ到達できなくなるため使わない）。直列チェーンのグルーピングと各 ID の取り回しはスクリプトが `LANES` / `COMMANDS` として決定論的に算出する。手で決めない。
+herdr 上では**レーン（直列チェーン）ごとに workspace を立てる**。レーン先頭の task は `herdr workspace create` の root pane で起動し、stacked の後続段は同じレーンの workspace へ `herdr tab create` で tab を足して起動する（並列レーン = workspace の並び。session はランタイム名前空間が分かれて親の socket からレーンへ到達できなくなるため使わない）。レーン割当と各 ID の取り回しはスクリプトが `LANES` / `COMMANDS` として決定論的に算出する。手で決めない。
 
 ## 決定論ツール（scripts/）と AI の責務分担
 
@@ -98,7 +98,7 @@ lane-ops スキルの運用ループに従う: `watch_events.py --status blocked
 ### Phase 5: 後始末
 
 - 進捗確認: `wt list`
-- 全レーンのマージ後: `/post-merge-cleanup` を案内する。herdr の tab は**自分が作ったものだけ**閉じる（`herdr tab close`）
+- 全レーンのマージ後: `/post-merge-cleanup` を案内する。herdr の workspace / tab は**自分が作ったものだけ**閉じる（`herdr workspace close` / `herdr tab close`）
 - stacked の restack が必要になったら `references/restack.md` に従う
 
 ## 連携スキル・参照

@@ -8,10 +8,11 @@ AI の責務は spec（特に depends_on の意味的判定と boundary の範�
 順序・base・クォート・ワーカー指示の標準セクションはこのスクリプトが保証する。
 
 設計上の要点:
-- 実行基盤は herdr。全 task を親の現在 workspace の tab として起動する
-  （workspace はリポジトリ・調査ごとの長寿命コンテナであり増やさない。session は
-  ランタイム名前空間が分かれ、親の socket からレーンへ到達できなくなるため使わない。
-  直列チェーンのグルーピングは論理情報として LANES に出す）
+- 実行基盤は herdr。レーン（直列チェーン）ごとに workspace を立てる:
+  レーン先頭の task は `herdr workspace create` の root pane で起動し、stacked の
+  後続段は同じレーンの workspace へ `herdr tab create` で tab を足して起動する
+  （並列レーン = workspace の並び。session はランタイム名前空間が分かれ、
+  親の socket からレーンへ到達できなくなるため使わない）
 - stacked の起動ゲートは「前段の PR 作成」
 - worktree 生成は常に `wt switch --create --base <解決済み base>`（base は必ず明示する）
 - ワーカープロンプトは herdr pane へ流し込める長さに限界があるためファイル渡し
@@ -52,10 +53,10 @@ spec の形:
 - issue は任意の GitHub issue 番号。ワーカー指示に issue 参照と PR へのリンク指示が載る。
 - model / permission_mode / effort / boundary の意味は parallel-worktree と同じ。
 
-レーン割当（論理グルーピング。起動トポロジは全 task とも tab）:
+レーン割当（= workspace 割当。レーン先頭が workspace、後続段はその tab）:
 - 依存が無い、または親に複数の子がいる task は新しいレーンを開始する。
 - 親の唯一の子である task は親のレーンに合流する（直列チェーン）。
-- レーンは SCHEDULE/PR 戦略を読むための論理情報で、workspace の割当には使わない。
+- レーン先頭 task の起動が workspace create、合流 task の起動は同 workspace への tab create。
 
 終了コード: 致命的検証エラー（循環・未定義参照・重複・必須欠落）があれば 1、警告のみなら 0。
 
@@ -249,7 +250,7 @@ def compute_levels(plan: Plan) -> dict[str, int]:
 
 
 def compute_lanes(plan: Plan, levels: dict[str, int]) -> tuple[tuple[tuple[str, ...], ...], dict[str, int]]:
-    """グラフ -> 論理レーン割当（直列チェーンのグルーピング。表示・計画用）。
+    """グラフ -> レーン割当（直列チェーンのグルーピング = workspace 割当）。
 
     規則（決定論）: 依存無し、または親に複数の子がいる task は新レーンを開始。
     親の唯一の子はレーンに合流。複数親は先頭親で判定。
@@ -455,8 +456,10 @@ def render(
     """Plan + Analysis -> 人間/AI 向けテキスト出力（純粋）。
 
     COMMANDS は herdr の JSON 応答から ID を掴む shell ブロックで出力する（jq 必須）。
-    workspace / tab の作成→root pane への `wt switch --create ... -x claude` 流し込み、
-    stacked の PR 作成ゲート、プロンプトのファイル渡しまでを列挙する。
+    レーン先頭の workspace 作成 / 後続段の tab 作成 → root pane への
+    `wt switch --create ... -x claude` 流し込み、stacked の PR 作成ゲート、
+    プロンプトのファイル渡しまでを列挙する。後続段の workspace ID はラベルから
+    `herdr workspace list` で再解決する（wave 間で shell が変わっても動くように）。
     """
     out: list[str] = []
     out.append("=== VALIDATION ===")
@@ -482,7 +485,7 @@ def render(
         kind = "独立・並列" if level == 0 else f"stacked {level}段目"
         out.append(f"  wave {level} ({kind}): {', '.join(wave)}")
 
-    out.append("\n=== LANES (論理レーン: 直列チェーンのグルーピング。起動は全 task とも現在 workspace の tab) ===")
+    out.append("\n=== LANES (レーン = workspace: 先頭 task が workspace create、後続段は同 workspace への tab) ===")
     for i, lane in enumerate(an.lanes):
         chain = " -> ".join(lane)
         out.append(f"  lane {i}: {chain}")
@@ -542,14 +545,38 @@ def render(
             sess = sanitize(t.branch)
             lane = an.lane_of[t.id]
             pane_var = shell_var("PANE_", t.id)
+            ws_var = f"WS_LANE_{lane}"
+            is_lane_head = an.lanes[lane][0] == t.id
             out.append(f"\n# --- {t.id} ({t.branch}) lane {lane} ---")
-            # 全 task を親の現在 workspace の tab として起動する。workspace は
-            # $HERDR_WORKSPACE_ID で明示し、UI フォーカス依存を避ける。
-            out.append(
-                f"resp=$(herdr tab create --workspace \"$HERDR_WORKSPACE_ID\""
-                f" --cwd \"$PWD\" --label {shlex.quote(sess)} --no-focus)"
-            )
-            out.append(f"{pane_var}=$(printf '%s' \"$resp\" | jq -r '.result.root_pane.pane_id')")
+            if is_lane_head:
+                # レーン先頭はレーン専用の workspace を立て、その root pane で起動する
+                # （ラベル = 先頭ブランチ名。後続段はこのラベルで workspace を再解決する）。
+                out.append(
+                    f"resp=$(herdr workspace create"
+                    f" --cwd \"$PWD\" --label {shlex.quote(sess)} --no-focus)"
+                )
+                out.append(
+                    f"{ws_var}=$(printf '%s' \"$resp\" | jq -r '.result.workspace.workspace_id')"
+                )
+                out.append(
+                    f"{pane_var}=$(printf '%s' \"$resp\" | jq -r '.result.root_pane.pane_id')"
+                )
+            else:
+                # stacked の後続段はレーンの workspace へ tab を足す。workspace ID は
+                # レーン先頭のラベルから再解決する（wave 間で shell が変わっても動く）。
+                head_label = sanitize(by_id[an.lanes[lane][0]].branch)
+                out.append(
+                    f"{ws_var}=$(herdr workspace list | jq -r"
+                    f" '.result.workspaces[] | select(.label == {json.dumps(head_label)})"
+                    f" | .workspace_id' | head -n1)"
+                )
+                out.append(
+                    f"resp=$(herdr tab create --workspace \"${ws_var}\""
+                    f" --cwd \"$PWD\" --label {shlex.quote(sess)} --no-focus)"
+                )
+                out.append(
+                    f"{pane_var}=$(printf '%s' \"$resp\" | jq -r '.result.root_pane.pane_id')"
+                )
             # claude 引数列: 起動フラグ -> --remote-control（オプトイン）->
             # プロンプト（ファイルから読む）。プロンプトは複数行のため直接埋め込まず
             # "$(cat <path>)" で pane の shell に展開させる（wt は EXECUTE_ARGS を
