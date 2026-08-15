@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Verifies launch.sh の純関数（外部コマンド ghq/tmux/claude に触れない部分）。
 #   - sanitize / resolve_matches / session_base_name / next_session_name /
-#     inject_remote_control を source して単体検証する。
+#     inject_remote_control / detect_backend / detect_topology /
+#     herdr_session_name / backend_attach_hint を source して単体検証する。
 #   - ghq list の fixture はヒアドキュメントで固定し実環境に依存しない。
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -125,5 +126,21 @@ check "hsession:named" "sub" "$(herdr_session_name sub)"
 check "hsession:default" "default" "$(herdr_session_name default)"
 check "hsession:empty" "default" "$(herdr_session_name '')"
 check "hsession:unset" "default" "$(herdr_session_name)"
+
+# detect_topology: 既定は workspace、PROJECT_SESSION_TOPOLOGY で上書きする。
+check "topology:default" "workspace" "$(detect_topology '')"
+check "topology:unset" "workspace" "$(detect_topology)"
+check "topology:session" "session" "$(detect_topology session)"
+check "topology:explicit-workspace" "workspace" "$(detect_topology workspace)"
+
+# backend_attach_hint: topology=session だけ attach コマンドをそのまま案内する
+# （detached で立てた session はユーザーが attach するまで画面に現れないため）。
+check "attach:herdr-workspace" "herdr（workspace ラベル: nput）に切り替える" \
+    "$(backend_attach_hint herdr nput workspace)"
+check "attach:herdr-session" "herdr session attach nput" \
+    "$(backend_attach_hint herdr nput session)"
+check "attach:herdr-default-topology" "herdr（workspace ラベル: nput）に切り替える" \
+    "$(backend_attach_hint herdr nput)"
+check "attach:tmux" "tmux attach -t nput" "$(backend_attach_hint tmux nput session)"
 
 exit "$fail"

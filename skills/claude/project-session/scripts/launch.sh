@@ -14,8 +14,15 @@
 #   - tmux:  それ以外。detached な tmux セッションとして起動する
 # PROJECT_SESSION_BACKEND で明示的に上書きもできる。
 #
+# herdr backend で作る単位は PROJECT_SESSION_TOPOLOGY で切り替える（detect_topology）:
+#   - workspace（既定）: 起動元 pane と同じ session に workspace を足す
+#   - session: プロジェクト専用の herdr session を detached で立て、その中で起動する。
+#     子 pane には新 session のソケットが注入されるため、その session 内で
+#     job-graph / lane-ops が完結する（親子が同じソケットを見る）
+#
 # 純関数（sanitize/resolve_matches/session_base_name/next_session_name/
-# inject_remote_control/detect_backend）は外部コマンド（ghq/tmux/herdr/claude）を
+# inject_remote_control/detect_backend/detect_topology/herdr_session_name/
+# backend_attach_hint）は外部コマンド（ghq/tmux/herdr/claude）を
 # 呼ばず、入力は引数と stdin のみ。これにより CI sandbox（jq/git のみ、
 # ghq/tmux/herdr/claude 無し）で
 # `source launch.sh` してテストできる。impure な処理は main とサブコマンドに閉じ、
@@ -38,6 +45,21 @@ detect_backend() {
     else
         printf 'tmux'
     fi
+}
+
+# detect_topology [override]
+# herdr backend で作る単位（workspace | session）を決める。
+#   override（PROJECT_SESSION_TOPOLOGY）が非空ならそれ、未指定なら workspace。
+# workspace: 起動元 pane と同じ session に workspace を足す（既定）。
+# session:   プロジェクト専用の herdr session を detached で立て、その中で起動する。
+#            その session 内で job-graph / lane-ops を完結させたいときに使う
+#            （子 pane には新 session のソケットが注入されるため、session 内で
+#            親子が同じソケットを見る）。
+# tmux backend では無視される（tmux は常に detached セッション 1 つ）。
+# 外部コマンドを呼ばないので単体テストできる。
+detect_topology() {
+    local override="${1:-}"
+    printf '%s' "${override:-workspace}"
 }
 
 # herdr_session_name [env_value]
@@ -190,15 +212,25 @@ backend_required_tools() {
     esac
 }
 
-# backend_existing_names <backend>
-# 既存セッション名（tmux）/ workspace ラベル（herdr）を 1 行 1 件で返す。
-# 取得できない場合（サーバ未起動など）は空扱いにする。
+# backend_existing_names <backend> [topology]
+# 名前衝突の判定対象を 1 行 1 件で返す。取得できない場合（サーバ未起動など）は
+# 空扱いにする。衝突を見る先は作る単位によって変わる:
+#   tmux                      -> 既存セッション名
+#   herdr + topology=workspace -> 現在 session の workspace ラベル
+#   herdr + topology=session   -> herdr の session 名（停止中も含む。同名 session を
+#                                 作ると既存の状態に相乗りしてしまうため）
 backend_existing_names() {
-    case "$1" in
+    local backend="$1" topology="${2:-workspace}"
+    case "$backend" in
     herdr)
-        herdr --session "$(herdr_session_name "${HERDR_SESSION:-}")" \
-            workspace list 2>/dev/null |
-            jq -r '.result.workspaces[]?.label // empty' 2>/dev/null || true
+        if [ "$topology" = "session" ]; then
+            herdr session list --json 2>/dev/null |
+                jq -r '.sessions[]?.name // empty' 2>/dev/null || true
+        else
+            herdr --session "$(herdr_session_name "${HERDR_SESSION:-}")" \
+                workspace list 2>/dev/null |
+                jq -r '.result.workspaces[]?.label // empty' 2>/dev/null || true
+        fi
         ;;
     *)
         tmux list-sessions -F '#{session_name}' 2>/dev/null || true
@@ -206,18 +238,46 @@ backend_existing_names() {
     esac
 }
 
-# backend_launch <backend> <sess> <abs_path> <inner>
+# herdr_start_session <sess> [timeout_sec]
+# 名前付き herdr session を detached の headless server として起動し、socket API が
+# 応答するまで待つ。socket API 自体には server を起こす力が無く
+# （`server_not_running` を返す）、`herdr session attach` は TUI に入る対話コマンドの
+# ため、detached 起動は `herdr --session <name> server` を background に置く形をとる。
+herdr_start_session() {
+    local sess="$1" timeout_sec="${2:-30}" waited=0
+    nohup herdr --session "$sess" server >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+    while ! herdr --session "$sess" workspace list >/dev/null 2>&1; do
+        if [ "$waited" -ge "$timeout_sec" ]; then
+            printf 'error: herdr session %s が %s 秒以内に起動しません\n' \
+                "$sess" "$timeout_sec" >&2
+            return 1
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+}
+
+# backend_launch <backend> <sess> <abs_path> <inner> [topology]
 # claude を detached に起動する。inner は shell へ渡す単一コマンド文字列。
 backend_launch() {
-    local backend="$1" sess="$2" abs_path="$3" inner="$4"
+    local backend="$1" sess="$2" abs_path="$3" inner="$4" topology="${5:-workspace}"
     case "$backend" in
     herdr)
-        # プロジェクト用の新しい workspace を作り、その root pane で claude を
-        # 起動する。workspace はリポジトリ単位の長寿命コンテナなので、別の
-        # プロジェクトを開くときは現在の workspace に tab を足すのではなく
-        # workspace を増やす。
         local resp pane hsess
-        hsess=$(herdr_session_name "${HERDR_SESSION:-}")
+        if [ "$topology" = "session" ]; then
+            # プロジェクト専用の herdr session を detached で立て、その中に
+            # workspace を作って起動する。子 pane には新 session のソケットが
+            # 注入されるので、その session 内で job-graph / lane-ops が完結する。
+            herdr_start_session "$sess" || return 1
+            hsess="$sess"
+        else
+            # プロジェクト用の新しい workspace を作り、その root pane で claude を
+            # 起動する。workspace はリポジトリ単位の長寿命コンテナなので、別の
+            # プロジェクトを開くときは現在の workspace に tab を足すのではなく
+            # workspace を増やす。
+            hsess=$(herdr_session_name "${HERDR_SESSION:-}")
+        fi
         resp=$(herdr --session "$hsess" workspace create \
             --cwd "$abs_path" --label "$sess" --no-focus) || return 1
         pane=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
@@ -233,12 +293,21 @@ backend_launch() {
     esac
 }
 
-# backend_attach_hint <backend> <sess>
-# 起動したセッションへ合流する方法を 1 行で返す。
+# backend_attach_hint <backend> <sess> [topology]
+# 起動したセッションへ合流する方法を 1 行で返す。detached で立てた herdr session は
+# ユーザーが attach するまで画面に現れないので、コマンドをそのまま案内する
+# （現在の TUI は奪わない）。外部コマンドを呼ばないので単体テストできる。
 backend_attach_hint() {
-    case "$1" in
-    herdr) printf 'herdr（workspace ラベル: %s）に切り替える' "$2" ;;
-    *) printf 'tmux attach -t %s' "$2" ;;
+    local backend="$1" sess="$2" topology="${3:-workspace}"
+    case "$backend" in
+    herdr)
+        if [ "$topology" = "session" ]; then
+            printf 'herdr session attach %s' "$sess"
+        else
+            printf 'herdr（workspace ラベル: %s）に切り替える' "$sess"
+        fi
+        ;;
+    *) printf 'tmux attach -t %s' "$sess" ;;
     esac
 }
 
@@ -284,9 +353,10 @@ cmd_launch() {
     shift
     local -a claude_args=("$@")
 
-    # 1. backend 判定 + 必須コマンドの存在確認（欠落は名指しでエラー）。
-    local backend
+    # 1. backend / topology 判定 + 必須コマンドの存在確認（欠落は名指しでエラー）。
+    local backend topology
     backend=$(detect_backend "${HERDR_ENV:-}" "${PROJECT_SESSION_BACKEND:-}")
+    topology=$(detect_topology "${PROJECT_SESSION_TOPOLOGY:-}")
     local tool missing=0
     while IFS= read -r tool; do
         [ -n "$tool" ] || continue
@@ -330,7 +400,7 @@ cmd_launch() {
     # 4. セッション名決定（既存一覧は backend から。取得不能時は空扱い）。
     local base existing sess
     base=$(printf '%s\n' "$list" | session_base_name "$relpath")
-    existing=$(backend_existing_names "$backend")
+    existing=$(backend_existing_names "$backend" "$topology")
     sess=$(printf '%s\n' "$existing" | next_session_name "$base")
 
     # 5. inject_remote_control で claude 引数を確定（NUL 区切りで受け取る）。
@@ -342,7 +412,7 @@ cmd_launch() {
     # 6. 起動。shell-command は単一文字列で渡す。クォートは printf '%q ' で機械生成。
     local inner
     inner=$(printf '%q ' claude "${final_args[@]}")
-    backend_launch "$backend" "$sess" "$abs_path" "$inner" || return 1
+    backend_launch "$backend" "$sess" "$abs_path" "$inner" "$topology" || return 1
 
     # 7. 結果報告（AI はこれをそのまま報告素材にする）。
     local branch dirty_count dirty args_report
@@ -363,12 +433,15 @@ cmd_launch() {
 
     printf 'SESSION: %s\n' "$sess"
     printf 'BACKEND: %s\n' "$backend"
+    if [ "$backend" = herdr ]; then
+        printf 'TOPOLOGY: %s\n' "$topology"
+    fi
     printf 'PROJECT: %s\n' "$relpath"
     printf 'PATH: %s\n' "$abs_path"
     printf 'BRANCH: %s\n' "$branch"
     printf 'DIRTY: %s\n' "$dirty"
     printf 'CLAUDE_ARGS: %s\n' "$args_report"
-    printf 'ATTACH: %s\n' "$(backend_attach_hint "$backend" "$sess")"
+    printf 'ATTACH: %s\n' "$(backend_attach_hint "$backend" "$sess" "$topology")"
 }
 
 main() {
