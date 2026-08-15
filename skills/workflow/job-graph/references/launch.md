@@ -11,12 +11,13 @@ HSESSION="${HERDR_SESSION:-default}"   # COMMANDS 先頭で 1 度だけ定義さ
 resp=$(herdr --session "$HSESSION" workspace create --cwd "$PWD" --label refactor-logger --no-focus)
 WS_LANE_0=$(printf '%s' "$resp" | jq -r '.result.workspace.workspace_id')
 PANE_A=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
-herdr --session "$HSESSION" pane run "$PANE_A" 'wt switch --create refactor-logger --base main -x claude -- "$(cat <prompt-dir>/A.md)"'
+herdr --session "$HSESSION" pane run "$PANE_A" 'env -u CLAUDE_CODE_CHILD_SESSION -u … wt switch --create refactor-logger --base main -x claude -- "$(cat <prompt-dir>/A.md)"'
 ```
 
 - **`--session` は全 herdr 呼び出しに明示**される。CLI は `HERDR_SESSION` / `HERDR_SOCKET_PATH` が生きていれば現在の session へ解決するが、COMMANDS を env の無い別 shell へコピペすると既定 session へ落ちる。親と同じ session にレーンが並ぶ保証を env に預けない（`herdr --session ""` は拒否されるため未設定時は `default` へ畳む）
 - workspace のラベルはレーン先頭のブランチ名。並列レーンは workspace が並ぶ
 - `--no-focus` でユーザーの現在フォーカスを奪わない。ID は JSON 応答から jq で掴む（予測しない）
+- **先頭の `env -u ...` は親セッションのマーカーを断ち切る**。claude は Bash ツールの子シェルへ自分の身元（`CLAUDE_CODE_CHILD_SESSION` / `*_SESSION_ID` / `MESSAGING_*` 等）を注入するため、COMMANDS をそのまま流すとレーンが親の子プロセスと誤認され、transcript 保存が切られる・親宛のメッセージ経路を掴む。`wt` より前に置くので wt 自身にも波及しない（対象は `plan_orchestration.py` の `INHERITED_SESSION_VARS` が正）
 - `wt switch --create` が worktree を作り、`-x claude` で wt プロセスが claude に置き換わる。herdr は pane 内の claude をエージェントとして自動認識する
 - **`--base` は常に明示**される。省略すると wt はリポジトリの default branch から切るため、spec の意図と食い違う事故が起きる
 - プロンプトは複数行のためファイル渡し。`"$(cat <path>)"` は pane の shell が展開し、wt が EXECUTE_ARGS として shell-escape して claude に 1 引数で渡す

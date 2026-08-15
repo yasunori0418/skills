@@ -237,6 +237,25 @@ def test_render_launch_uses_wt_and_prompt_file():
     assert "$(cat /tmp/jg-prompts/A.md)" in out
 
 
+def test_render_strips_parent_session_markers():
+    # 各レーンは独立したセッションなので、親セッション固有のマーカーを wt より前で
+    # 断ち切る（放置するとレーンが親の子と誤認され transcript 保存が切られる）。
+    # 境界あり（-x bash bootstrap）・境界なし（-x claude）の両経路が対象。
+    out = rendered([task("A"), task("B", boundary=["pkg/**"])])
+    launches = [ln for ln in out.splitlines() if "pane run" in ln]
+    assert len(launches) == 2
+    for ln in launches:
+        # env -u は wt より前に置く（wt 自身にもその子の claude にも渡らないように）。
+        assert "env -u CLAUDE_CODE_CHILD_SESSION" in ln
+        assert ln.index("env -u CLAUDE_CODE_CHILD_SESSION") < ln.index("wt switch")
+    for var in po.INHERITED_SESSION_VARS:
+        assert all(f"-u {var}" in ln for ln in launches)
+    # ユーザー設定・実行ファイル解決に使うものは落とさない。
+    assert "CLAUDE_CODE_EXECPATH" not in out
+    # COMMANDS をコピペした shell の環境は壊さない（unset は使わない）。
+    assert "unset CLAUDE_CODE" not in out
+
+
 def test_render_no_claude_name_flag():
     # 報告は lane-ops（herdr agent prompt）経由なので --name は付けない
     out = rendered([task("A")])

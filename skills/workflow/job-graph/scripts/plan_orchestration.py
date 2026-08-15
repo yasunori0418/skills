@@ -16,6 +16,9 @@ AI の責務は spec（特に depends_on の意味的判定と boundary の範�
 - herdr 呼び出しは全て `--session "$HSESSION"`（= `${HERDR_SESSION:-default}`）を明示する。
   CLI は env が生きていれば現在の session へ解決するが、COMMANDS を env の無い別 shell へ
   コピペすると既定 session へ落ちる。親と同じ session にレーンを並べる保証を env に預けない
+- 各レーンの claude は独立したセッションなので、起動コマンドの先頭に `env -u` を置いて
+  親（オーケストレータ）セッション固有のマーカーを断ち切る（ENV_STRIP_PREFIX）。
+  放置するとレーンが親の子プロセスと誤認され、transcript 保存が切られる等の不整合が起きる
 - stacked の起動ゲートは「前段の PR 作成」
 - worktree 生成は常に `wt switch --create --base <解決済み base>`（base は必ず明示する）
 - ワーカープロンプトは herdr pane へ流し込める長さに限界があるためファイル渡し
@@ -362,6 +365,35 @@ def launch_flags(task: Task, launch: Launch) -> list[str]:
     return flags
 
 
+# 各レーンへ引き継いではいけない、親（オーケストレータ）セッション固有の環境変数。
+#
+# claude は Bash ツールで子シェルを spawn するとき自分の身元を示すマーカーをその
+# 子シェルへ注入する（claude プロセス本体の environ には無く、子シェルにだけ現れる）。
+# COMMANDS はその子シェルから実行され、各レーンの claude は独立したセッションなので、
+# 放置するとレーンが親の子プロセスだと誤認し、
+#   - transcript 保存が切られる（CLAUDE_CODE_CHILD_SESSION）
+#   - 親宛のメッセージ経路を掴む（CLAUDE_CODE_MESSAGING_*）
+#   - 親のセッション ID を名乗る（CLAUDE_CODE_*SESSION_ID）
+# といった不整合が起きる。
+#
+# ユーザー設定由来のもの（CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY 等）や実行ファイル解決に
+# 使う CLAUDE_CODE_EXECPATH は引き継ぐので、ここには挙げない。
+# project-session の launch.sh（inherited_session_vars）と同じ対象を、言語が違うため
+# それぞれで定義する。
+INHERITED_SESSION_VARS = (
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_ENTRYPOINT",
+)
+
+# 起動コマンドの先頭へ置く env -u 列。wt より前に置くので、wt 自身にもその子の
+# claude にもマーカーが渡らない（COMMANDS をコピペした shell の環境は壊さない）。
+ENV_STRIP_PREFIX = "env" + "".join(f" -u {v}" for v in INHERITED_SESSION_VARS)
+
+
 BOUNDARY_FILE = ".claude/task-boundary.json"
 
 # 境界ファイルを worktree ローカルかつ gitignored に置くための bootstrap。
@@ -598,18 +630,21 @@ def render(
             flags = launch_flags(t, launch)
             flags_str = ("".join(f" {shlex.quote(a)}" for a in flags))
             prompt_ref = f'"$(cat {shlex.quote(ppath)})"'
+            # 親セッション固有のマーカーは wt より前で断ち切る（ENV_STRIP_PREFIX 参照）。
             if t.boundary:
                 # 境界宣言ありは -x bash の bootstrap 経由（worktree 生成後・claude 起動前に
                 # 境界ファイルを置く）。境界 JSON は 1 行なので positional で渡す。
                 inner = (
-                    f"wt switch --create {shlex.quote(t.branch)} --base {shlex.quote(base)}"
+                    f"{ENV_STRIP_PREFIX}"
+                    f" wt switch --create {shlex.quote(t.branch)} --base {shlex.quote(base)}"
                     f" -x bash -- -c {shlex.quote(BOUNDARY_BOOTSTRAP)}"
                     f" {shlex.quote('wt-boundary-' + t.id)} {shlex.quote(boundary_json(t))}"
                     f"{flags_str}{rc_args} {prompt_ref}"
                 )
             else:
                 inner = (
-                    f"wt switch --create {shlex.quote(t.branch)} --base {shlex.quote(base)}"
+                    f"{ENV_STRIP_PREFIX}"
+                    f" wt switch --create {shlex.quote(t.branch)} --base {shlex.quote(base)}"
                     f" -x claude --{flags_str}{rc_args} {prompt_ref}"
                 )
             out.append(

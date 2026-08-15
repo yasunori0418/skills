@@ -24,6 +24,8 @@ herdr 上では**レーン（直列チェーン）ごとに workspace を立て�
 
 herdr 呼び出しは `COMMANDS` 先頭で `HSESSION="${HERDR_SESSION:-default}"` を定義し、全て `--session "$HSESSION"` を明示する。CLI は env が生きていれば現在の session へ解決するが、`COMMANDS` を env の無い別 shell へコピペすると既定 session へ落ちてレーンが親と別の場所に作られる。**この明示を外さない。**
 
+各レーンの起動コマンドは先頭に `env -u ...` を置き、親（自分）のセッション固有のマーカーを断ち切る。claude は Bash ツールの子シェルへ自分の身元を注入するため、そのまま流すとレーンが親の子プロセスと誤認され、**transcript 保存が切られる**・**親宛のメッセージ経路を掴む**。**この前置も外さない**（対象は `plan_orchestration.py` の `INHERITED_SESSION_VARS` が正）。
+
 ## 決定論ツール（scripts/）と AI の責務分担
 
 AI の責務は計画ファイル・issue から「タスクと依存辺・境界」を読み取り JSON spec を組むところまで。スケジュール／レーン算出・コマンド生成・ワーカー規約の連結は決定論スクリプトに委譲する。
