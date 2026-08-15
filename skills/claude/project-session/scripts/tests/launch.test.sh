@@ -119,4 +119,11 @@ check "backend:env-other" "tmux" "$(detect_backend yes '')"
 check "backend:override-tmux" "tmux" "$(detect_backend 1 tmux)"
 check "backend:override-herdr" "herdr" "$(detect_backend '' herdr)"
 
+# herdr_session_name: HERDR_SESSION をそのまま使い、空・未設定は default へ畳む
+# （`herdr --session ""` は session name cannot be empty で拒否されるため）。
+check "hsession:named" "sub" "$(herdr_session_name sub)"
+check "hsession:default" "default" "$(herdr_session_name default)"
+check "hsession:empty" "default" "$(herdr_session_name '')"
+check "hsession:unset" "default" "$(herdr_session_name)"
+
 exit "$fail"

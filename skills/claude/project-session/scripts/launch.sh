@@ -8,7 +8,9 @@
 #
 # マルチプレクサ backend は実行環境から自動判定する（detect_backend）:
 #   - herdr: HERDR_ENV=1（herdr 管理下の pane から起動された）。プロジェクト用の
-#     新しい workspace を作り、その root pane で claude を起動する
+#     新しい workspace を作り、その root pane で claude を起動する。herdr CLI へは
+#     常に --session（herdr_session_name）を明示し、起動元 pane と同じセッションへ
+#     作る（env 依存の暗黙解決に任せると既定セッションへ流れ込む）
 #   - tmux:  それ以外。detached な tmux セッションとして起動する
 # PROJECT_SESSION_BACKEND で明示的に上書きもできる。
 #
@@ -36,6 +38,20 @@ detect_backend() {
     else
         printf 'tmux'
     fi
+}
+
+# herdr_session_name [env_value]
+# herdr CLI へ渡す --session の値を決める。
+#   env_value（HERDR_SESSION）が非空ならそれ、空・未設定なら default。
+# herdr CLI は HERDR_SESSION / HERDR_SOCKET_PATH が生きていれば現在のセッションへ
+# 解決するが、env が失われると既定セッションへ落ちる。project-session は起動した
+# pane と同じセッションに workspace を作るのが正しいので、CLI 呼び出しでは常に
+# --session を明示してこの暗黙解決に依存しない。`herdr --session ""` は
+# `session name cannot be empty` で拒否されるため、空は default へ畳む。
+# 外部コマンドを呼ばないので単体テストできる。
+herdr_session_name() {
+    local env_value="${1:-}"
+    printf '%s' "${env_value:-default}"
 }
 
 # sanitize <name>
@@ -180,7 +196,8 @@ backend_required_tools() {
 backend_existing_names() {
     case "$1" in
     herdr)
-        herdr workspace list 2>/dev/null |
+        herdr --session "$(herdr_session_name "${HERDR_SESSION:-}")" \
+            workspace list 2>/dev/null |
             jq -r '.result.workspaces[]?.label // empty' 2>/dev/null || true
         ;;
     *)
@@ -199,15 +216,16 @@ backend_launch() {
         # 起動する。workspace はリポジトリ単位の長寿命コンテナなので、別の
         # プロジェクトを開くときは現在の workspace に tab を足すのではなく
         # workspace を増やす。
-        local resp pane
-        resp=$(herdr workspace create \
+        local resp pane hsess
+        hsess=$(herdr_session_name "${HERDR_SESSION:-}")
+        resp=$(herdr --session "$hsess" workspace create \
             --cwd "$abs_path" --label "$sess" --no-focus) || return 1
         pane=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
         if [ -z "$pane" ] || [ "$pane" = "null" ]; then
             printf 'error: herdr workspace の root pane を取得できません\n' >&2
             return 1
         fi
-        herdr pane run "$pane" "$inner"
+        herdr --session "$hsess" pane run "$pane" "$inner"
         ;;
     *)
         tmux new-session -d -s "$sess" -c "$abs_path" "$inner"

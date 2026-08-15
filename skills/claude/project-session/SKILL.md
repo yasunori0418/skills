@@ -83,7 +83,9 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
 - **事前チェック**: backend に必要なコマンド（`herdr` または `tmux`）と `ghq`/`claude` の欠落のみ中断。
   現在ブランチ・dirty は報告するだけで止めない。
 - **herdr backend**: プロジェクトごとに新しい workspace を作る（workspace はリポジトリ単位の
-  長寿命コンテナ）。`--no-focus` で起動するので画面は奪われない。
+  長寿命コンテナ）。`--no-focus` で起動するので画面は奪われない。herdr 呼び出しには常に
+  `--session "${HERDR_SESSION:-default}"` を明示し、**起動元 pane と同じ session** に workspace を作る
+  （CLI の env 依存な暗黙解決に任せると、env が失われた環境から呼んだとき既定 session へ流れ込む）。
 
 ## 連携スキル
 
