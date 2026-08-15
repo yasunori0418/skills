@@ -127,11 +127,41 @@ check "hsession:default" "default" "$(herdr_session_name default)"
 check "hsession:empty" "default" "$(herdr_session_name '')"
 check "hsession:unset" "default" "$(herdr_session_name)"
 
-# detect_topology: 既定は workspace、PROJECT_SESSION_TOPOLOGY で上書きする。
+# detect_topology: 既定は workspace、フラグ / 環境変数で上書きする。
 check "topology:default" "workspace" "$(detect_topology '')"
 check "topology:unset" "workspace" "$(detect_topology)"
 check "topology:session" "session" "$(detect_topology session)"
 check "topology:explicit-workspace" "workspace" "$(detect_topology workspace)"
+
+# extract_topology_flag: query より前の --session だけを抜き、残りはそのまま返す。
+# 出力は NUL 区切りで「topology」「残りの引数...」の順。
+mapfile -d '' _out < <(extract_topology_flag --session nput --model opus)
+check "extopo:flag" "session" "${_out[0]}"
+check "extopo:rest" "nput --model opus" "${_out[*]:1}"
+
+# フラグ無しは topology 空（呼び出し側が環境変数へフォールバックする）。
+mapfile -d '' _out < <(extract_topology_flag nput --model opus)
+check "extopo:noflag" "" "${_out[0]}"
+check "extopo:noflag-rest" "nput --model opus" "${_out[*]:1}"
+
+# query 以降の --session は claude への passthrough なので抜き取らない。
+mapfile -d '' _out < <(extract_topology_flag nput --session)
+check "extopo:after-query" "" "${_out[0]}"
+check "extopo:after-query-rest" "nput --session" "${_out[*]:1}"
+
+# 空白・改行入り passthrough 引数が壊れないこと（NUL 区切り検証）。
+mapfile -d '' _out < <(extract_topology_flag --session nput -p 'multi
+line prompt')
+check "extopo:preserve-count" "4" "${#_out[@]}"
+check "extopo:preserve-prompt" "multi
+line prompt" "${_out[3]}"
+
+# query だけ・引数なしでも topology 要素は必ず 1 つ返る。
+mapfile -d '' _out < <(extract_topology_flag nput)
+check "extopo:query-only" "1" "$((${#_out[@]} - 1))"
+mapfile -d '' _out < <(extract_topology_flag --session)
+check "extopo:flag-only" "session" "${_out[0]}"
+check "extopo:flag-only-count" "0" "$((${#_out[@]} - 1))"
 
 # backend_attach_hint: topology=session だけ attach コマンドをそのまま案内する
 # （detached で立てた session はユーザーが attach するまで画面に現れないため）。

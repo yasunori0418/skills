@@ -23,12 +23,15 @@ claude を **detached セッション**として起動する単発オーケス�
 
 `PROJECT_SESSION_BACKEND` に `herdr` / `tmux` を設定すれば明示的に上書きもできる（通常は不要）。
 
-herdr backend で**何を作るか**（topology）は `PROJECT_SESSION_TOPOLOGY` で切り替える:
+herdr backend で**何を作るか**（topology）は起動引数の `--session` フラグで切り替える:
 
-| topology | 作るもの | 使いどころ |
-| --- | --- | --- |
-| `workspace`（既定） | 起動元 pane と同じ session に workspace を足す | 通常。別プロジェクトを開くだけ |
-| `session` | プロジェクト専用の herdr session を detached で立て、その中に workspace を作る | 起動した claude から `/job-graph` や lane-ops を回し、**そのプロジェクトの並列作業を 1 セッション内で完結**させたいとき |
+| topology | 指定方法 | 作るもの | 使いどころ |
+| --- | --- | --- | --- |
+| `workspace`（既定） | フラグ無し | 起動元 pane と同じ session に workspace を足す | 通常。別プロジェクトを開くだけ |
+| `session` | `--session` | プロジェクト専用の herdr session を detached で立て、その中に workspace を作る | 起動した claude から `/job-graph` や lane-ops を回し、**そのプロジェクトの並列作業を 1 セッション内で完結**させたいとき |
+
+環境変数 `PROJECT_SESSION_TOPOLOGY` でも指定できる（フラグが優先）。ただし remote-control 越しでは
+環境変数を前置できないため、**通常はフラグを使う**。
 
 `session` を選ぶ理由は隔離ではなく**到達性**にある。lane-ops は `$HERDR_SOCKET_PATH`
 （＝自分が属する session のソケット）でレーンを監視するため、親も子も同じ session に居る必要がある。
@@ -40,10 +43,23 @@ worktree を切って複数セッションを並列・stacked に回す `/parall
 
 ## 起動引数
 
-`/project-session [プロジェクト名(部分一致可)] [claudeへ渡す引数...]`
+`/project-session [--session] [プロジェクト名(部分一致可)] [claudeへ渡す引数...]`
 
-- **先頭 1 トークン**: プロジェクト指定（ghq list への部分一致キー。省略可）。
+- **`--session`**（任意・**先頭に置く**）: プロジェクト専用の herdr session を立てて起動する
+  （topology=session）。省略時は現在の session に workspace を足す。
+- **次の 1 トークン**: プロジェクト指定（ghq list への部分一致キー。省略可）。
 - **残り全部**: claude への passthrough 引数（`--model opus` / `-p '...'` / `--remote-control` 等、素通し）。
+
+`--session` は**プロジェクト名より前**にのみ置ける。それ以降は claude への passthrough 領域なので、
+そこに書かれた `--session` は claude の引数としてそのまま渡す（抜き取らない）。
+
+例:
+
+```
+/project-session --session nput --remote-control
+```
+
+nput 専用の herdr session を立て、その中の claude を `--remote-control nput` 付きで起動する。
 
 ## 決定論ツール（scripts/launch.sh）
 
@@ -56,7 +72,9 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
   - 一意: stdout に relpath 1 行、**exit 0**
   - 複数: stdout に候補一覧、stderr に `ambiguous`、**exit 2**
   - 0 件: stdout に全一覧、stderr に `not found`、**exit 3**
-- **`launch.sh launch <query> [claude引数...]`** — 本体。ツール欠落は exit 1、解決が一意でなければ
+- **`launch.sh launch [--session] <query> [claude引数...]`** — 本体。`--session` は `<query>` より前に
+  置いたときだけ topology フラグとして解釈し、それ以降は claude への passthrough として素通しする。
+  ツール欠落は exit 1、`<query>` 欠落は usage を出して exit 1、解決が一意でなければ
   `resolve` と同じ出力・exit code（2/3）で中断する。成功時は起動して次を stdout へ出力する:
 
   ```
@@ -76,14 +94,18 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
 1. **引数省略**（プロジェクト未指定）→ `launch.sh list` を実行し、番号付き一覧を提示して選択させる。
    AskUserQuestion は選択肢 4 個上限なので、候補が多いときは本文に番号付きで列挙し自由記述で受ける。
    選ばれた relpath（または basename）を query にして次へ。
-2. **指定あり** → いきなり `launch.sh launch <query> [claude引数...]` を実行:
+2. **指定あり** → いきなり `launch.sh launch [--session] <query> [claude引数...]` を実行。
+   ユーザーが `--session` を付けていたら**そのまま `<query>` の前へ引き渡す**（claude 引数側へ回さない）:
    - **exit 0**: 起動成功。出力の SESSION/BACKEND/PROJECT/PATH/BRANCH/DIRTY/ATTACH を整形して報告する。
      `DIRTY: N files` でも**止めない**（未コミット変更は情報提供のみ）。
    - **exit 2（曖昧）**: stdout の候補一覧を提示して選択させ、選んだ relpath で `launch` を再実行する。
    - **exit 3（0 件）**: stdout の全一覧を提示して選び直させる。
    - **exit 1**: backend に必要なコマンド（`herdr` または `tmux`／`ghq`／`claude`）の欠落など。
      stderr のメッセージをそのまま伝える。
-3. 起動後は `ATTACH:` 行を添えて結果を報告する。
+3. 起動後は `ATTACH:` 行を添えて結果を報告する。`TOPOLOGY: session` のときは、合流が
+   `herdr session attach <名前>` である点と、**使い終わったら後始末が要る**点も併せて伝える
+   （`herdr --session <名前> server stop` → `herdr session delete <名前>`。停止中の session 名も
+   衝突判定に含まれるため、消さないと次回同名で立てたとき suffix が付く）。
 
 ## 挙動の要点（ユーザー説明用。規則の正はスクリプト。ここで再現しない）
 

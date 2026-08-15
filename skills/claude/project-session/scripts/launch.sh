@@ -14,15 +14,18 @@
 #   - tmux:  それ以外。detached な tmux セッションとして起動する
 # PROJECT_SESSION_BACKEND で明示的に上書きもできる。
 #
-# herdr backend で作る単位は PROJECT_SESSION_TOPOLOGY で切り替える（detect_topology）:
+# herdr backend で作る単位（topology）は `launch --session <query>` フラグで切り替える
+# （detect_topology。フラグ未指定なら PROJECT_SESSION_TOPOLOGY へフォールバック）:
 #   - workspace（既定）: 起動元 pane と同じ session に workspace を足す
 #   - session: プロジェクト専用の herdr session を detached で立て、その中で起動する。
 #     子 pane には新 session のソケットが注入されるため、その session 内で
 #     job-graph / lane-ops が完結する（親子が同じソケットを見る）
+# フラグは query より前にのみ置ける。query 以降は claude への passthrough なので、
+# そこを走査すると claude 側の同名フラグと衝突しうる。
 #
 # 純関数（sanitize/resolve_matches/session_base_name/next_session_name/
-# inject_remote_control/detect_backend/detect_topology/herdr_session_name/
-# backend_attach_hint）は外部コマンド（ghq/tmux/herdr/claude）を
+# inject_remote_control/detect_backend/extract_topology_flag/detect_topology/
+# herdr_session_name/backend_attach_hint）は外部コマンド（ghq/tmux/herdr/claude）を
 # 呼ばず、入力は引数と stdin のみ。これにより CI sandbox（jq/git のみ、
 # ghq/tmux/herdr/claude 無し）で
 # `source launch.sh` してテストできる。impure な処理は main とサブコマンドに閉じ、
@@ -47,9 +50,34 @@ detect_backend() {
     fi
 }
 
+# extract_topology_flag <args...>
+# 先頭に並んだ topology フラグを読み取り、NUL 区切りで
+# 「topology」「残りの引数...」の順に出力する。
+#   --session  -> session（プロジェクト専用 herdr session を立てる）
+# フラグは **query より前**（サブコマンド直後）にのみ置ける。query 以降は claude への
+# passthrough なので、そこを走査すると claude 側の同名フラグと衝突しうる。
+# 空文字を返したら「フラグ指定なし」で、呼び出し側が環境変数へフォールバックする。
+# 外部コマンドを呼ばないので単体テストできる。
+extract_topology_flag() {
+    local topology=""
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        --session)
+            topology="session"
+            shift
+            ;;
+        *)
+            break
+            ;;
+        esac
+    done
+    printf '%s\0' "$topology" "$@"
+}
+
 # detect_topology [override]
 # herdr backend で作る単位（workspace | session）を決める。
-#   override（PROJECT_SESSION_TOPOLOGY）が非空ならそれ、未指定なら workspace。
+#   override（--session フラグ or PROJECT_SESSION_TOPOLOGY）が非空ならそれ、
+#   未指定なら workspace。
 # workspace: 起動元 pane と同じ session に workspace を足す（既定）。
 # session:   プロジェクト専用の herdr session を detached で立て、その中で起動する。
 #            その session 内で job-graph / lane-ops を完結させたいときに使う
@@ -347,16 +375,27 @@ cmd_resolve() {
     fi
 }
 
-# cmd_launch <query> [claude引数...] — 本体。
+# cmd_launch [--session] <query> [claude引数...] — 本体。
 cmd_launch() {
-    local query="$1"
-    shift
-    local -a claude_args=("$@")
+    # 0. topology フラグを query より前から抜き取る（query 以降は claude への
+    #    passthrough なので走査しない）。フラグ未指定なら環境変数へフォールバックする。
+    local -a rest=()
+    local flag_topology=""
+    mapfile -d '' rest < <(extract_topology_flag "$@")
+    flag_topology="${rest[0]}"
+    rest=("${rest[@]:1}")
+    if [ "${#rest[@]}" -eq 0 ]; then
+        printf 'usage: launch.sh launch [--session] <query> [claude引数...]\n' >&2
+        return 1
+    fi
+
+    local query="${rest[0]}"
+    local -a claude_args=("${rest[@]:1}")
 
     # 1. backend / topology 判定 + 必須コマンドの存在確認（欠落は名指しでエラー）。
     local backend topology
     backend=$(detect_backend "${HERDR_ENV:-}" "${PROJECT_SESSION_BACKEND:-}")
-    topology=$(detect_topology "${PROJECT_SESSION_TOPOLOGY:-}")
+    topology=$(detect_topology "${flag_topology:-${PROJECT_SESSION_TOPOLOGY:-}}")
     local tool missing=0
     while IFS= read -r tool; do
         [ -n "$tool" ] || continue
@@ -461,13 +500,13 @@ main() {
     launch)
         shift
         [ "$#" -ge 1 ] || {
-            printf 'usage: launch.sh launch <query> [claude引数...]\n' >&2
+            printf 'usage: launch.sh launch [--session] <query> [claude引数...]\n' >&2
             return 1
         }
         cmd_launch "$@"
         ;;
     *)
-        printf 'usage: launch.sh {list|resolve <query>|launch <query> [claude引数...]}\n' >&2
+        printf 'usage: launch.sh {list|resolve <query>|launch [--session] <query> [claude引数...]}\n' >&2
         return 1
         ;;
     esac
