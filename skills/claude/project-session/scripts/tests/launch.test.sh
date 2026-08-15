@@ -133,6 +133,22 @@ check "topology:unset" "workspace" "$(detect_topology)"
 check "topology:session" "session" "$(detect_topology session)"
 check "topology:explicit-workspace" "workspace" "$(detect_topology workspace)"
 
+# inherited_session_vars: 親セッション固有のマーカーを列挙する（新セッションへ
+# 引き継ぐと transcript 保存が切られる・親宛の経路を掴む等の不整合が起きる）。
+check "inherit:has-child-session" "1" \
+    "$(inherited_session_vars | grep -c '^CLAUDE_CODE_CHILD_SESSION$')"
+check "inherit:has-messaging" "2" \
+    "$(inherited_session_vars | grep -c '^CLAUDE_CODE_MESSAGING_')"
+check "inherit:has-session-ids" "2" \
+    "$(inherited_session_vars | grep -c 'SESSION_ID$')"
+# ユーザー設定・実行ファイル解決に使うものは引き継ぐので挙げない。
+check "inherit:keeps-execpath" "0" \
+    "$(inherited_session_vars | grep -c '^CLAUDE_CODE_EXECPATH$')"
+check "inherit:keeps-user-prefs" "0" \
+    "$(inherited_session_vars | grep -c 'DISABLE_FEEDBACK_SURVEY\|AGENT_TEAMS')"
+# 空行を含まない（env -u '' は不正な呼び出しになる）。
+check "inherit:no-empty-line" "0" "$(inherited_session_vars | grep -c '^$')"
+
 # is_path_query: パス形の query だけ ghq 解決を飛ばす。裸の名前は ghq キーのまま。
 check_rc() { # label expected_rc actual_rc
     if [ "$2" = "$3" ]; then

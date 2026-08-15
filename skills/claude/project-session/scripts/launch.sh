@@ -28,10 +28,14 @@
 # 裸の名前は ghq キーのままにする（ghq の repo 名とカレント配下のディレクトリ名が
 # 衝突したとき、意図せずローカルを掴まないため）。
 #
+# 起動する claude は親セッションの子プロセスではなく独立したセッションなので、
+# claude が子シェルへ注入する親セッション固有のマーカーは env -u で断ち切る
+# （inherited_session_vars。放置すると transcript 保存が切られる等の不整合が起きる）。
+#
 # 純関数（sanitize/resolve_matches/session_base_name/next_session_name/
 # inject_remote_control/detect_backend/extract_topology_flag/detect_topology/
 # herdr_session_name/backend_attach_hint/backend_required_tools/is_path_query/
-# expand_path_query）は外部コマンド（ghq/tmux/herdr/claude）を
+# expand_path_query/inherited_session_vars）は外部コマンド（ghq/tmux/herdr/claude）を
 # 呼ばず、入力は引数と stdin のみ。これにより CI sandbox（jq/git のみ、
 # ghq/tmux/herdr/claude 無し）で
 # `source launch.sh` してテストできる。impure な処理は main とサブコマンドに閉じ、
@@ -108,6 +112,31 @@ detect_topology() {
 herdr_session_name() {
     local env_value="${1:-}"
     printf '%s' "${env_value:-default}"
+}
+
+# inherited_session_vars
+# 新セッションへ引き継いではいけない親セッション固有の環境変数を 1 行 1 件で返す。
+#
+# claude は Bash ツールで子シェルを spawn するとき、自分の身元を示すマーカーを
+# その子シェルへ注入する（claude プロセス本体の environ には無く、子シェルにだけ現れる）。
+# 本スキルはその子シェルから**独立した長寿命の claude セッション**を起動するため、
+# 放置すると新セッションが親の子プロセスだと誤認し、
+#   - transcript 保存が切られる（CLAUDE_CODE_CHILD_SESSION）
+#   - 親宛のメッセージ経路を掴む（CLAUDE_CODE_MESSAGING_*）
+#   - 親のセッション ID を名乗る（CLAUDE_CODE_*SESSION_ID）
+# といった不整合が起きる。起動時に env -u で明示的に断ち切る。
+#
+# ユーザー設定由来のもの（CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY 等）や実行ファイル解決に
+# 使う CLAUDE_CODE_EXECPATH は引き継ぐので、ここには挙げない。
+# 外部コマンドを呼ばないので単体テストできる。
+inherited_session_vars() {
+    printf '%s\n' \
+        CLAUDE_CODE_CHILD_SESSION \
+        CLAUDE_CODE_SESSION_ID \
+        CLAUDE_CODE_BRIDGE_SESSION_ID \
+        CLAUDE_CODE_MESSAGING_SOCKET \
+        CLAUDE_CODE_MESSAGING_TOKEN \
+        CLAUDE_CODE_ENTRYPOINT
 }
 
 # sanitize <name>
@@ -522,8 +551,14 @@ cmd_launch() {
     fi
 
     # 6. 起動。shell-command は単一文字列で渡す。クォートは printf '%q ' で機械生成。
-    local inner
-    inner=$(printf '%q ' claude "${final_args[@]}")
+    #    親セッション固有のマーカーは env -u で断ち切る（inherited_session_vars 参照）。
+    local inner var
+    local -a env_args=(env)
+    while IFS= read -r var; do
+        [ -n "$var" ] || continue
+        env_args+=(-u "$var")
+    done < <(inherited_session_vars)
+    inner=$(printf '%q ' "${env_args[@]}" claude "${final_args[@]}")
     backend_launch "$backend" "$sess" "$abs_path" "$inner" "$topology" || return 1
 
     # 7. 結果報告（AI はこれをそのまま報告素材にする）。
