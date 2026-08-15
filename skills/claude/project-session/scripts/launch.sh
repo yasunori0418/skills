@@ -23,9 +23,15 @@
 # フラグは query より前にのみ置ける。query 以降は claude への passthrough なので、
 # そこを走査すると claude 側の同名フラグと衝突しうる。
 #
+# query は既定で ghq list への部分一致キーだが、`/...` `~...` `./...` `../...` の形なら
+# ghq 解決を飛ばしてそのディレクトリを直接使う（ghq 管理外のリポジトリ用。is_path_query）。
+# 裸の名前は ghq キーのままにする（ghq の repo 名とカレント配下のディレクトリ名が
+# 衝突したとき、意図せずローカルを掴まないため）。
+#
 # 純関数（sanitize/resolve_matches/session_base_name/next_session_name/
 # inject_remote_control/detect_backend/extract_topology_flag/detect_topology/
-# herdr_session_name/backend_attach_hint）は外部コマンド（ghq/tmux/herdr/claude）を
+# herdr_session_name/backend_attach_hint/backend_required_tools/is_path_query/
+# expand_path_query）は外部コマンド（ghq/tmux/herdr/claude）を
 # 呼ばず、入力は引数と stdin のみ。これにより CI sandbox（jq/git のみ、
 # ghq/tmux/herdr/claude 無し）で
 # `source launch.sh` してテストできる。impure な処理は main とサブコマンドに閉じ、
@@ -111,6 +117,41 @@ sanitize() {
     local name="$1" out
     out=$(printf '%s' "$name" | sed -E 's/[^A-Za-z0-9_-]+/-/g; s/^-+//; s/-+$//')
     printf '%s' "${out:-session}"
+}
+
+# is_path_query <query>
+# query を「ghq 解決を飛ばす直接パス指定」とみなすなら 0、ghq への部分一致キーなら 1。
+# 直接パスとみなすのは次のいずれか:
+#   /...   絶対パス
+#   ~...   ホーム相対（~ 単体・~/... の形）
+#   ./ ../ 明示的な相対パス
+# `dotfiles` のような裸の名前は ghq キーのままにする（ghq 管理下の repo 名と
+# カレント配下のディレクトリ名が衝突したとき、意図せずローカルを掴まないため）。
+# 外部コマンドを呼ばないので単体テストできる。
+is_path_query() {
+    # SC2088: ここでの ~ は「展開させたい値」ではなく、query 文字列に現れる
+    # リテラルの ~ とのパターンマッチ。展開は expand_path_query の責務。
+    # shellcheck disable=SC2088
+    case "${1:-}" in
+    /* | '~' | '~/'* | ./* | ../*) return 0 ;;
+    *) return 1 ;;
+    esac
+}
+
+# expand_path_query <query>
+# 直接パス指定の query を絶対パスへ正規化する（先頭 ~ を $HOME へ展開する）。
+# ディレクトリの存在確認・シンボリックリンク解決は呼び出し側の責務。
+# 外部コマンドを呼ばないので単体テストできる。
+expand_path_query() {
+    local query="${1:-}" home="${2:-$HOME}"
+    # SC2088: query 内のリテラル ~ を検出・除去するための引用であって、
+    # ここで shell に展開させたいわけではない（展開先は $home を明示的に使う）。
+    # shellcheck disable=SC2088
+    case "$query" in
+    '~') printf '%s' "$home" ;;
+    '~/'*) printf '%s/%s' "$home" "${query#'~/'}" ;;
+    *) printf '%s' "$query" ;;
+    esac
 }
 
 # resolve_matches <query>  (ghq list 全文を stdin から)
@@ -231,13 +272,18 @@ inject_remote_control() {
 
 # ---- impure: backend 別の処理 ---------------------------------------------
 
-# backend_required_tools <backend>
+# backend_required_tools <backend> [needs_ghq]
 # その backend で PATH に必要なコマンドを 1 行 1 件で返す。
+# needs_ghq が 0（＝直接パス指定で ghq 解決を使わない）なら ghq を要求しない。
+# 外部コマンドを呼ばないので単体テストできる。
 backend_required_tools() {
-    case "$1" in
-    herdr) printf 'herdr\nghq\nclaude\n' ;;
-    *) printf 'tmux\nghq\nclaude\n' ;;
+    local backend="$1" needs_ghq="${2:-1}"
+    case "$backend" in
+    herdr) printf 'herdr\n' ;;
+    *) printf 'tmux\n' ;;
     esac
+    [ "$needs_ghq" = "0" ] || printf 'ghq\n'
+    printf 'claude\n'
 }
 
 # backend_existing_names <backend> [topology]
@@ -350,8 +396,20 @@ cmd_list() {
 #   一意: stdout に relpath 1 行、exit 0
 #   複数: stdout に候補一覧、stderr に ambiguous、exit 2
 #   0 件: stdout に全一覧、stderr に not found、exit 3
+# 直接パス指定（/... ~... ./... ../...）は ghq を引かず、存在すれば絶対パスを 1 行返す
+# （launch 側と判定を揃える。存在しなければ not found 扱いで exit 3）。
 cmd_resolve() {
     local query="$1" list matches count
+    if is_path_query "$query"; then
+        local abs_path
+        abs_path=$(expand_path_query "$query")
+        if [ -d "$abs_path" ]; then
+            (cd "$abs_path" && pwd)
+            return 0
+        fi
+        printf 'error: ディレクトリが存在しません: %s\n' "$abs_path" >&2
+        return 3
+    fi
     list=$(ghq list)
     matches=$(printf '%s\n' "$list" | resolve_matches "$query")
 
@@ -393,9 +451,11 @@ cmd_launch() {
     local -a claude_args=("${rest[@]:1}")
 
     # 1. backend / topology 判定 + 必須コマンドの存在確認（欠落は名指しでエラー）。
-    local backend topology
+    #    直接パス指定のときは ghq 解決を使わないので ghq を要求しない。
+    local backend topology needs_ghq=1
     backend=$(detect_backend "${HERDR_ENV:-}" "${PROJECT_SESSION_BACKEND:-}")
     topology=$(detect_topology "${flag_topology:-${PROJECT_SESSION_TOPOLOGY:-}}")
+    is_path_query "$query" && needs_ghq=0
     local tool missing=0
     while IFS= read -r tool; do
         [ -n "$tool" ] || continue
@@ -405,40 +465,53 @@ cmd_launch() {
                 "$tool" "$backend" >&2
             missing=1
         fi
-    done < <(backend_required_tools "$backend")
+    done < <(backend_required_tools "$backend" "$needs_ghq")
     [ "$missing" -eq 0 ] || return 1
 
-    # 2. resolve と同じ解決。一意でなければ resolve と同じ出力・exit code で中断。
-    local list matches count relpath
-    list=$(ghq list)
-    matches=$(printf '%s\n' "$list" | resolve_matches "$query")
-    if [ -z "$matches" ]; then
-        count=0
+    # 2-3. パス指定なら ghq 解決を飛ばし、そのディレクトリを直接使う。
+    #      それ以外は resolve と同じ解決（一意でなければ同じ出力・exit code で中断）。
+    local list relpath abs_path base
+    if is_path_query "$query"; then
+        abs_path=$(expand_path_query "$query")
+        if [ ! -d "$abs_path" ]; then
+            printf 'error: ディレクトリが存在しません: %s\n' "$abs_path" >&2
+            return 1
+        fi
+        # 表示用の relpath は絶対パスそのもの。セッション名は basename から作る
+        # （ghq の owner/repo 重複規則は効かないので basename 一択）。
+        abs_path=$(cd "$abs_path" && pwd)
+        relpath="$abs_path"
+        base=$(sanitize "${abs_path##*/}")
     else
-        count=$(printf '%s\n' "$matches" | grep -c '^')
-    fi
-    if [ "$count" -ge 2 ]; then
-        printf '%s\n' "$matches"
-        printf 'ambiguous\n' >&2
-        return 2
-    elif [ "$count" -eq 0 ]; then
-        printf '%s\n' "$list"
-        printf 'not found\n' >&2
-        return 3
-    fi
-    relpath=$(printf '%s\n' "$matches" | head -n1)
+        local matches count
+        list=$(ghq list)
+        matches=$(printf '%s\n' "$list" | resolve_matches "$query")
+        if [ -z "$matches" ]; then
+            count=0
+        else
+            count=$(printf '%s\n' "$matches" | grep -c '^')
+        fi
+        if [ "$count" -ge 2 ]; then
+            printf '%s\n' "$matches"
+            printf 'ambiguous\n' >&2
+            return 2
+        elif [ "$count" -eq 0 ]; then
+            printf '%s\n' "$list"
+            printf 'not found\n' >&2
+            return 3
+        fi
+        relpath=$(printf '%s\n' "$matches" | head -n1)
 
-    # 3. 実パス = $(ghq root)/<relpath>。存在確認。
-    local abs_path
-    abs_path="$(ghq root)/$relpath"
-    if [ ! -d "$abs_path" ]; then
-        printf 'error: ディレクトリが存在しません: %s\n' "$abs_path" >&2
-        return 1
+        abs_path="$(ghq root)/$relpath"
+        if [ ! -d "$abs_path" ]; then
+            printf 'error: ディレクトリが存在しません: %s\n' "$abs_path" >&2
+            return 1
+        fi
+        base=$(printf '%s\n' "$list" | session_base_name "$relpath")
     fi
 
     # 4. セッション名決定（既存一覧は backend から。取得不能時は空扱い）。
-    local base existing sess
-    base=$(printf '%s\n' "$list" | session_base_name "$relpath")
+    local existing sess
     existing=$(backend_existing_names "$backend" "$topology")
     sess=$(printf '%s\n' "$existing" | next_session_name "$base")
 

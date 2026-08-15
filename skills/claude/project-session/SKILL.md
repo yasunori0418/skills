@@ -47,7 +47,10 @@ worktree を切って複数セッションを並列・stacked に回す `/parall
 
 - **`--session`**（任意・**先頭に置く**）: プロジェクト専用の herdr session を立てて起動する
   （topology=session）。省略時は現在の session に workspace を足す。
-- **次の 1 トークン**: プロジェクト指定（ghq list への部分一致キー。省略可）。
+- **次の 1 トークン**: プロジェクト指定（省略可）。既定は **ghq list への部分一致キー**だが、
+  `/...` `~...` `./...` `../...` の形なら **ghq 解決を飛ばしてそのディレクトリを直接使う**
+  （ghq 管理外のリポジトリ用。例 `~/dotfiles`）。裸の名前は常に ghq キー扱いで、
+  カレント配下に同名ディレクトリがあっても掴まない。
 - **残り全部**: claude への passthrough 引数（`--model opus` / `-p '...'` / `--remote-control` 等、素通し）。
 
 `--session` は**プロジェクト名より前**にのみ置ける。それ以降は claude への passthrough 領域なので、
@@ -61,6 +64,12 @@ worktree を切って複数セッションを並列・stacked に回す `/parall
 
 nput 専用の herdr session を立て、その中の claude を `--remote-control nput` 付きで起動する。
 
+```
+/project-session ~/dotfiles --remote-control
+```
+
+ghq 管理外の `~/dotfiles` を直接指定して起動する（セッション名は basename の `dotfiles`）。
+
 ## 決定論ツール（scripts/launch.sh）
 
 ghq 照合・セッション名決定・backend 判定・セッション起動は `bash <SKILL>/scripts/launch.sh` に委譲する
@@ -72,6 +81,8 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
   - 一意: stdout に relpath 1 行、**exit 0**
   - 複数: stdout に候補一覧、stderr に `ambiguous`、**exit 2**
   - 0 件: stdout に全一覧、stderr に `not found`、**exit 3**
+  - **パス指定**（`/...` `~...` `./...` `../...`）は ghq を引かず、存在すれば絶対パス 1 行で **exit 0**、
+    存在しなければ stderr にエラーで **exit 3**
 - **`launch.sh launch [--session] <query> [claude引数...]`** — 本体。`--session` は `<query>` より前に
   置いたときだけ topology フラグとして解釈し、それ以降は claude への passthrough として素通しする。
   ツール欠落は exit 1、`<query>` 欠落は usage を出して exit 1、解決が一意でなければ
@@ -93,13 +104,15 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
 
 1. **引数省略**（プロジェクト未指定）→ `launch.sh list` を実行し、番号付き一覧を提示して選択させる。
    AskUserQuestion は選択肢 4 個上限なので、候補が多いときは本文に番号付きで列挙し自由記述で受ける。
-   選ばれた relpath（または basename）を query にして次へ。
+   選ばれた relpath（または basename）を query にして次へ。ghq 管理外のディレクトリを開きたいと
+   言われたら、一覧から選ばせず**パス（`~/dotfiles` 等）をそのまま query にする**。
 2. **指定あり** → いきなり `launch.sh launch [--session] <query> [claude引数...]` を実行。
    ユーザーが `--session` を付けていたら**そのまま `<query>` の前へ引き渡す**（claude 引数側へ回さない）:
    - **exit 0**: 起動成功。出力の SESSION/BACKEND/PROJECT/PATH/BRANCH/DIRTY/ATTACH を整形して報告する。
      `DIRTY: N files` でも**止めない**（未コミット変更は情報提供のみ）。
    - **exit 2（曖昧）**: stdout の候補一覧を提示して選択させ、選んだ relpath で `launch` を再実行する。
-   - **exit 3（0 件）**: stdout の全一覧を提示して選び直させる。
+   - **exit 3（0 件）**: stdout の全一覧を提示して選び直させる。ユーザーが挙げた名前が ghq 管理外の
+     ディレクトリを指していそうなら、一覧から選ばせる前に**パス指定（`~/<名前>` 等）を提案する**。
    - **exit 1**: backend に必要なコマンド（`herdr` または `tmux`／`ghq`／`claude`）の欠落など。
      stderr のメッセージをそのまま伝える。
 3. 起動後は `ATTACH:` 行を添えて結果を報告する。`TOPOLOGY: session` のときは、合流が
@@ -111,13 +124,18 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
 
 - **セッション名**: repo 名を sanitize（`[^A-Za-z0-9_-]+`→`-`、前後 `-` 除去。例 `arto.vim`→`arto-vim`）。
   ghq list 内で repo 名（basename）が重複する場合のみ `owner-repo`（例 `NixOS-nixpkgs`）。
+  パス指定のときは ghq の重複規則が効かないので **basename 一択**（例 `~/dotfiles` → `dotfiles`）。
+- **パス指定**: `/...` `~...` `./...` `../...` は ghq 解決を飛ばし、そのディレクトリを直接使う
+  （`ghq` コマンド自体も要求しない）。存在しなければ exit 1 で中断する。先頭の `~` のみ `$HOME` へ
+  展開し、`~otheruser/...` は展開規則を持たないので ghq キー扱いにする。
 - **同名セッション**: 使用中なら `<base>-2`, `<base>-3`… の最初の空き番号を suffix する。
   既存名は backend と topology から引く（tmux はセッション名、herdr は topology=workspace なら
   現在 session の workspace ラベル、topology=session なら herdr の session 名（**停止中も含む**。
   同名 session を作ると既存の状態に相乗りしてしまうため））。
 - **`--remote-control` 補完**: 値なしの `--remote-control`（末尾、または直後が `-` 始まり）のときだけ、
   実セッション名（suffix 込み）を値として自動注入する。ユーザーが値を書いた場合は触らない（最初の 1 個のみ）。
-- **事前チェック**: backend に必要なコマンド（`herdr` または `tmux`）と `ghq`/`claude` の欠落のみ中断。
+- **事前チェック**: backend に必要なコマンド（`herdr` または `tmux`）と `claude` の欠落のみ中断。
+  `ghq` は ghq キー解決を使うときだけ必須（パス指定では要求しない）。
   現在ブランチ・dirty は報告するだけで止めない。
 - **herdr backend（topology=workspace・既定）**: プロジェクトごとに新しい workspace を作る
   （workspace はリポジトリ単位の長寿命コンテナ）。`--no-focus` で起動するので画面は奪われない。

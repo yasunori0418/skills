@@ -133,6 +133,50 @@ check "topology:unset" "workspace" "$(detect_topology)"
 check "topology:session" "session" "$(detect_topology session)"
 check "topology:explicit-workspace" "workspace" "$(detect_topology workspace)"
 
+# is_path_query: パス形の query だけ ghq 解決を飛ばす。裸の名前は ghq キーのまま。
+check_rc() { # label expected_rc actual_rc
+    if [ "$2" = "$3" ]; then
+        echo "PASS: $(basename "$0")[$1] -> rc=$3"
+    else
+        echo "FAIL: $(basename "$0")[$1] expected rc=$2, got rc=$3"
+        fail=1
+    fi
+}
+is_path_query '/home/yasunori/dotfiles' && rc=0 || rc=1
+check_rc "ispath:absolute" 0 "$rc"
+is_path_query '~/dotfiles' && rc=0 || rc=1
+check_rc "ispath:tilde-slash" 0 "$rc"
+is_path_query '~' && rc=0 || rc=1
+check_rc "ispath:tilde-only" 0 "$rc"
+is_path_query './sub' && rc=0 || rc=1
+check_rc "ispath:dot-slash" 0 "$rc"
+is_path_query '../sibling' && rc=0 || rc=1
+check_rc "ispath:dotdot-slash" 0 "$rc"
+# 裸の名前は ghq キー（ローカルの同名ディレクトリを意図せず掴まないため）。
+is_path_query 'dotfiles' && rc=0 || rc=1
+check_rc "ispath:bare-name" 1 "$rc"
+is_path_query 'github.com/yasunori0418/nput' && rc=0 || rc=1
+check_rc "ispath:ghq-relpath" 1 "$rc"
+# ~name（他ユーザーのホーム）は展開規則を持たないので ghq キー扱いにする。
+is_path_query '~otheruser/x' && rc=0 || rc=1
+check_rc "ispath:tilde-user" 1 "$rc"
+
+# expand_path_query: 先頭 ~ だけを HOME へ展開する（HOME は第 2 引数で固定）。
+check "expand:tilde-slash" "/h/dotfiles" "$(expand_path_query '~/dotfiles' /h)"
+check "expand:tilde-only" "/h" "$(expand_path_query '~' /h)"
+check "expand:absolute" "/opt/x" "$(expand_path_query '/opt/x' /h)"
+check "expand:relative" "./sub" "$(expand_path_query './sub' /h)"
+# 中間の ~ は展開しない（先頭のみが対象）。
+check "expand:inner-tilde" "/opt/~/x" "$(expand_path_query '/opt/~/x' /h)"
+
+# backend_required_tools: 直接パス指定（needs_ghq=0）では ghq を要求しない。
+check "tools:herdr-with-ghq" "herdr ghq claude" "$(backend_required_tools herdr 1 | tr '\n' ' ' | sed 's/ $//')"
+check "tools:herdr-no-ghq" "herdr claude" "$(backend_required_tools herdr 0 | tr '\n' ' ' | sed 's/ $//')"
+check "tools:tmux-with-ghq" "tmux ghq claude" "$(backend_required_tools tmux 1 | tr '\n' ' ' | sed 's/ $//')"
+check "tools:tmux-no-ghq" "tmux claude" "$(backend_required_tools tmux 0 | tr '\n' ' ' | sed 's/ $//')"
+# 既定（第 2 引数省略）は従来どおり ghq を要求する。
+check "tools:default-needs-ghq" "herdr ghq claude" "$(backend_required_tools herdr | tr '\n' ' ' | sed 's/ $//')"
+
 # extract_topology_flag: query より前の --session だけを抜き、残りはそのまま返す。
 # 出力は NUL 区切りで「topology」「残りの引数...」の順。
 mapfile -d '' _out < <(extract_topology_flag --session nput --model opus)
