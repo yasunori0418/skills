@@ -50,7 +50,7 @@ AI の責務は計画ファイル・issue から「タスクと依存辺・境�
 
 spec の task に `boundary`（glob 配列）を書くと、起動コマンドが worktree ルートへ境界ファイル `.claude/task-boundary.json` を生成し、`task-boundary` hook（併用推奨・別プラグイン）が境界外の Edit/Write を機械ブロックする。
 
-- 境界には**タスクの完了条件に登場する全ファイルとテストのディレクトリ**を含める（宣言漏れは正当作業のブロックになる）。`tmp_claude/**` はスクリプトが自動で追加する
+- 境界に何を含めるかの判定基準は `references/dependency-analysis.md`（宣言漏れは正当作業のブロックになる）
 - 実行中の境界拡張は lane-ops の `widen_boundary.sh`（親専用）が正規経路。ワーカーから境界不足の報告を受けたら、計画と突き合わせて範囲内なら widen して再開を指示し、範囲外ならユーザーへ上げる
 
 詳細（生成方式・deny 後のフロー）は `references/boundary.md`。
@@ -84,18 +84,18 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 承認後、`COMMANDS` をウェーブ順に実行する。
 
 - **wave 0**: 独立レーン。まとめて起動してよい
-- **後続 wave**: **前段の PR 作成を `gh pr list --head <前段ブランチ>` で確認してから**起動
+- **後続 wave**: 制約 4 のゲート（`gh pr list --head <前段ブランチ>` が非空）を確認してから起動
 - pane ID（`PANE_<task-id>` 変数）は監視・承認で使うので控えておく
 
 起動コマンドの中身の解説は `references/launch.md`。
 
-### Phase 3: 監視・承認代行（lane-ops の運用ループ）
+### Phase 3: 監視・承認代行
 
-lane-ops スキルの運用ループに従う: `watch_events.py --status blocked` を 1 本常駐させ、`[lane-ops:report ...]` の報告を受けたら `verify_lane.sh` で裏を取り、blocked は内容確認のうえ判定基準表に沿って応答する。ポーリング（sleep + 再確認）はしない。
+制約 6 のとおり lane-ops の運用ループに従う（監視の常駐・報告の裏取り・blocked への応答）。
 
 ### Phase 4: PR 作成と凍結
 
-各ワーカーは `/review-converge` 収束後に自分で `/pr-create [base]` を実行する（規約で指示済み）。`/pr-create` の対話ゲートには親が応答する。PR 作成の報告を受けたら機械検証し、レーンの凍結（以降の実装変更・push 停止）を確認する。逸脱を見つけたら lane-ops の `send_instruction.sh` で明示的に止める。
+各ワーカーは `/review-converge` 収束後に自分で `/pr-create [base]` を実行する（規約で指示済み）。PR 作成の報告を受けたら機械検証し、レーンの凍結（以降の実装変更・push 停止）を確認する。逸脱を見つけたら lane-ops の `send_instruction.sh` で明示的に止める。
 
 ### Phase 5: 後始末
 
@@ -107,12 +107,6 @@ lane-ops スキルの運用ループに従う: `watch_events.py --status blocked
 
 このスキルは下記を**呼び出す側**で、内容を重複させない。
 
-- `lane-ops`: レーンの操縦・監視・承認代行・境界拡張（Phase 3〜4 の実体）
-- `commit-plan`: plan のコミット計画（Phase 1）
-- `review-converge` / `pr-create`: PR 前ゲートと PR 作成（各ワーカーが実行）
-- `post-merge-cleanup`: マージ後の一括後片付け（Phase 5）
+- `lane-ops`（Phase 3〜4 の実体）/ `commit-plan`（Phase 1）/ `review-converge`・`pr-create`（各ワーカーが実行）/ `post-merge-cleanup`（Phase 5）
 - `herdr` / `worktrunk`: herdr CLI・`wt` の一般規約が要るとき
-- `references/dependency-analysis.md`: 依存辺・境界の判定基準
-- `references/launch.md`: 起動コマンドの解説
-- `references/boundary.md`: 境界ファイルの生成方式と deny 後のフロー
-- `references/restack.md`: 下段変更時の載せ替え定石
+- `references/`: `dependency-analysis.md`（依存辺・境界の判定基準）/ `launch.md`（COMMANDS の解説）/ `boundary.md`（境界ファイルと deny 後のフロー）/ `restack.md`（下段変更時の載せ替え）
