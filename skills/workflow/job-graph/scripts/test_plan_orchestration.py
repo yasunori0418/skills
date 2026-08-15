@@ -185,6 +185,22 @@ def test_render_no_prompt_dir_suppresses_commands():
     out = po.render(plan, an, po.Launch(), "")
     assert "--prompt-dir 未指定のため COMMANDS は出力しない" in out
     assert "herdr pane run" not in out
+    assert "HSESSION" not in out
+
+
+def test_render_all_herdr_calls_pin_session():
+    # herdr 呼び出しは env の暗黙解決に頼らず、必ず --session を明示する
+    # （COMMANDS が env の無い別 shell へコピペされても既定 session へ落ちないこと）。
+    out = rendered([task("A"), task("B", deps=["A"]), task("C")])
+    assert 'HSESSION="${HERDR_SESSION:-default}"' in out
+    bare = [
+        line
+        for line in out.splitlines()
+        if "herdr " in line
+        and not line.lstrip().startswith("#")
+        and 'herdr --session "$HSESSION"' not in line
+    ]
+    assert bare == []
 
 
 def test_render_base_always_explicit():
@@ -197,11 +213,14 @@ def test_render_lane_head_creates_workspace_and_stacked_adds_tab():
     out = rendered([task("A"), task("B", deps=["A"]), task("C")])
     # レーン先頭（A・C）は workspace create、stacked の後続段（B）は
     # レーンの workspace への tab create
-    assert out.count("herdr workspace create") == 2
-    assert out.count('herdr tab create --workspace "$WS_LANE_0"') == 1
+    assert out.count('herdr --session "$HSESSION" workspace create') == 2
+    assert out.count('herdr --session "$HSESSION" tab create --workspace "$WS_LANE_0"') == 1
     assert "$HERDR_WORKSPACE_ID" not in out
     # 後続段の workspace ID はレーン先頭のラベルから再解決する
-    assert 'herdr workspace list | jq -r \'.result.workspaces[] | select(.label == "br-A")' in out
+    assert (
+        'herdr --session "$HSESSION" workspace list | jq -r'
+        " '.result.workspaces[] | select(.label == \"br-A\")" in out
+    )
     assert ".result.workspace.workspace_id" in out
     assert ".result.root_pane.pane_id" in out
 

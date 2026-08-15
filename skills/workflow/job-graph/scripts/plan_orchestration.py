@@ -11,8 +11,11 @@ AI の責務は spec（特に depends_on の意味的判定と boundary の範�
 - 実行基盤は herdr。レーン（直列チェーン）ごとに workspace を立てる:
   レーン先頭の task は `herdr workspace create` の root pane で起動し、stacked の
   後続段は同じレーンの workspace へ `herdr tab create` で tab を足して起動する
-  （並列レーン = workspace の並び。session はランタイム名前空間が分かれ、
-  親の socket からレーンへ到達できなくなるため使わない）
+  （並列レーン = workspace の並び。レーンを別 session に分けることはしない。
+  session はランタイム名前空間が分かれ、親の socket からレーンへ到達できなくなるため）
+- herdr 呼び出しは全て `--session "$HSESSION"`（= `${HERDR_SESSION:-default}`）を明示する。
+  CLI は env が生きていれば現在の session へ解決するが、COMMANDS を env の無い別 shell へ
+  コピペすると既定 session へ落ちる。親と同じ session にレーンを並べる保証を env に預けない
 - stacked の起動ゲートは「前段の PR 作成」
 - worktree 生成は常に `wt switch --create --base <解決済み base>`（base は必ず明示する）
 - ワーカープロンプトは herdr pane へ流し込める長さに限界があるためファイル渡し
@@ -460,6 +463,8 @@ def render(
     `wt switch --create ... -x claude` 流し込み、stacked の PR 作成ゲート、
     プロンプトのファイル渡しまでを列挙する。後続段の workspace ID はラベルから
     `herdr workspace list` で再解決する（wave 間で shell が変わっても動くように）。
+    herdr 呼び出しは全て `--session "$HSESSION"` を明示し、COMMANDS を別 shell へ
+    コピペしても親と同じセッションへレーンが並ぶようにする。
     """
     out: list[str] = []
     out.append("=== VALIDATION ===")
@@ -527,6 +532,13 @@ def render(
         out.append("# --prompt-dir 未指定のため COMMANDS は出力しない。--prompt-dir を付けて再実行。")
         return "\n".join(out)
 
+    # herdr CLI は HERDR_SESSION / HERDR_SOCKET_PATH が生きていれば現在のセッションへ
+    # 解決するが、env が失われると既定セッションへ落ちる。COMMANDS は親と別の shell へ
+    # コピペされうるので、セッションを 1 度だけ変数に固定して全呼び出しで明示する
+    # （`herdr --session ""` は拒否されるため、未設定時は default へ畳む）。
+    out.append("\n# レーンを作る herdr セッション（親 pane と同一。env が無い shell では default）")
+    out.append('HSESSION="${HERDR_SESSION:-default}"')
+
     for level in range(max_level + 1):
         wave_tasks = [t for t in plan.tasks if an.levels[t.id] == level]
         if not wave_tasks:
@@ -552,7 +564,7 @@ def render(
                 # レーン先頭はレーン専用の workspace を立て、その root pane で起動する
                 # （ラベル = 先頭ブランチ名。後続段はこのラベルで workspace を再解決する）。
                 out.append(
-                    f"resp=$(herdr workspace create"
+                    f"resp=$(herdr --session \"$HSESSION\" workspace create"
                     f" --cwd \"$PWD\" --label {shlex.quote(sess)} --no-focus)"
                 )
                 out.append(
@@ -566,12 +578,12 @@ def render(
                 # レーン先頭のラベルから再解決する（wave 間で shell が変わっても動く）。
                 head_label = sanitize(by_id[an.lanes[lane][0]].branch)
                 out.append(
-                    f"{ws_var}=$(herdr workspace list | jq -r"
+                    f"{ws_var}=$(herdr --session \"$HSESSION\" workspace list | jq -r"
                     f" '.result.workspaces[] | select(.label == {json.dumps(head_label)})"
                     f" | .workspace_id' | head -n1)"
                 )
                 out.append(
-                    f"resp=$(herdr tab create --workspace \"${ws_var}\""
+                    f"resp=$(herdr --session \"$HSESSION\" tab create --workspace \"${ws_var}\""
                     f" --cwd \"$PWD\" --label {shlex.quote(sess)} --no-focus)"
                 )
                 out.append(
@@ -600,7 +612,9 @@ def render(
                     f"wt switch --create {shlex.quote(t.branch)} --base {shlex.quote(base)}"
                     f" -x claude --{flags_str}{rc_args} {prompt_ref}"
                 )
-            out.append(f"herdr pane run \"${pane_var}\" {shlex.quote(inner)}")
+            out.append(
+                f"herdr --session \"$HSESSION\" pane run \"${pane_var}\" {shlex.quote(inner)}"
+            )
 
     out.append("\n=== PR (各ワーカーが実装・コミット後、/review-converge 収束後に自分で実行) ===")
     for t in sorted(plan.tasks, key=lambda x: (an.levels[x.id], x.id)):
@@ -611,7 +625,10 @@ def render(
 
     out.append("\n=== MONITOR (親のゲート監視。lane-ops スキルの運用ループに従う) ===")
     out.append("# 状態監視:     python3 <lane-ops>/scripts/watch_events.py --status blocked を 1 本常駐")
-    out.append("# 画面確認:     herdr agent read <pane> --source recent-unwrapped --lines 120")
+    out.append(
+        "# 画面確認:     herdr --session \"$HSESSION\" agent read <pane>"
+        " --source recent-unwrapped --lines 120"
+    )
     out.append("# 報告の裏取り: bash <lane-ops>/scripts/verify_lane.sh <branch> <worktree>")
     out.append("# ワーカーの報告（[lane-ops:report ...]）は自己申告。必ず裏取りしてから次段を起動する")
 

@@ -20,7 +20,9 @@ allowed-tools: Bash, Read, AskUserQuestion, ExitPlanMode
 5. **push と PR 作成は計画承認済みの前提。** Phase 1 の plan 承認がそのまま push・`/pr-create` の承認を兼ねる。親は計画の範囲内である限り、各レーンの対話ゲートに自分で応答し、個別にユーザーへ確認しない。ユーザーへ上げるのは**計画の範囲外だけ**（境界の拡大要求・スコープ逸脱・計画の前提と実態の食い違い）。
 6. **レーンの操縦・監視・承認代行は lane-ops スキルに従う。** 指示送信・blocked 検知・報告受信・機械検証・境界拡張はすべて lane-ops の運用ループとスクリプトで行う。job-graph が定めるのはグラフと起動までであり、運用規約を重複して定義しない。
 
-herdr 上では**レーン（直列チェーン）ごとに workspace を立てる**。レーン先頭の task は `herdr workspace create` の root pane で起動し、stacked の後続段は同じレーンの workspace へ `herdr tab create` で tab を足して起動する（並列レーン = workspace の並び。session はランタイム名前空間が分かれて親の socket からレーンへ到達できなくなるため使わない）。レーン割当と各 ID の取り回しはスクリプトが `LANES` / `COMMANDS` として決定論的に算出する。手で決めない。
+herdr 上では**レーン（直列チェーン）ごとに workspace を立てる**。レーン先頭の task は `herdr workspace create` の root pane で起動し、stacked の後続段は同じレーンの workspace へ `herdr tab create` で tab を足して起動する（並列レーン = workspace の並び。レーンを別 session へ分けることはしない。session はランタイム名前空間が分かれて親の socket からレーンへ到達できなくなるため）。レーン割当と各 ID の取り回しはスクリプトが `LANES` / `COMMANDS` として決定論的に算出する。手で決めない。
+
+herdr 呼び出しは `COMMANDS` 先頭で `HSESSION="${HERDR_SESSION:-default}"` を定義し、全て `--session "$HSESSION"` を明示する。CLI は env が生きていれば現在の session へ解決するが、`COMMANDS` を env の無い別 shell へコピペすると既定 session へ落ちてレーンが親と別の場所に作られる。**この明示を外さない。**
 
 ## 決定論ツール（scripts/）と AI の責務分担
 
@@ -67,7 +69,7 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 ### Phase 1: 事前確認・スケジュール算出 → plan 承認
 
 1. `bash <SKILL>/scripts/preflight.sh` を実行し、`WARNING` を解消する。
-2. 親（自分）に herdr のエージェント名を付ける: `herdr agent rename "$HERDR_PANE_ID" <一意な短い名前>`（ワーカー報告の宛先。lane-ops 参照）。
+2. 親（自分）に herdr のエージェント名を付ける: `herdr --session "${HERDR_SESSION:-default}" agent rename "$HERDR_PANE_ID" <一意な短い名前>`（ワーカー報告の宛先。lane-ops 参照）。
 3. `plan_orchestration.py` を `--prompt-dir`（scratchpad 配下）と `--parent-name`（上記の名前）付きで実行し、`ERROR` が出たら spec を直して再実行。
 4. 出力を土台に plan を組み、**`ExitPlanMode` で承認を取る**。plan には必ず含める:
    - **起動ウェーブとレーン割当**（`SCHEDULE` / `LANES`）
@@ -98,7 +100,7 @@ lane-ops スキルの運用ループに従う: `watch_events.py --status blocked
 ### Phase 5: 後始末
 
 - 進捗確認: `wt list`
-- 全レーンのマージ後: `/post-merge-cleanup` を案内する。herdr の workspace / tab は**自分が作ったものだけ**閉じる（`herdr workspace close` / `herdr tab close`）
+- 全レーンのマージ後: `/post-merge-cleanup` を案内する。herdr の workspace / tab は**自分が作ったものだけ**閉じる（`herdr --session "$HSESSION" workspace close` / `herdr --session "$HSESSION" tab close`）
 - stacked の restack が必要になったら `references/restack.md` に従う
 
 ## 連携スキル・参照

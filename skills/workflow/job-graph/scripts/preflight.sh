@@ -13,6 +13,13 @@ if [ "${HERDR_ENV:-}" = 1 ]; then
 else
     echo "WARNING: HERDR_ENV が 1 でない。herdr 管理下の pane で実行すること（job-graph は herdr 前提）"
 fi
+# レーンを作る先の session。COMMANDS はこの値を --session に固定して起動する。
+# 意図した session（親 pane と同じ）かどうかを起動前に目視で確認する。
+printf 'session: %s' "${HERDR_SESSION:-default}"
+if [ -z "${HERDR_SESSION:-}" ]; then
+    printf '  WARNING: HERDR_SESSION が空。既定 session にレーンを作る'
+fi
+printf '\n'
 
 section "TOOLS"
 for t in herdr wt gh jq git; do

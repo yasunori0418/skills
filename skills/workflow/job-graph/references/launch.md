@@ -7,12 +7,14 @@
 レーン（直列チェーン）ごとに workspace を 1 つ立てる。レーン先頭の task は `herdr workspace create` の root pane で起動する。
 
 ```bash
-resp=$(herdr workspace create --cwd "$PWD" --label refactor-logger --no-focus)
+HSESSION="${HERDR_SESSION:-default}"   # COMMANDS 先頭で 1 度だけ定義される
+resp=$(herdr --session "$HSESSION" workspace create --cwd "$PWD" --label refactor-logger --no-focus)
 WS_LANE_0=$(printf '%s' "$resp" | jq -r '.result.workspace.workspace_id')
 PANE_A=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
-herdr pane run "$PANE_A" 'wt switch --create refactor-logger --base main -x claude -- "$(cat <prompt-dir>/A.md)"'
+herdr --session "$HSESSION" pane run "$PANE_A" 'wt switch --create refactor-logger --base main -x claude -- "$(cat <prompt-dir>/A.md)"'
 ```
 
+- **`--session` は全 herdr 呼び出しに明示**される。CLI は `HERDR_SESSION` / `HERDR_SOCKET_PATH` が生きていれば現在の session へ解決するが、COMMANDS を env の無い別 shell へコピペすると既定 session へ落ちる。親と同じ session にレーンが並ぶ保証を env に預けない（`herdr --session ""` は拒否されるため未設定時は `default` へ畳む）
 - workspace のラベルはレーン先頭のブランチ名。並列レーンは workspace が並ぶ
 - `--no-focus` でユーザーの現在フォーカスを奪わない。ID は JSON 応答から jq で掴む（予測しない）
 - `wt switch --create` が worktree を作り、`-x claude` で wt プロセスが claude に置き換わる。herdr は pane 内の claude をエージェントとして自動認識する
@@ -24,8 +26,8 @@ herdr pane run "$PANE_A" 'wt switch --create refactor-logger --base main -x clau
 stacked の後続段は、そのレーンの workspace へ `herdr tab create` で tab を足して起動する。workspace ID はレーン先頭のラベルから `herdr workspace list` で再解決する（wave 間で shell が変わっても動くように。変数の持ち越しに依存しない）。
 
 ```bash
-WS_LANE_0=$(herdr workspace list | jq -r '.result.workspaces[] | select(.label == "refactor-logger") | .workspace_id' | head -n1)
-resp=$(herdr tab create --workspace "$WS_LANE_0" --cwd "$PWD" --label refactor-logger-2 --no-focus)
+WS_LANE_0=$(herdr --session "$HSESSION" workspace list | jq -r '.result.workspaces[] | select(.label == "refactor-logger") | .workspace_id' | head -n1)
+resp=$(herdr --session "$HSESSION" tab create --workspace "$WS_LANE_0" --cwd "$PWD" --label refactor-logger-2 --no-focus)
 PANE_B=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
 ```
 
@@ -37,4 +39,4 @@ PANE_B=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
 
 ## 起動確認
 
-`herdr agent list` に pane が現れれば認識済み。現れないまま `herdr pane read <pane>` で shell エラーが見えるなら wt の失敗（ブランチ名衝突など）なので preflight に戻る。
+`herdr --session "$HSESSION" agent list` に pane が現れれば認識済み。現れないまま `herdr --session "$HSESSION" pane read <pane>` で shell エラーが見えるなら wt の失敗（ブランチ名衝突など）なので preflight に戻る。
