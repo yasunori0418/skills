@@ -54,6 +54,14 @@ herdr agent rename "$HERDR_PANE_ID" <一意な短い名前>   # 例: orc-<リポ
 
 ## 補足
 
-- watch のイベントが無いのに報告も途絶えたレーンは、`herdr agent get <pane>` でエージェント在否を確認する。不在なら `herdr pane process-info <pane>` で shell へ戻ったことを確かめてから `herdr pane run <pane> 'claude --continue'` で復旧する（pane の見た目で判断しない）。
+- watch のイベントが無いのに報告も途絶えたレーンは、`herdr agent get <pane>` でエージェント在否を確認する。不在なら `herdr pane process-info <pane>` で shell へ戻ったことを確かめてから復旧する（pane の見た目で判断しない）。復旧コマンドは **claude を `env -u` 越しに起こす**:
+
+  ```sh
+  herdr pane run <pane> 'env -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID \
+    -u CLAUDE_CODE_BRIDGE_SESSION_ID -u CLAUDE_CODE_MESSAGING_SOCKET \
+    -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_ENTRYPOINT claude --continue'
+  ```
+
+  claude は Bash ツールの子シェルへ自分の身元を注入するため、素で `claude --continue` を流すと復旧したレーンが**親（自分）の子プロセスと誤認**され、transcript 保存が切られる・親宛のメッセージ経路を掴む。レーンは独立したセッションなので断ち切る（同じ対象を job-graph は `INHERITED_SESSION_VARS`、project-session は `inherited_session_vars` で持つ）。
 - `agent wait` / watch が idle/done を報じても完了とは限らない。完了判定は常に `verify_lane.sh` の事実で行う。
 - herdr CLI 自体の詳細（pane/agent/workspace 操作の一般規約）は herdr スキルの領分。
