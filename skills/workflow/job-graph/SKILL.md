@@ -22,9 +22,7 @@ allowed-tools: Bash, Read, AskUserQuestion, ExitPlanMode
 
 herdr 上では**レーン（直列チェーン）ごとに workspace を立てる**。レーン先頭の task は `herdr workspace create` の root pane で起動し、stacked の後続段は同じレーンの workspace へ `herdr tab create` で tab を足して起動する（並列レーン = workspace の並び。レーンを別 session へ分けることはしない。session はランタイム名前空間が分かれて親の socket からレーンへ到達できなくなるため）。レーン割当と各 ID の取り回しはスクリプトが `LANES` / `COMMANDS` として決定論的に算出する。手で決めない。
 
-herdr 呼び出しは `COMMANDS` 先頭で `HSESSION="${HERDR_SESSION:-default}"` を定義し、全て `--session "$HSESSION"` を明示する。CLI は env が生きていれば現在の session へ解決するが、`COMMANDS` を env の無い別 shell へコピペすると既定 session へ落ちてレーンが親と別の場所に作られる。**この明示を外さない。**
-
-各レーンの起動コマンドは先頭に `env -u ...` を置き、親（自分）のセッション固有のマーカーを断ち切る。claude は Bash ツールの子シェルへ自分の身元を注入するため、そのまま流すとレーンが親の子プロセスと誤認され、**transcript 保存が切られる**・**親宛のメッセージ経路を掴む**。**この前置も外さない**（対象は `plan_orchestration.py` の `INHERITED_SESSION_VARS` が正）。
+`COMMANDS` に含まれる `--session "$HSESSION"` と起動コマンド先頭の `env -u ...` は、**どちらも外さない**（理由は `references/launch.md`）。
 
 ## 決定論ツール（scripts/）と AI の責務分担
 

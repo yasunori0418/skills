@@ -2,6 +2,13 @@
 
 `plan_orchestration.py` の `COMMANDS` 各ブロックがやっていることの解説。**このレシピを手で組み立てず、スクリプトの出力を使う。**
 
+## 全 COMMANDS に共通する 2 つの前置（外さない）
+
+`COMMANDS` の各ブロックには次の 2 つが必ず入る。どちらも env に依存せず動くための措置で、**外すと壊れる**。
+
+- **`--session "$HSESSION"`**（先頭で `HSESSION="${HERDR_SESSION:-default}"` を 1 度定義）— herdr CLI は `HERDR_SESSION` / `HERDR_SOCKET_PATH` が生きていれば現在の session へ解決するが、`COMMANDS` を env の無い別 shell へコピペすると既定 session へ落ち、レーンが親と別の場所に作られる。親と同じ session に並ぶ保証を env に預けない（`herdr --session ""` は拒否されるため未設定時は `default` へ畳む）
+- **起動コマンド先頭の `env -u ...`** — claude は Bash ツールの子シェルへ自分の身元（`CLAUDE_CODE_CHILD_SESSION` / `*_SESSION_ID` / `MESSAGING_*` 等）を注入する。そのまま流すと起動したレーンが**親の子プロセスと誤認**され、**transcript 保存が切られる**・**親宛のメッセージ経路を掴む**。レーンは独立したセッションなので断ち切る。`wt` より前に置くので wt 自身にも波及しない（対象は `plan_orchestration.py` の `INHERITED_SESSION_VARS` が正）
+
 ## レーン先頭の起動（workspace 作成）
 
 レーン（直列チェーン）ごとに workspace を 1 つ立てる。レーン先頭の task は `herdr workspace create` の root pane で起動する。
@@ -14,10 +21,8 @@ PANE_A=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
 herdr --session "$HSESSION" pane run "$PANE_A" 'env -u CLAUDE_CODE_CHILD_SESSION -u … wt switch --create refactor-logger --base main -x claude -- "$(cat <prompt-dir>/A.md)"'
 ```
 
-- **`--session` は全 herdr 呼び出しに明示**される。CLI は `HERDR_SESSION` / `HERDR_SOCKET_PATH` が生きていれば現在の session へ解決するが、COMMANDS を env の無い別 shell へコピペすると既定 session へ落ちる。親と同じ session にレーンが並ぶ保証を env に預けない（`herdr --session ""` は拒否されるため未設定時は `default` へ畳む）
 - workspace のラベルはレーン先頭のブランチ名。並列レーンは workspace が並ぶ
 - `--no-focus` でユーザーの現在フォーカスを奪わない。ID は JSON 応答から jq で掴む（予測しない）
-- **先頭の `env -u ...` は親セッションのマーカーを断ち切る**。claude は Bash ツールの子シェルへ自分の身元（`CLAUDE_CODE_CHILD_SESSION` / `*_SESSION_ID` / `MESSAGING_*` 等）を注入するため、COMMANDS をそのまま流すとレーンが親の子プロセスと誤認され、transcript 保存が切られる・親宛のメッセージ経路を掴む。`wt` より前に置くので wt 自身にも波及しない（対象は `plan_orchestration.py` の `INHERITED_SESSION_VARS` が正）
 - `wt switch --create` が worktree を作り、`-x claude` で wt プロセスが claude に置き換わる。herdr は pane 内の claude をエージェントとして自動認識する
 - **`--base` は常に明示**される。省略すると wt はリポジトリの default branch から切るため、spec の意図と食い違う事故が起きる
 - プロンプトは複数行のためファイル渡し。`"$(cat <path>)"` は pane の shell が展開し、wt が EXECUTE_ARGS として shell-escape して claude に 1 引数で渡す
@@ -32,7 +37,7 @@ resp=$(herdr --session "$HSESSION" tab create --workspace "$WS_LANE_0" --cwd "$P
 PANE_B=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
 ```
 
-起動コマンドの形はレーン先頭と同じ（`--base` が前段ブランチになるだけ）。起動は**前段の PR 作成を確認してから**（`gh pr list --head <前段ブランチ>` が非空）。コミット数到達をゲートにしない（前段の amend で base がずれ restack を誘発する）。
+起動コマンドの形はレーン先頭と同じ（`--base` が前段ブランチになるだけ）。起動ゲートは SKILL.md の制約 4 に従う。
 
 ## 起動オプション
 
