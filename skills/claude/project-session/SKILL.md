@@ -28,8 +28,8 @@ herdr backend で**何を作るか**（topology）は起動引数の `--session`
 | `workspace`（既定） | フラグ無し | 起動元 pane と同じ session に workspace を足す | 通常。別プロジェクトを開くだけ |
 | `session` | `--session` | プロジェクト専用の herdr session を detached で立て、その中に workspace を作る | 起動した claude を親に、**そのプロジェクトの作業を 1 セッション内で完結**させたいとき |
 
-環境変数 `PROJECT_SESSION_TOPOLOGY` でも指定できる（フラグが優先）。ただし remote-control 越しでは
-環境変数を前置できないため、**通常はフラグを使う**。
+環境変数 `PROJECT_SESSION_TOPOLOGY` でも指定できるが（フラグが優先）、remote-control 越しでは
+環境変数を前置できないため**通常はフラグを使う**。
 
 `session` を選ぶ理由は隔離ではなく**到達性**にある。herdr のソケットは session ごとに分かれるため、
 起動した claude が他の pane を監視・操縦するには、その claude と対象が同じ session に居る必要がある。
@@ -46,9 +46,6 @@ herdr backend で**何を作るか**（topology）は起動引数の `--session`
   （ghq 管理外のリポジトリ用）。裸の名前は常に ghq キー扱いで、
   カレント配下に同名ディレクトリがあっても掴まない。
 - **残り全部**: claude への passthrough 引数（`--model opus` / `-p '...'` / `--remote-control` 等、素通し）。
-
-`--session` は**プロジェクト名より前**にのみ置ける。それ以降は claude への passthrough 領域なので、
-そこに書かれた `--session` は claude の引数としてそのまま渡す（抜き取らない）。
 
 例:
 
@@ -111,38 +108,9 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
      stderr のメッセージをそのまま伝える。
 3. 起動後は `ATTACH:` 行を添えて結果を報告する。`TOPOLOGY: session` のときは、合流が
    `herdr session attach <名前>` である点と、**使い終わったら後始末が要る**点も併せて伝える
-   （`herdr --session <名前> server stop` → `herdr session delete <名前>`。停止中の session 名も
-   衝突判定に含まれるため、消さないと次回同名で立てたとき suffix が付く）。
+   （手順は `references/behavior.md`）。
 
-## 挙動の要点（ユーザー説明用。規則の正はスクリプト。ここで再現しない）
+## 参照
 
-- **セッション名**: repo 名を sanitize（`[^A-Za-z0-9_-]+`→`-`、前後 `-` 除去。例 `foo.vim`→`foo-vim`）。
-  ghq list 内で repo 名（basename）が重複する場合のみ `owner-repo`。
-  パス指定のときは ghq の重複規則が効かないので **basename 一択**。
-- **パス指定**: `/...` `~...` `./...` `../...` は ghq 解決を飛ばし、そのディレクトリを直接使う
-  （`ghq` コマンド自体も要求しない）。存在しなければ exit 1 で中断する。先頭の `~` のみ `$HOME` へ
-  展開し、`~otheruser/...` は展開規則を持たないので ghq キー扱いにする。
-- **同名セッション**: 使用中なら `<base>-2`, `<base>-3`… の最初の空き番号を suffix する。
-  既存名は backend と topology から引く（tmux はセッション名、herdr は topology=workspace なら
-  現在 session の workspace ラベル、topology=session なら herdr の session 名（**停止中も含む**。
-  同名 session を作ると既存の状態に相乗りしてしまうため））。
-- **`--remote-control` 補完**: 値なしの `--remote-control`（末尾、または直後が `-` 始まり）のときだけ、
-  実セッション名（suffix 込み）を値として自動注入する。ユーザーが値を書いた場合は触らない（最初の 1 個のみ）。
-- **親セッションのマーカー除去**: 起動する claude は呼び出し元の子プロセスではなく独立したセッション
-  なので、`env -u` で親セッション固有の環境変数を断ち切ってから claude を exec する。claude は
-  Bash ツールの子シェルへ自分の身元（session id・messaging socket 等）を注入するため、放置すると
-  新セッションが親の子だと誤認して **transcript 保存が切られる**・**親宛のメッセージ経路を掴む**
-  といった不整合が起きる。対象は `launch.sh` の `inherited_session_vars` が正。
-- **事前チェック**: backend に必要なコマンド（`herdr` または `tmux`）と `claude` の欠落のみ中断。
-  `ghq` は ghq キー解決を使うときだけ必須（パス指定では要求しない）。
-  現在ブランチ・dirty は報告するだけで止めない。
-- **herdr backend（topology=workspace・既定）**: プロジェクトごとに新しい workspace を作る
-  （workspace はリポジトリ単位の長寿命コンテナ）。`--no-focus` で起動するので画面は奪われない。
-  herdr 呼び出しには常に `--session "${HERDR_SESSION:-default}"` を明示し、**起動元 pane と同じ session**
-  に workspace を作る（CLI の env 依存な暗黙解決に任せると、env が失われた環境から呼んだとき
-  既定 session へ流れ込む）。
-- **herdr backend（topology=session）**: `herdr --session <名前> server` を detached で起動し、socket API が
-  応答してから workspace を作る。socket API 自体に server を起こす力は無く（未起動なら
-  `server_not_running`）、`herdr session attach` は TUI に入る対話コマンドなので、この 2 段構えを取る。
-  起動した session はユーザーが attach するまで画面に現れないため、**現在の TUI は奪わない**。
-  合流方法は `ATTACH:` 行がそのまま案内する（`herdr session attach <名前>`）。
+- `references/behavior.md`: セッション名の決定規則・backend 別の起動手順など、`launch.sh` の挙動解説
+  （**フローの実行には不要**。ユーザーから挙動を問われたときだけ読む）。
