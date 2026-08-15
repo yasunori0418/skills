@@ -1,18 +1,16 @@
 ---
 name: project-session
-description: "ghq 管理下のプロジェクトを 1 つ選び、そのディレクトリでブランチを変えずに claude を detached セッション（herdr 管理下なら新しい workspace、それ以外は tmux）として起動する。`/project-session` の明示実行専用。"
+description: "指定したプロジェクト（ghq 管理下の部分一致キー、または直接パス）のディレクトリでブランチを変えずに claude を detached セッション（herdr 管理下なら workspace か専用 session、それ以外は tmux）として起動する。`/project-session` の明示実行専用。"
 user-invocable: true
 disable-model-invocation: true
-argument-hint: "[プロジェクト名(部分一致可)] [claudeへ渡す引数...]"
+argument-hint: "[--session] [プロジェクト名(部分一致可)|パス] [claudeへ渡す引数...]"
 allowed-tools: Bash, Read, AskUserQuestion
 ---
 
 # project-session
 
-ghq 管理下のプロジェクトを 1 つ選び、そのディレクトリで（**ブランチを変えず・worktree も作らず**）
-claude を **detached セッション**として起動する単発オーケストレーション。セッション起動という
-外部影響を伴うため、`disable-model-invocation: true` とし `/project-session` の明示実行時のみ動作する
-（明示実行＝起動意図とみなし、追加の承認ゲートは挟まない）。
+指定されたプロジェクトのディレクトリで（**ブランチを変えず・worktree も作らず**）claude を
+**detached セッション**として起動する。呼び出し＝起動意図とみなし、追加の承認ゲートは挟まない。
 
 マルチプレクサ backend は実行環境から自動判定する（**AI が選ばない**。判定は `launch.sh` の責務）:
 
@@ -28,18 +26,14 @@ herdr backend で**何を作るか**（topology）は起動引数の `--session`
 | topology | 指定方法 | 作るもの | 使いどころ |
 | --- | --- | --- | --- |
 | `workspace`（既定） | フラグ無し | 起動元 pane と同じ session に workspace を足す | 通常。別プロジェクトを開くだけ |
-| `session` | `--session` | プロジェクト専用の herdr session を detached で立て、その中に workspace を作る | 起動した claude から `/job-graph` や lane-ops を回し、**そのプロジェクトの並列作業を 1 セッション内で完結**させたいとき |
+| `session` | `--session` | プロジェクト専用の herdr session を detached で立て、その中に workspace を作る | 起動した claude を親に、**そのプロジェクトの作業を 1 セッション内で完結**させたいとき |
 
 環境変数 `PROJECT_SESSION_TOPOLOGY` でも指定できる（フラグが優先）。ただし remote-control 越しでは
 環境変数を前置できないため、**通常はフラグを使う**。
 
-`session` を選ぶ理由は隔離ではなく**到達性**にある。lane-ops は `$HERDR_SOCKET_PATH`
-（＝自分が属する session のソケット）でレーンを監視するため、親も子も同じ session に居る必要がある。
-プロジェクト専用 session の中で claude を立てれば、その claude が親となってレーンを張り、
-監視・承認代行までその session 内で閉じる。
-
-worktree を切って複数セッションを並列・stacked に回す `/parallel-worktree` と対をなす**単発・非 worktree 版**:
-現在のブランチのまま 1 つの claude を立てるだけ。
+`session` を選ぶ理由は隔離ではなく**到達性**にある。herdr のソケットは session ごとに分かれるため、
+起動した claude が他の pane を監視・操縦するには、その claude と対象が同じ session に居る必要がある。
+プロジェクト専用 session の中で立てれば、その claude を親とする一連の作業がその session 内で閉じる。
 
 ## 起動引数
 
@@ -49,7 +43,7 @@ worktree を切って複数セッションを並列・stacked に回す `/parall
   （topology=session）。省略時は現在の session に workspace を足す。
 - **次の 1 トークン**: プロジェクト指定（省略可）。既定は **ghq list への部分一致キー**だが、
   `/...` `~...` `./...` `../...` の形なら **ghq 解決を飛ばしてそのディレクトリを直接使う**
-  （ghq 管理外のリポジトリ用。例 `~/dotfiles`）。裸の名前は常に ghq キー扱いで、
+  （ghq 管理外のリポジトリ用）。裸の名前は常に ghq キー扱いで、
   カレント配下に同名ディレクトリがあっても掴まない。
 - **残り全部**: claude への passthrough 引数（`--model opus` / `-p '...'` / `--remote-control` 等、素通し）。
 
@@ -59,16 +53,16 @@ worktree を切って複数セッションを並列・stacked に回す `/parall
 例:
 
 ```
-/project-session --session nput --remote-control
+/project-session --session <プロジェクト名> --remote-control
 ```
 
-nput 専用の herdr session を立て、その中の claude を `--remote-control nput` 付きで起動する。
+そのプロジェクト専用の herdr session を立て、中の claude を `--remote-control <セッション名>` 付きで起動する。
 
 ```
-/project-session ~/dotfiles --remote-control
+/project-session ~/<ディレクトリ名> --remote-control
 ```
 
-ghq 管理外の `~/dotfiles` を直接指定して起動する（セッション名は basename の `dotfiles`）。
+ghq 管理外のディレクトリを直接指定して起動する（セッション名は basename から作る）。
 
 ## 決定論ツール（scripts/launch.sh）
 
@@ -89,15 +83,15 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
   `resolve` と同じ出力・exit code（2/3）で中断する。成功時は起動して次を stdout へ出力する:
 
   ```
-  SESSION: nput
+  SESSION: <セッション名>
   BACKEND: herdr | tmux
   TOPOLOGY: workspace | session   （herdr backend のときだけ出る）
-  PROJECT: github.com/yasunori0418/nput
-  PATH: /home/yasunori/src/github.com/yasunori0418/nput
-  BRANCH: main
+  PROJECT: <ghq relpath | 絶対パス>
+  PATH: <起動ディレクトリの絶対パス>
+  BRANCH: <現在ブランチ | (detached)>
   DIRTY: clean | N files
   CLAUDE_ARGS: (無し | 実際に渡した引数列)
-  ATTACH: tmux attach -t nput | herdr（workspace ラベル: nput）に切り替える | herdr session attach nput
+  ATTACH: tmux attach -t <名前> | herdr（workspace ラベル: <名前>）に切り替える | herdr session attach <名前>
   ```
 
 ## フロー
@@ -105,7 +99,7 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
 1. **引数省略**（プロジェクト未指定）→ `launch.sh list` を実行し、番号付き一覧を提示して選択させる。
    AskUserQuestion は選択肢 4 個上限なので、候補が多いときは本文に番号付きで列挙し自由記述で受ける。
    選ばれた relpath（または basename）を query にして次へ。ghq 管理外のディレクトリを開きたいと
-   言われたら、一覧から選ばせず**パス（`~/dotfiles` 等）をそのまま query にする**。
+   言われたら、一覧から選ばせず**そのパスをそのまま query にする**。
 2. **指定あり** → いきなり `launch.sh launch [--session] <query> [claude引数...]` を実行。
    ユーザーが `--session` を付けていたら**そのまま `<query>` の前へ引き渡す**（claude 引数側へ回さない）:
    - **exit 0**: 起動成功。出力の SESSION/BACKEND/PROJECT/PATH/BRANCH/DIRTY/ATTACH を整形して報告する。
@@ -122,9 +116,9 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
 
 ## 挙動の要点（ユーザー説明用。規則の正はスクリプト。ここで再現しない）
 
-- **セッション名**: repo 名を sanitize（`[^A-Za-z0-9_-]+`→`-`、前後 `-` 除去。例 `arto.vim`→`arto-vim`）。
-  ghq list 内で repo 名（basename）が重複する場合のみ `owner-repo`（例 `NixOS-nixpkgs`）。
-  パス指定のときは ghq の重複規則が効かないので **basename 一択**（例 `~/dotfiles` → `dotfiles`）。
+- **セッション名**: repo 名を sanitize（`[^A-Za-z0-9_-]+`→`-`、前後 `-` 除去。例 `foo.vim`→`foo-vim`）。
+  ghq list 内で repo 名（basename）が重複する場合のみ `owner-repo`。
+  パス指定のときは ghq の重複規則が効かないので **basename 一択**。
 - **パス指定**: `/...` `~...` `./...` `../...` は ghq 解決を飛ばし、そのディレクトリを直接使う
   （`ghq` コマンド自体も要求しない）。存在しなければ exit 1 で中断する。先頭の `~` のみ `$HOME` へ
   展開し、`~otheruser/...` は展開規則を持たないので ghq キー扱いにする。
@@ -134,6 +128,11 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
   同名 session を作ると既存の状態に相乗りしてしまうため））。
 - **`--remote-control` 補完**: 値なしの `--remote-control`（末尾、または直後が `-` 始まり）のときだけ、
   実セッション名（suffix 込み）を値として自動注入する。ユーザーが値を書いた場合は触らない（最初の 1 個のみ）。
+- **親セッションのマーカー除去**: 起動する claude は呼び出し元の子プロセスではなく独立したセッション
+  なので、`env -u` で親セッション固有の環境変数を断ち切ってから claude を exec する。claude は
+  Bash ツールの子シェルへ自分の身元（session id・messaging socket 等）を注入するため、放置すると
+  新セッションが親の子だと誤認して **transcript 保存が切られる**・**親宛のメッセージ経路を掴む**
+  といった不整合が起きる。対象は `launch.sh` の `inherited_session_vars` が正。
 - **事前チェック**: backend に必要なコマンド（`herdr` または `tmux`）と `claude` の欠落のみ中断。
   `ghq` は ghq キー解決を使うときだけ必須（パス指定では要求しない）。
   現在ブランチ・dirty は報告するだけで止めない。
@@ -147,12 +146,3 @@ ghq 照合・セッション名決定・backend 判定・セッション起動�
   `server_not_running`）、`herdr session attach` は TUI に入る対話コマンドなので、この 2 段構えを取る。
   起動した session はユーザーが attach するまで画面に現れないため、**現在の TUI は奪わない**。
   合流方法は `ATTACH:` 行がそのまま案内する（`herdr session attach <名前>`）。
-
-## 連携スキル
-
-- `parallel-worktree`: worktree を分けて複数セッションを並列・stacked に回したいときはこちら（本スキルは単発版）。
-- `lane-ops`: herdr backend で起動した workspace を親から監視・操縦したいときはこちら（起動は本スキル、
-  起動後の操縦・承認代行は lane-ops の領分）。
-- `job-graph`: 起動した claude にプロジェクトの並列作業を任せるなら `PROJECT_SESSION_TOPOLOGY=session`
-  で立てる。lane-ops / job-graph は自分が属する session のソケットで完結するため、親となる claude が
-  そのプロジェクト専用 session の中に居る必要がある。
