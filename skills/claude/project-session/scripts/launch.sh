@@ -31,11 +31,20 @@
 # 起動する claude は親セッションの子プロセスではなく独立したセッションなので、
 # claude が子シェルへ注入する親セッション固有のマーカーは env -u で断ち切る
 # （inherited_session_vars。放置すると transcript 保存が切られる等の不整合が起きる）。
+# 断ち切る対象は claude の起動コマンドだけではない。multiplexer の server（herdr /
+# tmux）は自分の environ を配下の**全 pane の shell へ継承させる**ので、server を
+# 起こす呼び出しも env -u 越しにする（env_unset_prefix）。そうしないと root pane の
+# claude は無事でも、ユーザーが後から開いた tab/pane で claude を立てたときに
+# transcript 保存が切られる。
+# 逆に pane の環境を決めるのは server の environ だけで、CLI クライアント側の環境は
+# 伝播しない（実測で確認済み）。既存 server へ繋ぐだけの workspace create /
+# pane run には env -u を付けない。
 #
 # 純関数（sanitize/resolve_matches/session_base_name/next_session_name/
 # inject_remote_control/detect_backend/extract_topology_flag/detect_topology/
 # herdr_session_name/backend_attach_hint/backend_required_tools/is_path_query/
-# expand_path_query/inherited_session_vars）は外部コマンド（ghq/tmux/herdr/claude）を
+# expand_path_query/inherited_session_vars/env_unset_prefix）は
+# 外部コマンド（ghq/tmux/herdr/claude）を
 # 呼ばず、入力は引数と stdin のみ。これにより CI sandbox（jq/git のみ、
 # ghq/tmux/herdr/claude 無し）で
 # `source launch.sh` してテストできる。impure な処理は main とサブコマンドに閉じ、
@@ -137,6 +146,19 @@ inherited_session_vars() {
         CLAUDE_CODE_MESSAGING_SOCKET \
         CLAUDE_CODE_MESSAGING_TOKEN \
         CLAUDE_CODE_ENTRYPOINT
+}
+
+# env_unset_prefix
+# inherited_session_vars を `env -u <var> ...` の引数列に展開して 1 行 1 件で返す。
+# コマンドの先頭へ置くと、その子孫プロセス全体から親セッションのマーカーが消える。
+# 外部コマンドを呼ばないので単体テストできる。
+env_unset_prefix() {
+    local var
+    printf '%s\n' env
+    while IFS= read -r var; do
+        [ -n "$var" ] || continue
+        printf '%s\n%s\n' -u "$var"
+    done < <(inherited_session_vars)
 }
 
 # sanitize <name>
@@ -324,19 +346,24 @@ backend_required_tools() {
 #                                 作ると既存の状態に相乗りしてしまうため）
 backend_existing_names() {
     local backend="$1" topology="${2:-workspace}"
+    # 一覧取得でも server が暗黙起動されうる（tmux list-sessions / herdr の session
+    # 解決）。そこで起きた server の environ は以後その session の全 pane へ継承されるので、
+    # 読み取り系も env -u 越しに呼ぶ。
+    local -a env_args=()
+    mapfile -t env_args < <(env_unset_prefix)
     case "$backend" in
     herdr)
         if [ "$topology" = "session" ]; then
-            herdr session list --json 2>/dev/null |
+            "${env_args[@]}" herdr session list --json 2>/dev/null |
                 jq -r '.sessions[]?.name // empty' 2>/dev/null || true
         else
-            herdr --session "$(herdr_session_name "${HERDR_SESSION:-}")" \
+            "${env_args[@]}" herdr --session "$(herdr_session_name "${HERDR_SESSION:-}")" \
                 workspace list 2>/dev/null |
                 jq -r '.result.workspaces[]?.label // empty' 2>/dev/null || true
         fi
         ;;
     *)
-        tmux list-sessions -F '#{session_name}' 2>/dev/null || true
+        "${env_args[@]}" tmux list-sessions -F '#{session_name}' 2>/dev/null || true
         ;;
     esac
 }
@@ -346,11 +373,17 @@ backend_existing_names() {
 # 応答するまで待つ。socket API 自体には server を起こす力が無く
 # （`server_not_running` を返す）、`herdr session attach` は TUI に入る対話コマンドの
 # ため、detached 起動は `herdr --session <name> server` を background に置く形をとる。
+#
+# server は自分の environ をその session の**全 pane の shell へ継承させる**ため、
+# 親セッションのマーカーを持ったまま起動すると、後から開いた tab/pane で claude を
+# 立てたときに transcript 保存が切られる。起動を env -u 越しにして根元で断ち切る。
 herdr_start_session() {
     local sess="$1" timeout_sec="${2:-30}" waited=0
-    nohup herdr --session "$sess" server >/dev/null 2>&1 &
+    local -a env_args=()
+    mapfile -t env_args < <(env_unset_prefix)
+    nohup "${env_args[@]}" herdr --session "$sess" server >/dev/null 2>&1 &
     disown 2>/dev/null || true
-    while ! herdr --session "$sess" workspace list >/dev/null 2>&1; do
+    while ! "${env_args[@]}" herdr --session "$sess" workspace list >/dev/null 2>&1; do
         if [ "$waited" -ge "$timeout_sec" ]; then
             printf 'error: herdr session %s が %s 秒以内に起動しません\n' \
                 "$sess" "$timeout_sec" >&2
@@ -388,10 +421,16 @@ backend_launch() {
             printf 'error: herdr workspace の root pane を取得できません\n' >&2
             return 1
         fi
+        # pane の環境は server の environ が決めるので、この CLI 呼び出し自体を
+        # env -u 越しにしても効果は無い（実測で確認済み。断ち切る先は server 起動側）。
         herdr --session "$hsess" pane run "$pane" "$inner"
         ;;
     *)
-        tmux new-session -d -s "$sess" -c "$abs_path" "$inner"
+        # tmux は server 未起動なら new-session が暗黙起動し、その environ が
+        # 以後の全 pane へ継承される。herdr の server 起動と同じ理由で断ち切る。
+        local -a env_args=()
+        mapfile -t env_args < <(env_unset_prefix)
+        "${env_args[@]}" tmux new-session -d -s "$sess" -c "$abs_path" "$inner"
         ;;
     esac
 }
@@ -552,12 +591,9 @@ cmd_launch() {
 
     # 6. 起動。shell-command は単一文字列で渡す。クォートは printf '%q ' で機械生成。
     #    親セッション固有のマーカーは env -u で断ち切る（inherited_session_vars 参照）。
-    local inner var
-    local -a env_args=(env)
-    while IFS= read -r var; do
-        [ -n "$var" ] || continue
-        env_args+=(-u "$var")
-    done < <(inherited_session_vars)
+    local inner
+    local -a env_args=()
+    mapfile -t env_args < <(env_unset_prefix)
     inner=$(printf '%q ' "${env_args[@]}" claude "${final_args[@]}")
     backend_launch "$backend" "$sess" "$abs_path" "$inner" "$topology" || return 1
 
