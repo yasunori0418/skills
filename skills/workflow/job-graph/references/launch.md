@@ -8,6 +8,8 @@
 
 - **`--session "$HSESSION"`**（先頭で `HSESSION="${HERDR_SESSION:-default}"` を 1 度定義）— herdr CLI は `HERDR_SESSION` / `HERDR_SOCKET_PATH` が生きていれば現在の session へ解決するが、`COMMANDS` を env の無い別 shell へコピペすると既定 session へ落ち、レーンが親と別の場所に作られる。親と同じ session に並ぶ保証を env に預けない（`herdr --session ""` は拒否されるため未設定時は `default` へ畳む）
 - **起動コマンド先頭の `env -u ...`** — claude は Bash ツールの子シェルへ自分の身元（`CLAUDE_CODE_CHILD_SESSION` / `*_SESSION_ID` / `MESSAGING_*` 等）を注入する。そのまま流すと起動したレーンが**親の子プロセスと誤認**され、**transcript 保存が切られる**・**親宛のメッセージ経路を掴む**。レーンは独立したセッションなので断ち切る。`wt` より前に置くので wt 自身にも波及しない（対象は `plan_orchestration.py` の `INHERITED_SESSION_VARS` が正）
+  - なお `env -u` は **pane の shell へ渡すコマンド文字列の先頭**に置く。pane の環境を決めるのは herdr **server** の environ だけで、`herdr ... pane run` を打つ側の環境は伝播しないため、CLI 呼び出し側に `env -u` を付けても無意味（実測で確認済み）
+  - **前提**: herdr server 自体がクリーンな環境で起動していること。汚染された claude の子シェルから `herdr --session <name> server` を起こすと、その session の**全 pane の shell**がマーカーを持つ。この状態ではレーン起動時の `env -u` で claude 自身は救えるが、ユーザーが手で開いた tab では警告が出る（`project-session` の `herdr_start_session` はこれを踏まえて server 起動を `env -u` 越しにしている）
 
 ## レーン先頭の起動（workspace 作成）
 
