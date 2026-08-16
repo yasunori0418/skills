@@ -38,6 +38,13 @@
   `server_not_running`）、`herdr session attach` は TUI に入る対話コマンドなので、この 2 段構えを取る。
   起動した session はユーザーが attach するまで画面に現れないため、**現在の TUI は奪わない**。
   合流方法は `ATTACH:` 行がそのまま案内する（`herdr session attach <名前>`）。
+- **既定 workspace の後片付け（topology=session のみ）**: herdr server は起動時に必ず既定 workspace
+  （cwd=`$HOME`・ラベル `~`）を 1 つ作る。抑止する設定は herdr 側に無いため、claude を起こした**後**に
+  畳む。放置すると attach したときプロジェクトと無関係なホーム直下の workspace が前面に出て、
+  目的の workspace が背後に回る。閉じるのを claude 起動後にするのは、workspace が 0 個になると
+  server が終了しうるため。対象の ID は決め打ちせず「一覧から自分が作った workspace を除いたもの」
+  として差分で求める（`subtract_ids`）。**自分で立てた session のときだけ**行い、既存 session へ
+  相乗りする topology=workspace では何もしない（ユーザーが使っている workspace を畳まないため）。
 - **topology=session の後始末**: 使い終わったら `herdr --session <名前> server stop` →
   `herdr session delete <名前>`。停止中の session 名も衝突判定に含まれるため、消さないと
   次回同名で立てたとき suffix が付く。
