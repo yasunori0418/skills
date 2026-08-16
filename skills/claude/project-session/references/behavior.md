@@ -18,6 +18,13 @@
 - **親セッションのマーカー除去**: 起動する claude は独立したセッションなので、`env -u` で親セッション
   固有の環境変数を断ち切ってから exec する（放置すると親の子と誤認され transcript 保存が切られる）。
   対象は `launch.sh` の `inherited_session_vars` が正。
+  断ち切る先は claude の起動コマンドだけではない。multiplexer の **server**（`herdr --session <name> server` /
+  tmux の暗黙起動）は自分の environ を配下の**全 pane の shell へ継承させる**ため、server を起こす
+  呼び出しも `env_unset_prefix` 越しにする。これを怠ると root pane の claude は無事でも、ユーザーが
+  後から同 session に開いた tab/pane で claude を立てたとき
+  `⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker` が出る。
+  逆に pane の環境を決めるのは server の environ **だけ**で、CLI クライアント側の環境は伝播しない
+  （実測で確認済み）。既存 server へ繋ぐだけの `workspace create` / `pane run` に `env -u` は付けない。
 - **事前チェック**: backend に必要なコマンド（`herdr` または `tmux`）と `claude` の欠落のみ中断。
   `ghq` は ghq キー解決を使うときだけ必須（パス指定では要求しない）。
   現在ブランチ・dirty は報告するだけで止めない。
