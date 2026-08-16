@@ -163,6 +163,18 @@ check "envprefix:has-child-session" "1" \
     "$(env_unset_prefix | grep -c '^CLAUDE_CODE_CHILD_SESSION$')"
 check "envprefix:no-empty-line" "0" "$(env_unset_prefix | grep -c '^$')"
 
+# subtract_ids: 自分が作った workspace 以外（server が起動時に作る既定 workspace）を
+# 差分で拾う。ID は決め打ちしない。
+check "subtract:drops-kept" "w1" \
+    "$(printf 'w1\nw2\n' | subtract_ids w2)"
+check "subtract:keeps-order" "w1 w3" \
+    "$(printf 'w1\nw2\nw3\n' | subtract_ids w2 | tr '\n' ' ' | sed 's/ $//')"
+# 自分の workspace しか無ければ何も返さない（閉じる対象なし）。
+check "subtract:only-self" "" "$(printf 'w1\n' | subtract_ids w1)"
+# 空行は無視する（herdr の応答が空でも空文字を close しない）。
+check "subtract:skips-empty" "w2" "$(printf '\nw2\n\n' | subtract_ids w1)"
+check "subtract:empty-input" "" "$(printf '' | subtract_ids w1)"
+
 # is_path_query: パス形の query だけ ghq 解決を飛ばす。裸の名前は ghq キーのまま。
 check_rc() { # label expected_rc actual_rc
     if [ "$2" = "$3" ]; then
