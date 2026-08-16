@@ -135,6 +135,12 @@ herdr_session_name() {
 #   - 親のセッション ID を名乗る（CLAUDE_CODE_*SESSION_ID）
 # といった不整合が起きる。起動時に env -u で明示的に断ち切る。
 #
+# GIT_EDITOR は prefix が付かないが同じ経路で注入される。claude 自身が git commit を
+# 実行したときエディタが開いてハングしないよう `true`（no-op）が入るもので、これを
+# 引き継ぐと人が使う shell でも `git commit` がエディタを開かず空メッセージで進む。
+# 落とすと git は core.editor / VISUAL / EDITOR へフォールバックし、shell 由来の
+# 設定が効く。
+#
 # ユーザー設定由来のもの（CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY 等）や実行ファイル解決に
 # 使う CLAUDE_CODE_EXECPATH は引き継ぐので、ここには挙げない。
 # 外部コマンドを呼ばないので単体テストできる。
@@ -145,7 +151,8 @@ inherited_session_vars() {
         CLAUDE_CODE_BRIDGE_SESSION_ID \
         CLAUDE_CODE_MESSAGING_SOCKET \
         CLAUDE_CODE_MESSAGING_TOKEN \
-        CLAUDE_CODE_ENTRYPOINT
+        CLAUDE_CODE_ENTRYPOINT \
+        GIT_EDITOR
 }
 
 # env_unset_prefix

@@ -141,6 +141,10 @@ check "inherit:has-messaging" "2" \
     "$(inherited_session_vars | grep -c '^CLAUDE_CODE_MESSAGING_')"
 check "inherit:has-session-ids" "2" \
     "$(inherited_session_vars | grep -c 'SESSION_ID$')"
+# prefix の付かない GIT_EDITOR も同じ経路で注入される（値は no-op の `true`）。
+# 落とすと git は core.editor / VISUAL / EDITOR へフォールバックする。
+check "inherit:has-git-editor" "1" \
+    "$(inherited_session_vars | grep -c '^GIT_EDITOR$')"
 # ユーザー設定・実行ファイル解決に使うものは引き継ぐので挙げない。
 check "inherit:keeps-execpath" "0" \
     "$(inherited_session_vars | grep -c '^CLAUDE_CODE_EXECPATH$')"

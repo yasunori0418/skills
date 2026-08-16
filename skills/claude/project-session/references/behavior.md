@@ -17,7 +17,10 @@
   実セッション名（suffix 込み）を値として自動注入する。ユーザーが値を書いた場合は触らない（最初の 1 個のみ）。
 - **親セッションのマーカー除去**: 起動する claude は独立したセッションなので、`env -u` で親セッション
   固有の環境変数を断ち切ってから exec する（放置すると親の子と誤認され transcript 保存が切られる）。
-  対象は `launch.sh` の `inherited_session_vars` が正。
+  対象は `launch.sh` の `inherited_session_vars` が正。`CLAUDE_CODE_*` に加え、prefix の付かない
+  **`GIT_EDITOR`** も落とす。claude 自身が `git commit` でハングしないよう `true`（no-op）が入るもので、
+  引き継ぐと**人が使う shell でも `git commit` がエディタを開かず空メッセージのまま進む**。
+  落とせば git は `core.editor` / `VISUAL` / `EDITOR` へフォールバックし、shell 由来の設定が効く。
   断ち切る先は claude の起動コマンドだけではない。multiplexer の **server**（`herdr --session <name> server` /
   tmux の暗黙起動）は自分の environ を配下の**全 pane の shell へ継承させる**ため、server を起こす
   呼び出しも `env_unset_prefix` 越しにする。これを怠ると root pane の claude は無事でも、ユーザーが
