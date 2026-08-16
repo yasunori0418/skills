@@ -149,6 +149,20 @@ check "inherit:keeps-user-prefs" "0" \
 # 空行を含まない（env -u '' は不正な呼び出しになる）。
 check "inherit:no-empty-line" "0" "$(inherited_session_vars | grep -c '^$')"
 
+# env_unset_prefix: `env -u <var> ...` の引数列へ展開する。multiplexer server の
+# 起動もこの prefix 越しに行うため（server の environ は配下の全 pane へ継承される）。
+check "envprefix:starts-with-env" "env" "$(env_unset_prefix | head -1)"
+# 先頭 env + (-u, var) * N 行になる。
+check "envprefix:line-count" \
+    "$((1 + 2 * $(inherited_session_vars | grep -c .)))" \
+    "$(env_unset_prefix | grep -c .)"
+check "envprefix:flag-count" \
+    "$(inherited_session_vars | grep -c .)" \
+    "$(env_unset_prefix | grep -c '^-u$')"
+check "envprefix:has-child-session" "1" \
+    "$(env_unset_prefix | grep -c '^CLAUDE_CODE_CHILD_SESSION$')"
+check "envprefix:no-empty-line" "0" "$(env_unset_prefix | grep -c '^$')"
+
 # is_path_query: パス形の query だけ ghq 解決を飛ばす。裸の名前は ghq キーのまま。
 check_rc() { # label expected_rc actual_rc
     if [ "$2" = "$3" ]; then
