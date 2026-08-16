@@ -43,7 +43,7 @@
 # 純関数（sanitize/resolve_matches/session_base_name/next_session_name/
 # inject_remote_control/detect_backend/extract_topology_flag/detect_topology/
 # herdr_session_name/backend_attach_hint/backend_required_tools/is_path_query/
-# expand_path_query/inherited_session_vars/env_unset_prefix）は
+# expand_path_query/inherited_session_vars/env_unset_prefix/subtract_ids）は
 # 外部コマンド（ghq/tmux/herdr/claude）を
 # 呼ばず、入力は引数と stdin のみ。これにより CI sandbox（jq/git のみ、
 # ghq/tmux/herdr/claude 無し）で
@@ -159,6 +159,21 @@ env_unset_prefix() {
         [ -n "$var" ] || continue
         printf '%s\n%s\n' -u "$var"
     done < <(inherited_session_vars)
+}
+
+# subtract_ids <keep-id>
+# stdin の ID 一覧（1 行 1 件）から keep-id を除いたものを返す。
+# 新しい herdr session を立てたとき、server が起動時に自動生成する既定 workspace
+# （cwd=$HOME・ラベル `~`）を特定するのに使う。ID は決め打ちせず「起動直後に在った
+# もののうち、自分が作った workspace ではないもの」として差分で求める。
+# 外部コマンドを呼ばないので単体テストできる。
+subtract_ids() {
+    local keep="$1" id
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        [ "$id" = "$keep" ] && continue
+        printf '%s\n' "$id"
+    done
 }
 
 # sanitize <name>
@@ -400,13 +415,14 @@ backend_launch() {
     local backend="$1" sess="$2" abs_path="$3" inner="$4" topology="${5:-workspace}"
     case "$backend" in
     herdr)
-        local resp pane hsess
+        local resp pane ws hsess started_session=0
         if [ "$topology" = "session" ]; then
             # プロジェクト専用の herdr session を detached で立て、その中に
             # workspace を作って起動する。子 pane には新 session のソケットが
             # 注入されるので、その session 内で job-graph / lane-ops が完結する。
             herdr_start_session "$sess" || return 1
             hsess="$sess"
+            started_session=1
         else
             # プロジェクト用の新しい workspace を作り、その root pane で claude を
             # 起動する。workspace はリポジトリ単位の長寿命コンテナなので、別の
@@ -424,6 +440,25 @@ backend_launch() {
         # pane の環境は server の environ が決めるので、この CLI 呼び出し自体を
         # env -u 越しにしても効果は無い（実測で確認済み。断ち切る先は server 起動側）。
         herdr --session "$hsess" pane run "$pane" "$inner"
+        # 自分で立てた session に限り、server が起動時に作る既定 workspace
+        # （cwd=$HOME・ラベル `~`）を畳む。プロジェクト専用の session を立てる
+        # topology なので、attach したときプロジェクトと無関係なホーム直下の
+        # workspace が同居しているのは意図に反する。閉じるのは claude を起こした
+        # 後（workspace が 0 個になると server が終了しうるため）。
+        # 既存 session へ相乗りする topology=workspace では、ユーザーが使っている
+        # workspace を畳んでしまうので何もしない。
+        if [ "$started_session" = "1" ]; then
+            ws=$(printf '%s' "$resp" | jq -r '.result.workspace.workspace_id')
+            if [ -n "$ws" ] && [ "$ws" != "null" ]; then
+                local stale
+                while IFS= read -r stale; do
+                    [ -n "$stale" ] || continue
+                    herdr --session "$hsess" workspace close "$stale" >/dev/null 2>&1 || true
+                done < <(herdr --session "$hsess" workspace list 2>/dev/null |
+                    jq -r '.result.workspaces[]?.workspace_id // empty' 2>/dev/null |
+                    subtract_ids "$ws")
+            fi
+        fi
         ;;
     *)
         # tmux は server 未起動なら new-session が暗黙起動し、その environ が
