@@ -27,7 +27,16 @@ bfile="$worktree/.claude/task-boundary.json"
 
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
-jq --args '.allow = ((.allow // []) + $ARGS.positional | unique)' "$bfile" "$@" > "$tmp"
+# --args 以降の非オプション引数はすべて positional 文字列になるため、入力ファイルを
+# 引数で渡すと stdin から読んでしまう（空 stdin だと空出力 → mv で境界ファイルが
+# 0 バイトになり task-boundary hook が全 deny する事故が実際に起きた）。
+# 入力は必ずリダイレクトで渡す。
+jq --args '.allow = ((.allow // []) + $ARGS.positional | unique)' "$@" < "$bfile" > "$tmp"
+# 防御: 結果が空・不正 JSON なら境界ファイルに触れず abort する
+if ! [ -s "$tmp" ] || ! jq -e . "$tmp" > /dev/null 2>&1; then
+    echo "ERROR: widen 結果が空か不正な JSON。境界ファイルは変更しない: $bfile" >&2
+    exit 1
+fi
 mv "$tmp" "$bfile"
 trap - EXIT
 
