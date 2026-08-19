@@ -93,6 +93,11 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 
 制約 6 のとおり lane-ops の運用ループに従う（監視の常駐・報告の裏取り・blocked への応答）。
 
+長時間ジョブは 1 セッションで完走しない前提で、**Phase 2 完了時点で
+`tmp_claude/<job>/handoff.md` を生成し、状態が変わるたび（wave 完了・PR 作成・
+事前裁定の追加）に更新する**。様式と必須要素は `references/handoff.md`。
+セッション跨ぎの再開はこのファイルを唯一の入口にする。
+
 ### Phase 4: PR 作成と凍結
 
 各ワーカーは `/review-converge` 収束後に自分で `/pr-create [base]` を実行する（規約で指示済み）。PR 作成の報告を受けたら機械検証し、レーンの凍結（以降の実装変更・push 停止）を確認する。逸脱を見つけたら lane-ops の `send_instruction.sh` で明示的に止める。
@@ -109,4 +114,4 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 
 - `lane-ops`（Phase 3〜4 の実体）/ `commit-plan`（Phase 1）/ `review-converge`・`pr-create`（各ワーカーが実行）/ `post-merge-cleanup`（Phase 5）
 - `herdr` / `worktrunk`: herdr CLI・`wt` の一般規約が要るとき
-- `references/`: `dependency-analysis.md`（依存辺・境界の判定基準）/ `launch.md`（COMMANDS の解説）/ `boundary.md`（境界ファイルと deny 後のフロー）/ `restack.md`（下段変更時の載せ替え）
+- `references/`: `dependency-analysis.md`（依存辺・境界の判定基準）/ `launch.md`（COMMANDS の解説）/ `boundary.md`（境界ファイルと deny 後のフロー）/ `restack.md`（下段変更時の載せ替え）/ `handoff.md`（セッション跨ぎ引き継ぎ書の様式と生成規約）
