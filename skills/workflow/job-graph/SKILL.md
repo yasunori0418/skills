@@ -69,7 +69,7 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 ### Phase 1: 事前確認・スケジュール算出 → plan 承認
 
 1. `bash <SKILL>/scripts/preflight.sh` を実行し、`WARNING` を解消する。
-2. 親（自分）に herdr のエージェント名を付ける: `herdr --session "${HERDR_SESSION:-default}" agent rename "$HERDR_PANE_ID" <一意な短い名前>`（ワーカー報告の宛先。lane-ops 参照）。
+2. 親（自分）に herdr のエージェント名を付ける: `herdr --session "${HERDR_SESSION:-default}" agent rename "$HERDR_PANE_ID" <一意な短い名前>`（ワーカー報告の宛先。lane-ops 参照）。この名前は起動済みワーカーの規約（worker_contract）に焼き付くため、**セッション再開・herdr セッション復旧のたびに同じ名前で rename し直す**。一字でも違うと report.sh の報告が届かなくなる。
 3. `plan_orchestration.py` を `--prompt-dir`（scratchpad 配下）と `--parent-name`（上記の名前）付きで実行し、`ERROR` が出たら spec を直して再実行。
 4. 出力を土台に plan を組み、**`ExitPlanMode` で承認を取る**。plan には必ず含める:
    - **起動ウェーブとレーン割当**（`SCHEDULE` / `LANES`）
