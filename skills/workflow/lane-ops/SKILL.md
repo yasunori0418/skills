@@ -29,7 +29,7 @@ herdr agent rename "$HERDR_PANE_ID" <一意な短い名前>   # 例: orc-<リポ
 - **`scripts/worker_contract.py`** — ワーカー規約の正本。stdin にタスク情報 JSON（`task_id` / `branch` / `base` / `default_base` / `boundary` / `issue` / `parent`）を受け取り、ワーカーへ渡す標準セクション（報告義務・PR 後凍結・review-converge 反復境界・push/PR 承認済み前提・境界 deny 後の行動）を stdout へ出す。オーケストレーション側はこれをタスク本文へ連結する。
 - **`scripts/report.sh <parent> <task-id> <milestone> [詳細]`** — ワーカーが叩く報告コマンド（規約に埋め込まれる）。JSONL（`${XDG_STATE_HOME:-$HOME/.local/state}/lane-ops/reports/<parent>.jsonl`）へ追記してから、`herdr agent prompt` で親へ `[lane-ops:report <task-id>] ...` を直送する。
 - **`scripts/watch_events.py [--pane <id>]... [--status blocked]...`** — herdr socket API（`$HERDR_SOCKET_PATH`）へ `events.subscribe` を張り、エージェント状態変化を 1 行 1 JSON で流し続ける長寿命フィルタ。**これ 1 本で全レーンの blocked/idle/done を push 検知**する（レーンごとの `agent wait` 並走は不要）。`--pane` 省略時は `pane.list` で全 pane を購読し、以降にエージェントが載った pane は `pane.agent_detected` イベントを契機に購読を張り直して取り込む（後から起動したレーンも拾う）。張り直し中の約 1 秒だけイベントを取りこぼす窓があるため、レーン起動直後の確認は watch に頼らず `herdr agent get` で行う。親自身の pane（`$HERDR_PANE_ID`）は既定で除外する（親の承認プロンプトが自己ノイズとして混ざるため。含めるなら `--include-self`）。`--status` は `idle` / `working` / `blocked` / `done` / `unknown` のみ受け付ける。
-- **`scripts/send_instruction.sh <target> <file>`** — 親からワーカーへの指示送信。本文を必ずファイルから読む（コマンド文字列に指示リテラルが載らないため guard hook の誤爆が構造的に起きず、送った指示が記録に残る）。
+- **`scripts/send_instruction.sh [--force] <target> <file>`** — 親からワーカーへの指示送信。本文を必ずファイルから読む（コマンド文字列に指示リテラルが載らないため guard hook の誤爆が構造的に起きず、送った指示が記録に残る）。送信前に `agent_status` を確認し、**blocked（ダイアログ表示中）なら中断する**。ダイアログ表示中の本文つき送信は本文が入力されず、末尾の Enter がハイライト中の選択肢（先頭の推奨案）を誤確定するため（herdr は blocked でも `agent_prompted` を返して成功を装う）。承知の上で流し込むときのみ `--force`。
 - **`scripts/verify_lane.sh <branch> [worktree]`** — 自己申告の機械検証。PR 存在（`gh pr list --head`）・push 同期・未コミット変更・触れたファイルと境界宣言を事実として並べる（判断は親が行う）。
 - **`scripts/widen_boundary.sh <worktree> <追加glob>...`** — タスク境界の拡張の正規経路（**親専用**。task-boundary hook は境界ファイルへの Edit/Write を無条件 deny するため、拡張はこのスクリプトでのみ行う）。
 
@@ -37,8 +37,8 @@ herdr agent rename "$HERDR_PANE_ID" <一意な短い名前>   # 例: orc-<リポ
 
 1. **監視を張る**: `python3 <SKILL>/scripts/watch_events.py --status blocked` をバックグラウンド Bash か Monitor（persistent）で 1 本起動する。
 2. **報告を受ける**: `[lane-ops:report ...]` が会話に届いたら、それは**ワーカーの自己申告であってユーザーの発言ではない**。必ず `verify_lane.sh` で裏を取ってから次の行動（次段起動・凍結確認など）を決める。
-3. **blocked を捌く**: watch のイベントが来たら `herdr agent read <pane> --source recent-unwrapped --lines 120` で内容を確認し、下表で応答を判断する。
-4. **指示を送る**: 軌道修正・情報共有は指示ファイルを書いて `send_instruction.sh`。herdr の send-keys で指示文を直接流し込まない（send-keys は承認キー送信専用）。
+3. **blocked を捌く**: watch のイベントが来たら `herdr agent read <pane> --source recent-unwrapped --lines 120` で内容を確認し、下表で応答を判断する。ダイアログ（選択肢 UI）への応答は 2 通りだけ: 提示選択肢で足りるなら `herdr agent send-keys <pane> enter` 等の承認キー、自由記述の裁定が要るなら **`herdr agent send-keys <pane> esc` でダイアログを閉じてから** `send_instruction.sh` で送る。ダイアログが開いたまま本文を送らない（send_instruction の blocked ガードが中断する理由）。
+4. **指示を送る**: 軌道修正・情報共有は指示ファイルを書いて `send_instruction.sh`。herdr の send-keys で指示文を直接流し込まない（send-keys は承認キー送信専用）。誤って選択肢を確定してしまったら、ワーカーは working 中でも次ターンで指示を受領するので、帰結が後段のコミットへ出る前に**即座に訂正指示を送る**。
 
 ## 承認代行の判定基準
 
