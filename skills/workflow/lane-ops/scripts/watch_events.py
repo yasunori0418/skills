@@ -9,7 +9,7 @@ herdr の socket（NDJSON over Unix domain socket）へ `events.subscribe` を�
 
 使い方:
     python3 watch_events.py [--pane <pane_id>]... [--status <status>]... \
-        [--type <event_type>]...
+        [--type <event_type>]... [--include-self]
 
 - --type 省略時は pane.agent_status_changed を購読する
 - --status を付けるとその状態に絞る（省略 = 全状態）
@@ -27,6 +27,13 @@ pane 生成とエージェント起動は別ステップで、pane_created の�
 `pane.agent_detected` は「エージェントが載った瞬間」に配信されるため競合が無く、
 コマンド実行用の短命 pane（エージェントが載らない）による張り直しチャーンも
 構造的に起きない。
+
+自動追随では **親自身の pane（$HERDR_PANE_ID）を既定で除外する**。親（この
+スクリプトを起動したオーケストレータ）の承認プロンプトも blocked イベントに
+なり、レーン監視の自己ノイズとして混ざるため（実運用で親 pane の blocked が
+イベントログへ混入した）。含めたいときは --include-self。別セッションの
+socket を監視する場合は $HERDR_PANE_ID の ID 空間が対象セッションと別なので、
+偶然一致する無関係な pane を除外しないよう --include-self を付ける。
 
 出力: 購読 ack と内部管理用イベントを除く受信行をそのまま 1 行ずつ flush 付きで
 出力。接続が切れたら exit 1（呼び出し側が再起動を判断する）。
@@ -218,6 +225,7 @@ class Options:
     panes: tuple[str, ...] = ()
     statuses: tuple[AgentStatus, ...] = ()
     types: tuple[str, ...] = (DEFAULT_TYPE,)
+    include_self: bool = False
 
     @property
     def follow(self) -> bool:
@@ -242,12 +250,26 @@ def parse_args(argv: list[str]) -> Options:
         choices=agent_statuses(),
     )
     parser.add_argument("--type", action="append", default=[], metavar="EVENT_TYPE")
+    parser.add_argument("--include-self", action="store_true")
     ns = parser.parse_args(argv[1:])
     return Options(
         panes=tuple(ns.pane),
         statuses=tuple(ns.status),
         types=tuple(ns.type) or (DEFAULT_TYPE,),
+        include_self=ns.include_self,
     )
+
+
+def self_pane_to_exclude(include_self: bool, environ: dict[str, str]) -> str:
+    """自動追随で購読から外す親 pane（除外しないときは空文字を返す。純粋）。
+
+    親の pane では自身の承認プロンプトも blocked イベントになり、レーン監視の
+    自己ノイズとして混ざる。既定で $HERDR_PANE_ID を除外し、--include-self で
+    戻せるようにする。--pane 明示時は呼び出し側が使わない（明示指定を尊重）。
+    """
+    if include_self:
+        return ""
+    return environ.get("HERDR_PANE_ID", "")
 
 
 def build_subscriptions(
@@ -457,6 +479,7 @@ def main(argv: list[str]) -> int:
     statuses = list(opts.statuses)
     follow = opts.follow
     known: set[str] = set(opts.panes)
+    self_pane = self_pane_to_exclude(opts.include_self, dict(os.environ)) if follow else ""
 
     # 張り直しのきっかけになったが、次の列挙には現れなかった pane。
     # エージェント検出の直後に pane ごと消えた場合の保険で、以後は張り直しの
@@ -468,6 +491,7 @@ def main(argv: list[str]) -> int:
             # 購読を張る前に毎回列挙し直す（購読後は同一接続で他メソッドを呼べない）。
             # 消えた pane を購読対象に残すと購読ごと失敗するため、列挙結果で置き換える。
             known = set(list_panes(sock_path))
+            known.discard(self_pane)
         subs = build_subscriptions(types, sorted(known), statuses)
         if follow:
             # エージェントが載った pane は購読ストリームを張り直して取り込む。
@@ -479,7 +503,9 @@ def main(argv: list[str]) -> int:
             )
             return 1
 
-        trigger = stream_events(sock_path, subs, (known | ignored) if follow else None)
+        # 親 pane も known に混ぜて渡す（agent_detected が来ても張り直さない）。
+        watch_known = known | ignored | ({self_pane} if self_pane else set())
+        trigger = stream_events(sock_path, subs, watch_known if follow else None)
         if trigger is None:
             print("ERROR: herdr socket が切断された", file=sys.stderr)
             return 1

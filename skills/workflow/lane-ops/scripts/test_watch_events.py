@@ -156,3 +156,16 @@ def test_is_stale_pane_error():
 
 def test_agent_statuses_matches_schema():
     assert set(we.agent_statuses()) == {"idle", "working", "blocked", "done", "unknown"}
+
+
+def test_parse_args_include_self_flag():
+    assert we.parse_args(["watch_events.py"]).include_self is False
+    assert we.parse_args(["watch_events.py", "--include-self"]).include_self is True
+
+
+def test_self_pane_excluded_by_default():
+    """親自身の pane は既定で購読対象から外す（自己ノイズ対策）。"""
+    env = {"HERDR_PANE_ID": "w1:p2"}
+    assert we.self_pane_to_exclude(False, env) == "w1:p2"
+    assert we.self_pane_to_exclude(True, env) == ""
+    assert we.self_pane_to_exclude(False, {}) == ""
