@@ -65,5 +65,10 @@ herdr agent rename "$HERDR_PANE_ID" <一意な短い名前>   # 例: orc-<リポ
   ```
 
   素で `claude --continue` を流すと復旧したレーンが**親（自分）の子プロセスと誤認**され、transcript 保存が切られる・親宛のメッセージ経路を掴む。レーンは独立したセッションなので断ち切る。
+- **herdr セッション全損からの復旧**（サーバー再起動で session が消え、レーンの workspace / pane / ワーカー claude が全滅したとき）: 失われるのは pane だけで、worktree・追跡外ファイル（改名マップ等）・境界ファイルはディスクに残る。実績のある手順:
+  1. `wt list` と worktree の中身で被害を棚卸しする
+  2. 生きているセッションでレーン workspace を**同じ label で**再作成する（job-graph の wave 起動コマンドは workspace を label で引くため、label を合わせればコマンドが互換のまま使える）
+  3. root pane の cwd を対象 worktree にして、上記の `env -u ... claude --continue` で再開する（`--continue` は cwd 単位で直近会話を再開するので、worktree cwd なら正しいワーカー会話が戻る）
+  4. **親の rename をやり直す**。ワーカー規約（worker_contract）には親のエージェント名が焼き付いているため、**一字一句同じ名前**で rename しないと report.sh の報告が届かない
 - `agent wait` / watch が idle/done を報じても完了とは限らない。完了判定は常に `verify_lane.sh` の事実で行う。
 - herdr CLI 自体の詳細（pane/agent/workspace 操作の一般規約）は herdr スキルの領分。
