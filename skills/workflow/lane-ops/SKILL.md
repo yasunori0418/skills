@@ -70,5 +70,6 @@ herdr agent rename "$HERDR_PANE_ID" <一意な短い名前>   # 例: orc-<リポ
   2. 生きているセッションでレーン workspace を**同じ label で**再作成する（job-graph の wave 起動コマンドは workspace を label で引くため、label を合わせればコマンドが互換のまま使える）
   3. root pane の cwd を対象 worktree にして、上記の `env -u ... claude --continue` で再開する（`--continue` は cwd 単位で直近会話を再開するので、worktree cwd なら正しいワーカー会話が戻る）
   4. **親の rename をやり直す**。ワーカー規約（worker_contract）には親のエージェント名が焼き付いているため、**一字一句同じ名前**で rename しないと report.sh の報告が届かない
+- **ワーカーの push が数分応答しないときは待ち続けない**。原因はほぼ対話型 credential 経路の入力待ち（helper チェーンの git-credential-oauth 等が URL 提示で待つ・askpass 起動・対話 shell の履歴展開で `!gh` の helper 指定が壊れる、など。ワーカーの「規約どおり実行した」という自己申告と実際に走ったコマンドは一致しているとは限らない）。対処は**親の代行 push** が標準: worktree はオブジェクト DB を共有するため、メインリポジトリから `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push <URL> <branch>:<branch>` で代行できる（per-ref アトミックなので競合しても安全）。代行後はワーカーへ「push の再試行を中止し、リモート一致を確認して次工程へ」を指示する。
 - `agent wait` / watch が idle/done を報じても完了とは限らない。完了判定は常に `verify_lane.sh` の事実で行う。
 - herdr CLI 自体の詳細（pane/agent/workspace 操作の一般規約）は herdr スキルの領分。
