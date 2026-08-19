@@ -47,7 +47,7 @@ def test_global_type_needs_no_pane():
     assert we.build_subscriptions(["worktree.created"], [], []) == [
         {"type": "worktree.created"}
     ]
-    assert we.pane_created_subscription() == {"type": "pane.created"}
+    assert we.agent_detected_subscription() == {"type": "pane.agent_detected"}
 
 
 def test_subscribe_request_is_ndjson_line():
@@ -96,62 +96,47 @@ def test_parse_pane_list():
     assert we.parse_pane_list("not json") is None
 
 
-def test_parse_pane_created():
-    """event 系はアンダースコア記法（`pane_created`）で届く。"""
+def test_parse_agent_detected():
+    """event 系はアンダースコア記法（`pane_agent_detected`）で届く（実測形）。"""
     line = json.dumps(
         {
-            "event": "pane_created",
-            "data": {"type": "pane_created", "pane": {"pane_id": "wA:p3"}},
+            "event": "pane_agent_detected",
+            "data": {
+                "type": "pane_agent_detected",
+                "pane_id": "wA:p3",
+                "agent": "claude",
+                "workspace_id": "wA",
+            },
         }
     )
-    assert we.parse_pane_created(line) == "wA:p3"
-    assert we.parse_pane_created(json.dumps({"event": "pane.agent_status_changed"})) is None
-    assert we.parse_pane_created("not json") is None
+    assert we.parse_agent_detected(line) == "wA:p3"
+    assert we.parse_agent_detected(json.dumps({"event": "pane.agent_status_changed"})) is None
+    assert (
+        we.parse_agent_detected(
+            json.dumps({"event": "pane_created", "data": {"pane": {"pane_id": "wA:p3"}}})
+        )
+        is None
+    )
+    assert we.parse_agent_detected("not json") is None
 
 
 def test_follow_mode_subscription_set_is_single_request():
     """自動追随の購読は 1 リクエストにまとめる（1 接続 1 subscribe の制約）。
 
     herdr は同一接続への 2 回目の events.subscribe で接続をリセットするため、
-    pane ごとの購読と pane.created を 1 つの subscriptions 配列へ積む必要がある。
+    pane ごとの購読と pane.agent_detected を 1 つの subscriptions 配列へ
+    積む必要がある。
     """
     subs = we.build_subscriptions([], ["wA:p1", "wA:pA"], ["blocked"])
-    subs.append(we.pane_created_subscription())
+    subs.append(we.agent_detected_subscription())
     assert len(subs) == 3
-    assert {"type": "pane.created"} in subs
-    assert all("pane_id" in s for s in subs if s["type"] != "pane.created")
+    assert {"type": "pane.agent_detected"} in subs
+    assert all("pane_id" in s for s in subs if s["type"] != "pane.agent_detected")
 
     line = we.subscribe_request(subs)
     assert line.endswith("\n")
     assert len(line.splitlines()) == 1
     assert len(json.loads(line)["params"]["subscriptions"]) == 3
-
-
-def test_pane_get_request_is_ndjson_line():
-    req = we.pane_get_request("wA:pD")
-    assert req.endswith("\n")
-    data = json.loads(req)
-    assert data["method"] == "pane.get"
-    assert data["params"]["pane_id"] == "wA:pD"
-    assert data["id"] == we.PANE_GET_ID
-
-
-def test_parse_pane_agent():
-    """エージェントが載る pane だけ追随対象にする（短命な実行 pane を除外）。"""
-    with_agent = json.dumps(
-        {
-            "id": we.PANE_GET_ID,
-            "result": {"type": "pane_info", "pane": {"pane_id": "wA:pD", "agent": "claude"}},
-        }
-    )
-    assert we.parse_pane_agent(with_agent) == "claude"
-
-    shell_only = json.dumps(
-        {"id": we.PANE_GET_ID, "result": {"type": "pane_info", "pane": {"pane_id": "wA:p9"}}}
-    )
-    assert we.parse_pane_agent(shell_only) is None
-    assert we.parse_pane_agent(json.dumps({"id": "other", "result": {}})) is None
-    assert we.parse_pane_agent("not json") is None
 
 
 def test_is_stale_pane_error():
