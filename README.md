@@ -75,6 +75,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 | `yasunori0418-webfetch-github-guard-hooks`   | `./hooks/webfetch-github-guard-plugin` | github.com への WebFetch を差し戻し gh へ誘導                 |
 | `yasunori0418-sudo-guard-hooks`              | `./hooks/sudo-guard-plugin`           | Bash の sudo 実行を禁止                                       |
 | `yasunori0418-broad-scan-guard-hooks`        | `./hooks/broad-scan-guard-plugin`     | find/fd のルート(`/`)起点の全探索を deny、`$HOME` 直下起点は深さ制限を強制($HOME 配下・rg/grep/ls は対象外) |
+| `yasunori0418-noclobber-guard-hooks`         | `./hooks/noclobber-guard-plugin`      | zsh の noclobber で確実に失敗する `>` リダイレクト(静的に解決でき、かつ既存のファイルへの上書き)を deny し `>\|` へ誘導(解決できない書き先には沈黙) |
 | `yasunori0418-notify-stop-hooks`             | `./hooks/notify-stop-plugin`          | Stop 時のデスクトップ通知                                     |
 | `yasunori0418-task-boundary-hooks`           | `./hooks/task-boundary-plugin`        | 境界ファイル `.claude/task-boundary.json` の外への Edit/Write/NotebookEdit を deny(境界ファイルが無ければ沈黙) |
 | `yasunori0418-teammate-leak-guard-hooks`     | `./hooks/teammate-leak-guard-plugin`  | Stop 時に稼働中のサブエージェント/チームメイトが残っていれば TaskStop を促す(idle は終了ではないため放置すると滞留する) |
