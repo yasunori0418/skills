@@ -1,0 +1,16 @@
+{
+  "description": "既存ファイルへの `>` リダイレクトを deny し、zsh の noclobber による silent な失敗を防ぐ hook。",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/noclobber-guard/main.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

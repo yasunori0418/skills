@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "yasunori0418-noclobber-guard-hooks",
+  "description": "zsh の noclobber で確実に失敗する `>` リダイレクト（既存ファイルへの上書き）を事前に deny し、`>|` への書き換えを促す hook。hooks/hooks.json を規約検出する。",
+  "version": "0.1.0",
+  "author": {
+    "name": "yasunori0418"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "hooks", "guard", "zsh", "noclobber", "redirect"]
+}

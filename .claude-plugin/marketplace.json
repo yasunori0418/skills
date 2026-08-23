@@ -138,6 +138,16 @@
       "tags": ["claude-code", "hooks", "guard", "find", "search"]
     },
     {
+      "name": "yasunori0418-noclobber-guard-hooks",
+      "source": "./hooks/noclobber-guard-plugin",
+      "description": "zsh の noclobber 環境で確実に失敗する `>` リダイレクト（静的に解決でき、かつ既に存在するファイルへの上書き）を deny し、`>|` への書き換えを促す hook。解決できない書き先には沈黙する（fail-open）。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "hooks",
+      "tags": ["claude-code", "hooks", "guard", "zsh", "noclobber", "redirect"]
+    },
+    {
       "name": "yasunori0418-task-boundary-hooks",
       "source": "./hooks/task-boundary-plugin",
       "description": "worktree の境界ファイル .claude/task-boundary.json が宣言する glob の外への Edit / Write / NotebookEdit を deny する hook。境界ファイルが無ければ沈黙する（fail-open）。",
