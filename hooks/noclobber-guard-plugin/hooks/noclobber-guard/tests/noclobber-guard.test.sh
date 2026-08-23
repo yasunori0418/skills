@@ -118,6 +118,8 @@ check "inside-bash-c" "" \
 check "default-expansion" "" \
     "$(decision "DB=\"\${XDG_CACHE_HOME:-\$HOME/.cache}/x.db\"
 echo hi > \$DB")" # \${VAR:-default} は解決しない
+check "created-within-same-command" "" \
+    "$(decision "echo a > $TMP/fresh2.txt && echo b > $TMP/fresh2.txt")" # 判定は実行前なので 2 回目は検知できない（既知の限界）
 
 # --- 沈黙: リダイレクトが無い ----------------------------------------------
 check "no-redirect" "" \
