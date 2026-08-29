@@ -2,6 +2,7 @@
 # Verifies converge_state.py (review-converge の収束ループ制御):
 #   - 閾値以上の指摘ゼロ           -> converged
 #   - 閾値未満のみ / 境界外のみ    -> converged(修正対象から除外される)
+#   - improvement のみ             -> converged(見送り一覧 improvements へ蓄積)
 #   - 指摘が残る                   -> continue
 #   - 周回上限(既定 5)到達        -> limit-reached
 #   - 同一指摘が 2 周連続で未解消  -> oscillation (stuck)
@@ -53,6 +54,7 @@ F_MUST='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severit
 F_OTHER='[{"file":"src/b.py","line":20,"summary":"命名が不明瞭","severity":"must"}]'
 F_NIT='[{"file":"src/a.py","line":10,"summary":"空白の揺れ","severity":"nit"}]'
 F_OUT='[{"file":"other/x.py","line":1,"summary":"別タスクの問題","severity":"must","scope":"out"}]'
+F_IMPROVE='[{"file":"src/a.py","line":30,"summary":"bool を enum に型化すべき","severity":"want+","kind":"improvement"}]'
 F_EMPTY='[]'
 
 # --- 収束 ---
@@ -68,6 +70,25 @@ OUT=$(record "$S" "$F_OUT" --head aaa111)
 check "converged-out-of-scope" "converged" "$(verdict "$OUT")"
 has "deferred-listed" "$OUT" '"deferred_count": 1'
 has "deferred-detail" "$OUT" "別タスクの問題"
+
+# improvement は severity が閾値以上でも修正対象にならない(見送り一覧へ)
+S="$WORK/converged-improvement.json"
+OUT=$(record "$S" "$F_IMPROVE" --head aaa111)
+check "converged-improvement-only" "converged" "$(verdict "$OUT")"
+has "improvements-listed" "$OUT" '"improvements_count": 1'
+has "improvements-detail" "$OUT" "bool を enum に型化すべき"
+
+# improvement は周回横断で union される(後の周回で再報告されなくても残る)
+S="$WORK/improvements-union.json"
+record "$S" "$F_IMPROVE" --head aaa111 >/dev/null
+OUT=$(record "$S" "$F_EMPTY" --head bbb222)
+check "improvements-union-verdict" "converged" "$(verdict "$OUT")"
+has "improvements-union-kept" "$OUT" '"improvements_count": 1'
+
+# improvement は振動検知の対象外(同じ improvement が 2 周続いても oscillation にしない)
+S="$WORK/improvement-no-stuck.json"
+record "$S" "$F_IMPROVE" --head aaa111 >/dev/null
+check "improvement-not-stuck" "converged" "$(verdict "$(record "$S" "$F_IMPROVE" --head bbb222)")"
 
 # nit 閾値なら nit も修正対象になる
 S="$WORK/nit-threshold.json"
@@ -153,6 +174,14 @@ has "lens-narrow-picked" "$OUT" '"design"'
 check "lens-narrow-excludes-nit-only-lens" "design" \
     "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["next_lenses"]))')"
 
+# improvement しか出さなかったレンズは次周回で回さない
+S="$WORK/lens-improvement.json"
+F_LENS_IMPROVE='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severity":"must","lens":"logic"},
+                 {"file":"src/b.py","line":20,"summary":"enum に型化すべき","severity":"want+","kind":"improvement","lens":"design"}]'
+OUT=$(record "$S" "$F_LENS_IMPROVE" --head aaa111 --max-rounds 5)
+check "lens-excludes-improvement-only-lens" "logic" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["next_lenses"]))')"
+
 # 最終周回の直前(次が上限周回)は徹底パスへ戻す -> null(= 全レンズ)
 S="$WORK/lens-final.json"
 record "$S" "$F_MUST" --head r1 --max-rounds 3 >/dev/null
@@ -178,5 +207,7 @@ printf 'not json' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
 check "invalid-json" 2 $?
 printf '[{"file":"a","line":1,"summary":"s","scope":"nowhere"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
 check "invalid-scope" 2 $?
+printf '[{"file":"a","line":1,"summary":"s","kind":"refactor"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
+check "invalid-kind" 2 $?
 
 exit $fail

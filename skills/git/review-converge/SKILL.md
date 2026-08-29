@@ -21,7 +21,8 @@ diff-review の責務で、こちらはその read-only 単発設計に手を触
 
 `/review-converge [--until <must|want+|want|nit>]`
 
-- `--until`: 収束閾値。**この重み以上の指摘がゼロ**になったら収束とする。既定 `want`
+- `--until`: 収束閾値。**この重み以上の fix 指摘(境界内)がゼロ**になったら収束とする。既定 `want`。
+  improvement(改善提案)は severity に関わらず収束判定・修正対象から外れる(手順 2 の `kind`)
 - severity の語彙と意味論(must / want+ / want / nit・実害ベースの判定)は **diff-review 側の定義が正**。
   こちらで再定義しない
 - 閾値 `want` なら nit は残っていても収束。`must` なら want 系も残せる
@@ -59,6 +60,8 @@ diff-review スキルを起動してレビューさせる。
   前周回差分に寄せることでトークン消費を抑える
 - レンズ指定はユーザーの依頼をそのまま引き継ぐ。無指定なら diff-review の既定に任せる
   (グラウンドトゥルース検出時は `spec` レンズが既定に昇格する)
+- **improvement(改善提案)の報告モードを明示要求しない**(既定呼びのまま)。このループの
+  修正対象は fix のみ(手順 2 の `kind`)で、改善提案を集めてもループ内では消化しない
 - 事前準備 4 で確定したグラウンドトゥルースがあれば、**毎周回それを diff-review へ渡す**
   (`DIFF_REVIEW_GROUND_TRUTH` に載せる採用パス)。周回ごとに候補の再確認はしない
 - **レンズ段階戦略(2 周目以降)**: 前周回の `record` 出力にある `next_lenses` に従う。
@@ -80,7 +83,8 @@ python3 <SKILL_DIR>/scripts/converge_state.py record \
   --state <STATE> --head "$(git rev-parse HEAD)" \
   --threshold <--until で指定された閾値。既定 want> --max-rounds 5 <<'JSON'
 [
-  {"file": "src/a.py", "line": 42, "summary": "境界値が未処理", "severity": "must", "scope": "in", "lens": "design"},
+  {"file": "src/a.py", "line": 42, "summary": "境界値が未処理", "severity": "must", "scope": "in", "kind": "fix", "lens": "design"},
+  {"file": "src/a.py", "line": 30, "summary": "bool を enum に型化すべき", "severity": "want+", "scope": "in", "kind": "improvement", "lens": "design"},
   {"file": "other/x.py", "line": 7, "summary": "別タスクの問題", "severity": "want", "scope": "out", "lens": "test"}
 ]
 JSON
@@ -90,6 +94,12 @@ JSON
   同じ指摘は同じ趣旨の要旨で書く(言い回しの揺れ・句読点・空白は正規化で吸収される)
 - `scope`: diff-review が付けたスコープ分類をそのまま写す。「境界外」なら `"out"`、それ以外は `"in"`。
   diff-review が分類を付けていない(タスク境界ファイルが無い)場合は全件 `"in"`
+- `kind`: diff-review の統合報告に kind タグ(fix / improvement)があればそのまま写す。
+  無ければ自分で分類する — **今回の diff が導入した欠陥・退行・仕様不適合の指摘は `"fix"`**
+  (diff が導入した過剰実装を削れ・簡素化しろという指摘も fix)。**既存コードのシグネチャ・構造・
+  スタイルの変更を要する提案(型化・関数抽出・enum 化・テストハーネス再設計・命名変更)や、
+  計画・依頼範囲外の追加修正の提案は severity に関わらず `"improvement"`**。
+  迷ったら improvement に倒す(修正の強制は安全側ではない)
 - `lens`: 統合報告のレンズタグ(`[design]` 等)をそのまま写す。複数レンズが 1 件に統合されていたら
   最も重い severity を出したレンズを 1 つ選ぶ。タグが無ければ省略してよい(その場合はレンズ絞り込みが働かず、
   次周回は全レンズでの起動になる)
@@ -106,7 +116,9 @@ JSON
 | `limit-reached` | 周回上限に到達。**ユーザーへエスカレーション**して停止する |
 | `oscillation` | 振動を検出。**ユーザーへエスカレーション**して停止する |
 
-`continue` のときの修正対象は `remaining`(閾値以上・境界内)のみ。`deferred`(境界外)は**修正しない**。
+`continue` のときの修正対象は `remaining`(閾値以上・境界内・kind=fix)のみ。
+`deferred`(境界外)と `improvements`(改善提案。周回横断で蓄積される)は**修正しない**
+(どちらも最終報告の見送り一覧に載せる。情報は落とさない)。
 次周回のレンズは同じ出力の `next_lenses` に従う(手順 1 のレンズ段階戦略)。中間周回は前周回で
 指摘を出したレンズだけを回し、最終周回は全レンズの徹底パスに戻る判定をスクリプトが行うので、
 **周回ごとのレンズ数を自分で決めない**。
