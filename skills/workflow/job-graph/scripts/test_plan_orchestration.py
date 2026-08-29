@@ -279,10 +279,9 @@ def test_render_all_herdr_calls_pin_session():
     assert bare == []
 
 
-def test_render_base_always_explicit():
+def test_launch_script_base_always_explicit():
     # wave 0 の独立タスクにも必ず --base を明示する
-    out = rendered([task("A")], default_base="develop")
-    assert "--create br-A --base develop" in out
+    assert "--create br-A --base develop" in launch_body([task("A")], default_base="develop")["A"]
 
 
 def test_render_lane_head_creates_workspace_and_stacked_adds_tab():
@@ -307,61 +306,81 @@ def test_render_stacked_gate_is_pr_creation():
     assert "gh pr list --head br-A" in out
 
 
-def test_render_launch_uses_wt_and_prompt_file():
-    out = rendered([task("A")])
-    assert "wt switch --create br-A --base main -x claude --" in out
-    assert "$(cat /tmp/jg-prompts/A.md)" in out
+def launch_body(tasks, launch=None, prompt_dir="/tmp/jg-prompts", default_base="main"):
+    """各 task の起動スクリプト本文（task id -> body）。"""
+    plan = spec(tasks, default_base=default_base)
+    an = po.analyze(plan)
+    assert an.errors == []
+    return {
+        t.id: po.launch_script(t, an.bases[t.id], launch or po.Launch(), prompt_dir).body
+        for t in plan.tasks
+    }
 
 
-def test_render_strips_parent_session_markers():
-    # 各レーンは独立したセッションなので、親セッション固有のマーカーを wt より前で
-    # 断ち切る（放置するとレーンが親の子と誤認され transcript 保存が切られる）。
-    # 境界あり（-x bash bootstrap）・境界なし（-x claude）の両経路が対象。
+def test_launch_script_uses_wt_and_prompt_file():
+    script = po.launch_script(spec([task("A")]).tasks[0], "main", po.Launch(), "/tmp/jg-prompts")
+    assert script.path == "/tmp/jg-prompts/launch_A.sh"
+    assert script.body.startswith("#!/usr/bin/env bash\n")
+    assert "wt switch --create br-A --base main -x claude --" in script.body
+    assert "$(cat /tmp/jg-prompts/A.md)" in script.body
+    assert "\nexec env -u" in script.body
+
+
+def test_render_pane_run_only_references_launch_script():
+    # pane run には `bash <launch_<id>.sh>` の短いコマンドだけを流す
+    # （長文注入で未実行・切断が起きた実績への対策）。
     out = rendered([task("A"), task("B", boundary=["pkg/**"])])
     launches = [ln for ln in out.splitlines() if "pane run" in ln]
     assert len(launches) == 2
-    for ln in launches:
+    assert any("'bash /tmp/jg-prompts/launch_A.sh'" in ln for ln in launches)
+    assert any("'bash /tmp/jg-prompts/launch_B.sh'" in ln for ln in launches)
+    assert "wt switch" not in out.split("=== COMMANDS")[1]
+    assert "launch: /tmp/jg-prompts/launch_A.sh" in out.split("=== PROMPTS")[1]
+
+
+def test_launch_script_strips_parent_session_markers():
+    # 各レーンは独立したセッションなので、親セッション固有のマーカーを wt より前で
+    # 断ち切る（放置するとレーンが親の子と誤認され transcript 保存が切られる）。
+    # 境界あり（-x bash bootstrap）・境界なし（-x claude）の両経路が対象。
+    bodies = launch_body([task("A"), task("B", boundary=["pkg/**"])])
+    assert len(bodies) == 2
+    for body in bodies.values():
         # env -u は wt より前に置く（wt 自身にもその子の claude にも渡らないように）。
-        assert "env -u CLAUDE_CODE_CHILD_SESSION" in ln
-        assert ln.index("env -u CLAUDE_CODE_CHILD_SESSION") < ln.index("wt switch")
-    for var in po.INHERITED_SESSION_VARS:
-        assert all(f"-u {var}" in ln for ln in launches)
-    # ユーザー設定・実行ファイル解決に使うものは落とさない。
-    assert "CLAUDE_CODE_EXECPATH" not in out
-    # COMMANDS をコピペした shell の環境は壊さない（unset は使わない）。
-    assert "unset CLAUDE_CODE" not in out
+        assert "env -u CLAUDE_CODE_CHILD_SESSION" in body
+        assert body.index("env -u CLAUDE_CODE_CHILD_SESSION") < body.index("wt switch")
+        for var in po.INHERITED_SESSION_VARS:
+            assert f"-u {var}" in body
+        # ユーザー設定・実行ファイル解決に使うものは落とさない。
+        assert "CLAUDE_CODE_EXECPATH" not in body
+        # 実行した shell の環境は壊さない（unset は使わない）。
+        assert "unset CLAUDE_CODE" not in body
 
 
-def test_render_no_claude_name_flag():
+def test_launch_script_no_claude_name_flag():
     # 報告は lane-ops（herdr agent prompt）経由なので --name は付けない
-    out = rendered([task("A")])
-    assert "--name" not in out
+    assert "--name" not in launch_body([task("A")])["A"]
 
 
-def test_render_remote_control_optin():
-    out = rendered([task("A")], launch=po.Launch(remote_control=True))
-    assert "--remote-control br-A" in out
-    out2 = rendered([task("A")])
-    assert "--remote-control" not in out2
+def test_launch_script_remote_control_optin():
+    assert "--remote-control br-A" in launch_body([task("A")], launch=po.Launch(remote_control=True))["A"]
+    assert "--remote-control" not in launch_body([task("A")])["A"]
 
 
-def test_render_model_flags_task_over_global():
-    out = rendered(
+def test_launch_script_model_flags_task_over_global():
+    bodies = launch_body(
         [task("A", model="sonnet"), task("B")],
         launch=po.Launch(model="opus", effort="high"),
     )
-    a_line = next(l for l in out.splitlines() if "br-A" in l and "pane run" in l)
-    b_line = next(l for l in out.splitlines() if "br-B" in l and "pane run" in l)
-    assert "--model sonnet" in a_line
-    assert "--model opus" in b_line
-    assert "--effort high" in a_line and "--effort high" in b_line
+    assert "--model sonnet" in bodies["A"]
+    assert "--model opus" in bodies["B"]
+    assert "--effort high" in bodies["A"] and "--effort high" in bodies["B"]
 
 
-def test_render_boundary_uses_bootstrap():
-    out = rendered([task("A", boundary=["src/**"])])
-    assert "-x bash --" in out
-    assert "wt-boundary-A" in out
-    assert "task-boundary.json" in out
+def test_launch_script_boundary_uses_bootstrap():
+    body = launch_body([task("A", boundary=["src/**"])])["A"]
+    assert "-x bash --" in body
+    assert "wt-boundary-A" in body
+    assert "task-boundary.json" in body
 
 
 def test_render_lanes_section():
@@ -409,6 +428,11 @@ def test_write_prompts_and_main(tmp_path):
     assert "task A" in a and "lane-ops ワーカー規約" in a
     assert "gh issue view 7" in b
     assert "report.sh orc" in a
+    la = (pdir / "launch_A.sh").read_text(encoding="utf-8")
+    lb = (pdir / "launch_B.sh").read_text(encoding="utf-8")
+    assert "wt switch --create br-A --base main" in la
+    assert "wt switch --create br-B --base br-A" in lb
+    assert f"$(cat {pdir / 'B.md'})" in lb
 
 
 def test_main_exit_1_on_missing_plan(tmp_path):
