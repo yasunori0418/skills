@@ -53,6 +53,43 @@ def test_parse_spec_rejects_empty_tasks():
         po.parse_spec({"tasks": []})
 
 
+def test_parse_spec_expected_fields():
+    plan = spec([task("A", expected_files=["src/a.py", " ", "tests/test_a.py"], expected_scale=40)])
+    assert plan.tasks[0] == po.Task(
+        id="A", branch="br-A", depends_on=(), prompt="task A",
+        expected_files=("src/a.py", "tests/test_a.py"), expected_scale=40,
+    )
+    assert spec([task("A")]).tasks[0].expected_files == ()
+    assert spec([task("A")]).tasks[0].expected_scale == 0
+
+
+def test_parse_spec_rejects_bad_expected_fields():
+    with pytest.raises(po.SpecError):
+        spec([task("A", expected_files="src/a.py")])
+    with pytest.raises(po.SpecError):
+        spec([task("A", expected_scale="40")])
+    with pytest.raises(po.SpecError):
+        spec([task("A", expected_scale=-1)])
+
+
+def test_parse_spec_plan_absolutized(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    plan = po.parse_spec({"plan": "docs/plan.md", "tasks": [task("A")]})
+    assert plan.plan == str(tmp_path / "docs" / "plan.md")
+    assert po.parse_spec({"tasks": [task("A")]}).plan == ""
+    with pytest.raises(po.SpecError):
+        po.parse_spec({"plan": 1, "tasks": [task("A")]})
+
+
+def test_check_plan_file_reports_missing(tmp_path):
+    missing = po.Plan(default_base="main", tasks=(), plan=str(tmp_path / "no.md"))
+    assert po.check_plan_file(missing) == [f"plan が存在しない: {tmp_path / 'no.md'}（相対パスは cwd 基準で絶対化される）"]
+    exists = tmp_path / "plan.md"
+    exists.write_text("x", encoding="utf-8")
+    assert po.check_plan_file(po.Plan(default_base="main", tasks=(), plan=str(exists))) == []
+    assert po.check_plan_file(po.Plan(default_base="main", tasks=())) == []
+
+
 def test_boundary_auto_adds_tmp_claude():
     plan = spec([task("A", boundary=["src/**"]), task("B")])
     assert "tmp_claude/**" in plan.tasks[0].boundary
@@ -91,6 +128,13 @@ def test_analyze_detects_undefined_dep():
 def test_analyze_detects_duplicates():
     an = po.analyze(spec([task("A"), task("A")]))
     assert any("id が重複" in e for e in an.errors)
+
+
+def test_analyze_warns_missing_expected_files():
+    an = po.analyze(spec([task("A"), task("B", expected_files=["b.py"])]))
+    assert an.errors == []
+    hits = [w for w in an.warnings if "expected_files が無い" in w]
+    assert len(hits) == 1 and "task A" in hits[0] and "縮退" in hits[0]
 
 
 def test_analyze_warns_multi_parent():
@@ -153,10 +197,42 @@ def test_boundary_json_single_line_contract():
 def test_full_prompt_appends_lane_ops_contract():
     plan = spec([task("A")])
     t = plan.tasks[0]
-    out = po.full_prompt(t, "main", "main", po.Launch(parent_name="orc"))
+    out = po.full_prompt(t, "main", plan, po.Launch(parent_name="orc"))
     assert out.startswith("task A")
     assert "## 制約（lane-ops ワーカー規約）" in out
     assert "report.sh orc A" in out
+
+
+def test_scope_check_command_is_base_form_with_expectations():
+    plan = spec([task("A", expected_files=["src/a b.py", "tests/t.py"], expected_scale=30)])
+    cmd = po.scope_check_command(plan.tasks[0], "feat-x")
+    assert cmd.startswith(f"python3 {po.CHECK_SCOPE} --base feat-x")
+    assert "--expected-file 'src/a b.py' --expected-file tests/t.py --expected-scale 30" in cmd
+    bare = po.scope_check_command(spec([task("B")]).tasks[0], "main")
+    assert bare == f"python3 {po.CHECK_SCOPE} --base main"
+
+
+def test_contract_payload_to_json_carries_plan_and_scope_check():
+    plan = po.Plan(default_base="main", tasks=(), plan="/abs/plan.md")
+    t = spec([task("A", expected_files=["a.py"], boundary=["src/**"], issue=3)]).tasks[0]
+    payload = po.contract_payload(t, "main", plan, po.Launch(parent_name="orc"))
+    assert payload == po.ContractPayload(
+        task_id="A", branch="br-A", base="main", default_base="main",
+        boundary=("src/**", "tmp_claude/**"), issue=3, parent="orc", plan="/abs/plan.md",
+        scope_check=po.scope_check_command(t, "main"),
+    )
+    data = json.loads(payload.to_json())
+    assert data["plan"] == "/abs/plan.md"
+    assert data["scope_check"].endswith("--expected-file a.py")
+    assert data["boundary"] == ["src/**", "tmp_claude/**"]
+
+
+def test_full_prompt_embeds_scope_check_and_plan():
+    plan = po.Plan(default_base="main", tasks=(), plan="/abs/plan.md")
+    t = spec([task("A", expected_files=["a.py"], expected_scale=10)]).tasks[0]
+    out = po.full_prompt(t, "main", plan, po.Launch(parent_name="orc"))
+    assert "check_scope.py --base main --expected-file a.py --expected-scale 10" in out
+    assert "DIFF_REVIEW_GROUND_TRUTH=/abs/plan.md" in out
 
 
 # ------------------------------------------------------------
@@ -294,6 +370,16 @@ def test_render_lanes_section():
     assert "A -> B" in out
 
 
+def test_render_verify_section_lists_pr_form_per_task():
+    out = rendered([task("A", expected_files=["a.py"], expected_scale=5), task("B", deps=["A"])])
+    verify = out.split("=== VERIFY")[1].split("=== MONITOR")[0]
+    assert "scope-gate.md" in verify
+    assert "FAIL なら次段を起動せず" in verify
+    assert f"python3 {po.CHECK_SCOPE} --pr <A の PR 番号> --expected-file a.py --expected-scale 5" in verify
+    assert f"python3 {po.CHECK_SCOPE} --pr <B の PR 番号>" in verify
+    assert out.index("=== PR") < out.index("=== VERIFY") < out.index("=== MONITOR")
+
+
 def test_render_monitor_section_points_to_lane_ops():
     out = rendered([task("A")])
     assert "watch_events.py" in out
@@ -323,6 +409,17 @@ def test_write_prompts_and_main(tmp_path):
     assert "task A" in a and "lane-ops ワーカー規約" in a
     assert "gh issue view 7" in b
     assert "report.sh orc" in a
+
+
+def test_main_exit_1_on_missing_plan(tmp_path):
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text(json.dumps({
+        "plan": str(tmp_path / "missing.md"),
+        "tasks": [task("A")],
+    }), encoding="utf-8")
+    rc = po.main(["plan_orchestration.py", str(spec_file), "--prompt-dir", str(tmp_path / "p")])
+    assert rc == 1
+    assert not (tmp_path / "p").exists()
 
 
 def test_main_exit_1_on_cycle(tmp_path):
