@@ -53,6 +53,11 @@ def test_scope_overrides_review_converge():
     assert "スコープ規約は review-converge の指摘にも優先して適用される" in s
 
 
+def test_scope_forbids_convention_overextension():
+    s = wc.render(task())
+    assert "既存の適用範囲を超えて新しい種類の対象へ拡張適用しない" in s
+
+
 def test_push_and_pr_preapproved():
     s = wc.render(task())
     assert "計画承認済みの前提" in s
