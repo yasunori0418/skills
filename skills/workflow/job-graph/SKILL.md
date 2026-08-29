@@ -30,7 +30,7 @@ AI の責務は計画ファイル・issue から「タスクと依存辺・境�
 
 スクリプトは Python プロジェクト（`pyproject.toml` + `uv.lock`）。venv はスキルディレクトリ外へ逃がすため、実行時は必ず `UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/job-graph"` を付ける。以下、スキル本体のパスを `<SKILL>` と表記する。
 
-- **`scripts/preflight.sh`**（read-only）: HERDR_ENV・ツール有無・既定ブランチ・未コミット変更・名前衝突を収集。`WARNING` を解消してから進む。
+- **`scripts/preflight.sh`**（read-only）: HERDR_ENV・ツール有無・既定ブランチ・`permissions.ask` の git 系ルール（レーンでは自動 deny になる）・未コミット変更・名前衝突を収集。`WARNING` を解消してから進む。
 - **`scripts/plan_orchestration.py`**: JSON spec を入力に、循環検出・base 解決・ウェーブ算出・レーン割当・ワーカープロンプトのファイル書き出し・wt/herdr コマンド列生成を行う:
 
   ```bash
@@ -94,11 +94,11 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 
 ### Phase 3: 監視・承認代行
 
-制約 6 のとおり lane-ops の運用ループに従う（監視の常駐・報告の裏取り・blocked への応答）。
+制約 6 のとおり lane-ops の運用ループに従う（`MONITOR` の `watch_events.py --once` を再起動しながら張る・報告の裏取り・blocked への応答）。
 
 長時間ジョブは 1 セッションで完走しない前提で、**Phase 2 完了時点で
 `tmp_claude/<job>/handoff.md` を生成し、状態が変わるたび（wave 完了・PR 作成・
-事前裁定の追加）に更新する**。様式と必須要素は `references/handoff.md`。
+計画突合の結果・事前裁定の追加）に更新する**。様式と必須要素は `references/handoff.md`。
 セッション跨ぎの再開はこのファイルを唯一の入口にする。
 
 ### Phase 4: PR 作成と凍結
@@ -109,7 +109,7 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 
 - 進捗確認: `wt list`
 - 全レーンのマージ後: `/post-merge-cleanup` を案内する。herdr の workspace / tab は**自分が作ったものだけ**閉じる（`herdr --session "$HSESSION" workspace close` / `herdr --session "$HSESSION" tab close`）
-- stacked の restack が必要になったら `references/restack.md` に従う
+- 下段の tip が動いたら（履歴書き換えだけでなく積み増しも）`references/restack.md` に従って上段を載せ替える
 
 ## 連携スキル・参照
 
