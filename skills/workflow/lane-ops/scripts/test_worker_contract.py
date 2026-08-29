@@ -33,6 +33,26 @@ def test_review_converge_bounds():
     assert "見送り" in s
 
 
+def test_improvement_deferred_in_pr_gate():
+    s = wc.render(task())
+    assert "improvement" in s
+    assert "修正せず見送る" in s
+    assert "迷ったら improvement に倒す" in s
+    assert "review-converge が書き出す見送りファイルに委ねる" in s
+
+
+def test_iteration_bounds_limited_to_diff_introduced():
+    s = wc.render(task())
+    assert "このタスクの diff が導入した問題" in s
+    assert "既存コードへの改修提案（improvement）は実質的な指摘に含めない" in s
+    assert "improvement だけが残った状態も同様に収束扱いで終了してよい" in s
+
+
+def test_scope_overrides_review_converge():
+    s = wc.render(task())
+    assert "スコープ規約は review-converge の指摘にも優先して適用される" in s
+
+
 def test_push_and_pr_preapproved():
     s = wc.render(task())
     assert "計画承認済みの前提" in s
