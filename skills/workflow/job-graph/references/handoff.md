@@ -29,6 +29,9 @@
    再生成させると spec・プロンプトファイルの再現から必要になる）
 4. **運用注意**: 既知バグと回避策・API フォールバック・ユーザーから得た事前裁定
    （ワーカーの選択ダイアログへ即答するための判断材料）
+5. **spec / prompts / launch スクリプトの所在**: `tmp_claude/<job>/job-graph/` 配下の
+   絶対パス（`spec.md` の置き場規定）。後続 wave の起動コマンドはこれらを参照するので、
+   所在が分からないと COMMANDS を貼ってあっても再投入できない
 
 加えて現在地を機械可読に: 各タスクの状態（未起動 / working / PR 済み / マージ済み）、
 worktree パス、pane ID、境界ファイルの現在の allow、**計画突合の状態**
@@ -64,6 +67,11 @@ wave 0 起動済み）。再実行せず Phase 3 の監視から再開する。�
 
 ## 親エージェント名
 <親名>（worker_contract に焼き付き。一字一句この名前で rename する）
+
+## 所在
+- spec: <abs>/tmp_claude/<job>/job-graph/spec.json
+- prompts / launch スクリプト: <abs>/tmp_claude/<job>/job-graph/prompts/
+- 計画: <abs>/tmp_claude/<job>/plan.md
 
 ## 現在地
 - <task-id>: <状態> / worktree: <path> / pane: <id> / PR: <URL or 未> / 突合: <未|合格|要裁定|裁定済み>

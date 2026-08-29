@@ -35,3 +35,16 @@ AI の責務はここまで（依存辺・境界・期待ファイルの意味�
 - `expected_scale` は計画の記述量・変更点数から見積もる**追加 + 削除の合計行数**。テストを含める。ファイル判定が主で規模は補助（AI の見積りなので、閾値は 2 倍まで許容される）
 - **計画に変更ファイル一覧や規模が無いときは、憶測で埋めずユーザーへ問う**（計画側に書き足してもらうか、対話で確定してから spec に落とす）。空のまま進めると突合が縮退し、Phase 4 のゲートが機能しない
 - stacked の後段は、その段で触るファイルだけを書く（前段の変更は base 側に入るので diff に現れない）
+
+## 置き場: spec と prompt-dir は `tmp_claude/<job>/job-graph/` に置く
+
+```
+tmp_claude/<job>/
+  plan.md                 # 計画（spec の plan）
+  handoff.md              # 引き継ぎ書（handoff.md 参照）
+  job-graph/
+    spec.json             # plan_orchestration.py の入力
+    prompts/              # --prompt-dir: <task-id>.md と launch_<task-id>.sh
+```
+
+scratchpad（セッション固有の一時ディレクトリ）に置くと、**親交代（セッション再開・別セッションの親へ引き継ぎ）でパスが失効し、起動済みワーカーへ渡した prompt ファイルや後続 wave の launch スクリプトが読めなくなった実績**がある。`tmp_claude/` はリポジトリ直下で gitignored、worktree からも絶対パスで辿れ、handoff.md と同じ場所に揃う。spec と prompt-dir の絶対パスは handoff.md の「所在」に記録する。

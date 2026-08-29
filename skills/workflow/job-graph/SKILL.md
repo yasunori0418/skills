@@ -36,7 +36,7 @@ AI の責務は計画ファイル・issue から「タスクと依存辺・境�
   ```bash
   UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/job-graph" uv run --project "<SKILL>" \
     python "<SKILL>/scripts/plan_orchestration.py" \
-    --prompt-dir "<scratchpad>/job-graph-prompts" --parent-name <親のエージェント名> <spec.json>
+    --prompt-dir "$PWD/tmp_claude/<job>/job-graph/prompts" --parent-name <親のエージェント名> tmp_claude/<job>/job-graph/spec.json
   # 起動引数のオプションはそのまま前に付ける（--remote-control / --model / --permission-mode / --effort）
   ```
 
@@ -72,7 +72,7 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 
 1. `bash <SKILL>/scripts/preflight.sh` を実行し、`WARNING` を解消する。
 2. 親（自分）に herdr のエージェント名を付ける: `herdr --session "${HERDR_SESSION:-default}" agent rename "$HERDR_PANE_ID" <一意な短い名前>`（ワーカー報告の宛先。lane-ops 参照）。この名前は起動済みワーカーの規約（worker_contract）に焼き付くため、**セッション再開・herdr セッション復旧のたびに同じ名前で rename し直す**。一字でも違うと report.sh の報告が届かなくなる。
-3. `plan_orchestration.py` を `--prompt-dir`（scratchpad 配下）と `--parent-name`（上記の名前）付きで実行し、`ERROR` が出たら spec を直して再実行。
+3. `plan_orchestration.py` を `--prompt-dir`（`tmp_claude/<job>/job-graph/prompts`。scratchpad は親交代で失効するので使わない。理由は `references/spec.md`）と `--parent-name`（上記の名前）付きで実行し、`ERROR` が出たら spec を直して再実行。
 4. 出力を土台に plan を組み、**`ExitPlanMode` で承認を取る**。plan には必ず含める:
    - **起動ウェーブとレーン割当**（`SCHEDULE` / `LANES`）
    - **コミット計画**: `commit-plan` スキル準拠（タスク＝ブランチ単位）
