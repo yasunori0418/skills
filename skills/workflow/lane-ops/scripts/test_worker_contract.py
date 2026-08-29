@@ -58,6 +58,13 @@ def test_scope_forbids_convention_overextension():
     assert "既存の適用範囲を超えて新しい種類の対象へ拡張適用しない" in s
 
 
+def test_structural_change_escalation_after_tdd():
+    s = wc.render(task())
+    assert "構造変更エスカレーション" in s
+    assert "実施せず「作業のブロック」として親へ報告し裁定を待つ" in s
+    assert s.index("TDD 順序") < s.index("構造変更エスカレーション")
+
+
 def test_push_and_pr_preapproved():
     s = wc.render(task())
     assert "計画承認済みの前提" in s
