@@ -164,3 +164,44 @@ def test_stacked_pr_base():
 def test_default_base_pr_no_arg():
     s = wc.render(task(base="main", default_base="main"))
     assert "/pr-create`" in s
+
+
+# ------------------------------------------------------------
+# plan / scope_check（job-graph の計画突合）
+# ------------------------------------------------------------
+
+
+def test_parse_task_plan_and_scope_check_default_empty():
+    info = wc.parse_task({})
+    assert info.plan == "" and info.scope_check == ""
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"plan": ["/p"]})
+
+
+def test_plan_clause_rendered_after_scope_with_ground_truth():
+    s = wc.render(task(plan="/abs/plan.md"))
+    assert "計画の参照" in s
+    assert "DIFF_REVIEW_GROUND_TRUTH=/abs/plan.md" in s
+    assert "候補の採否を親へ問い合わせない" in s
+    assert s.index("編集してよい範囲") < s.index("計画の参照") < s.index("TDD 順序")
+
+
+def test_scope_check_clause_between_pr_gate_and_iteration_bounds():
+    cmd = "python3 /x/check_scope.py --base main --expected-file a.py"
+    s = wc.render(task(scope_check=cmd))
+    assert "計画との突合（PR 作成前）" in s
+    assert f"`{cmd}`" in s
+    assert "VERDICT: FAIL" in s
+    assert "何を削る・分離するかを自分で判断しない" in s
+    assert (
+        s.index("PR 作成前ゲート")
+        < s.index("計画との突合（PR 作成前）")
+        < s.index("review-converge の反復境界")
+    )
+
+
+def test_plan_and_scope_check_omitted_when_empty():
+    s = wc.render(task())
+    assert "計画の参照" not in s
+    assert "計画との突合" not in s
+    assert "DIFF_REVIEW_GROUND_TRUTH" not in s

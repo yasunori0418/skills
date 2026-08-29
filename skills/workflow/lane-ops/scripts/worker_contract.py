@@ -15,7 +15,10 @@ stdin にタスク情報 JSON を受け取り、ワーカー（レーン内エ�
   "default_base": "main",
   "boundary": ["internal/client/**"],   // 省略可（空 = 境界宣言なし）
   "issue": 123,                          // 省略可（0/なし = issue 参照なし）
-  "parent": "orc-myrepo"                 // 省略可（空 = 報告先未指定）
+  "parent": "orc-myrepo",                // 省略可（空 = 報告先未指定）
+  "plan": "/abs/path/to/plan.md",        // 省略可（空 = 計画参照の条項を出さない）
+  "scope_check": "python3 .../check_scope.py --base main --expected-file a.py"
+                                         // 省略可（空 = PR 前の計画突合の条項を出さない）
 }
 
 使い方:
@@ -55,6 +58,10 @@ class TaskInfo:
     boundary: tuple[str, ...] = ()
     issue: int = 0
     parent: str = ""
+    # 計画ファイルの絶対パス。空 = 計画参照の条項を出さない。
+    plan: str = ""
+    # 計画との突合コマンド完全形。空 = PR 前の突合の条項を出さない。
+    scope_check: str = ""
 
 
 def _str_field(data: dict, key: str, default: str = "") -> str:
@@ -84,6 +91,8 @@ def parse_task(data: object) -> TaskInfo:
         boundary=tuple(g.strip() for g in boundary_raw if g.strip()),
         issue=issue_raw,
         parent=_str_field(data, "parent"),
+        plan=_str_field(data, "plan"),
+        scope_check=_str_field(data, "scope_check"),
     )
 
 
@@ -113,6 +122,31 @@ def render(task: TaskInfo) -> str:
         )
     else:
         scope = "- 編集してよい範囲（境界）: このタスクの担当範囲に限る。他タスクのファイルに触れない"
+
+    plan_lines = []
+    if task.plan:
+        plan_lines = [
+            (
+                f"- 計画の参照: このタスクの計画は {task.plan} にある"
+                "（worktree からは相対で辿れないため絶対パス）。"
+                "`/review-converge` 起動時にこの計画を確定グラウンドトゥルース"
+                f"（`DIFF_REVIEW_GROUND_TRUTH={task.plan}`）として渡す。"
+                "diff-review の spec レンズが計画との突合を行い、計画に無い変更を指摘として返す。"
+                "候補の採否を親へ問い合わせない（計画が判断基準）"
+            ),
+        ]
+
+    scope_check_lines = []
+    if task.scope_check:
+        scope_check_lines = [
+            (
+                "- 計画との突合（PR 作成前）: `/review-converge` 収束後・`/pr-create` 前に "
+                f"`{task.scope_check}` を実行する。"
+                "`VERDICT: FAIL`（計画に無いファイルの変更・規模超過）なら PR を作らず、"
+                "報告コマンドで「作業のブロック」として親へ報告し裁定を待つ"
+                "（何を削る・分離するかを自分で判断しない。計画の範囲は親・ユーザーが決める）"
+            ),
+        ]
 
     issue_lines = []
     if issue:
@@ -144,6 +178,7 @@ def render(task: TaskInfo) -> str:
         [
             "## 制約（lane-ops ワーカー規約）",
             scope,
+            *plan_lines,
             *issue_lines,
             "- TDD 順序: テストを先に実装し（失敗を確認）、その後アプリケーション実装で通す",
             (
@@ -170,6 +205,7 @@ def render(task: TaskInfo) -> str:
                 "計画・依頼範囲外の追加修正の提案。severity に関わらず。迷ったら improvement に倒す — は"
                 "修正せず見送る。見送りの記録は review-converge が書き出す見送りファイルに委ねる"
             ),
+            *scope_check_lines,
             (
                 "- review-converge の反復境界: 実質的な指摘 — このタスクの diff が導入した問題"
                 "（出力形状・型安全性・contract・退行）— が出ている間は反復を続ける。"
