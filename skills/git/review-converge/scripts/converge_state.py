@@ -12,9 +12,12 @@ diff-review の周回ごとの指摘一覧を状態ファイルへ記録し、�
         1 周回分の指摘を記録し、判定結果を JSON で stdout に出す。
         stdin は指摘の JSON 配列(または {"findings": [...]})。各要素:
             {"file": "src/a.py", "line": 42, "summary": "...",
-             "severity": "must", "scope": "in", "lens": "design"}
+             "severity": "must", "scope": "in", "kind": "fix", "lens": "design"}
         severity は must / want+ / want / nit(既定 want)。
         scope は in / out(既定 in。out = タスク境界外 = 修正対象から除外)。
+        kind は fix / improvement(既定 fix。improvement = 既存コードの構造・
+        シグネチャ・スタイル変更を要する提案・依頼範囲外の追加修正 =
+        修正対象から除外し、見送り一覧 "improvements" へ蓄積する)。
         lens は diff-review の統合報告に付いたレンズタグ(任意。次周回の
         レンズ絞り込み "next_lenses" に使う。省略すると絞り込みは働かない)。
         指摘は file:line + 要旨の正規化ハッシュで同一性を判定する。
@@ -31,20 +34,25 @@ diff-review の周回ごとの指摘一覧を状態ファイルへ記録し、�
 
 判定 verdict(record / status の "verdict"):
 
-    converged       閾値以上の重みの境界内指摘がゼロ。ループを終了する
+    converged       閾値以上の重みの境界内 fix 指摘がゼロ。ループを終了する
     continue        まだ閾値以上の指摘がある。次の周回へ進む
     limit-reached   周回上限(既定 5)に到達。ユーザーへエスカレーションする
     oscillation     振動を検出。ユーザーへエスカレーションする
                     - 同一指摘が 2 周連続で未解消(stuck)
                     - 一度消えた指摘が再出現(reappeared)
                     "oscillating" にどの指摘かを列挙する
+    diverging       自己増殖(発散)を検出。ユーザーへエスカレーションする
+                    - 「新規指摘 > 0 かつ 解消数 <= 新規数」が 2 周連続で成立
+                      (修正が新指摘を再生産し続けている兆候)
+                    "diverging" に周回ごとの増減と直近の新規指摘を列挙する
 
-verdict の優先順位は oscillation > converged > limit-reached > continue。
+verdict の優先順位は oscillation > converged > diverging > limit-reached > continue。
 振動していても閾値以上の指摘が消えていれば収束を優先しないのは、打ち消し合いが
-起きた状態のまま終わらせないため。
+起きた状態のまま終わらせないため。発散していても remaining がゼロなら収束を
+優先するのは、修正対象が尽きた時点で発散の懸念が消えるため。
 
-レンズ段階戦略("next_lenses"): continue の中間周回では、前周回で閾値以上・境界内の
-指摘を出したレンズだけを次周回の対象として返す。次が最終周回のとき・continue 以外・
+レンズ段階戦略("next_lenses"): continue の中間周回では、前周回で閾値以上・境界内・
+kind=fix の指摘を出したレンズだけを次周回の対象として返す。次が最終周回のとき・continue 以外・
 lens 情報が無いときは null(= 全レンズで徹底パス)を返す。
 
 依存は標準ライブラリのみ(Python 3.12+)。
@@ -61,9 +69,10 @@ from pathlib import Path
 from typing import Any
 
 SEVERITY_ORDER = ["nit", "want", "want+", "must"]
+KINDS = ("fix", "improvement")
 DEFAULT_THRESHOLD = "want"
 DEFAULT_MAX_ROUNDS = 5
-STATE_VERSION = 1
+STATE_VERSION = 2
 
 
 def severity_rank(severity: str) -> int:
@@ -106,6 +115,9 @@ def parse_findings(payload: Any) -> list[dict[str, Any]]:
         scope = str(item.get("scope", "in")).strip().lower()
         if scope not in ("in", "out"):
             raise ValueError(f"scope は in / out のいずれか: {scope!r}")
+        kind = str(item.get("kind", "fix")).strip().lower()
+        if kind not in KINDS:
+            raise ValueError(f"kind は fix / improvement のいずれか: {kind!r}")
         out.append(
             {
                 "key": finding_key(item),
@@ -114,6 +126,7 @@ def parse_findings(payload: Any) -> list[dict[str, Any]]:
                 "summary": str(item.get("summary", "")),
                 "severity": str(item.get("severity", DEFAULT_THRESHOLD)),
                 "scope": scope,
+                "kind": kind,
                 "lens": str(item.get("lens", "")).strip(),
             }
         )
@@ -138,13 +151,37 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
 
 
 def actionable(findings: list[dict[str, Any]], threshold: str) -> list[dict[str, Any]]:
-    """閾値以上の重みを持つ「境界内」指摘。境界外は修正対象から機械的に除外する。"""
+    """閾値以上の重みを持つ「境界内」の fix 指摘。境界外・improvement は修正対象から機械的に除外する。
+
+    kind の既定 fix は f.get で吸収する(旧バージョンの状態ファイルには kind が無い)。
+    """
     limit = severity_rank(threshold)
-    return [f for f in findings if f["scope"] == "in" and severity_rank(f["severity"]) >= limit]
+    return [
+        f
+        for f in findings
+        if f["scope"] == "in"
+        and f.get("kind", "fix") == "fix"
+        and severity_rank(f["severity"]) >= limit
+    ]
+
+
+def collect_improvements(rounds: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """全周回の improvement(境界内)を key で union する。同一 key は初出を保持する。
+
+    境界外は kind に関わらず deferred 側で報告するため、二重掲載を避けてここでは除外する。
+    レンズ絞り込みで後の周回に再報告されない improvement も、最終報告の見送り一覧から
+    落とさないために全周回から集める。
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    for r in rounds:
+        for f in r["findings"]:
+            if f.get("kind", "fix") == "improvement" and f["scope"] == "in":
+                seen.setdefault(f["key"], f)
+    return list(seen.values())
 
 
 def detect_oscillation(rounds: list[dict[str, Any]], threshold: str) -> list[dict[str, Any]]:
-    """振動の検出。対象は閾値以上・境界内の指摘のみ。
+    """振動の検出。対象は閾値以上・境界内・kind=fix の指摘のみ。
 
     - stuck:      同一指摘が直近 2 周連続で未解消
     - reappeared: 一度消えた指摘が後の周回で再出現
@@ -187,12 +224,42 @@ def detect_oscillation(rounds: list[dict[str, Any]], threshold: str) -> list[dic
     return sorted(oscillating.values(), key=lambda f: (f["kind"], f["file"], str(f["line"])))
 
 
+def detect_diverging(rounds: list[dict[str, Any]], threshold: str) -> dict[str, Any] | None:
+    """自己増殖(発散)の検出。対象は閾値以上・境界内・kind=fix の指摘のみ。
+
+    周回間の遷移ごとに「新規出現 key 数 > 0 かつ 解消 key 数 <= 新規出現 key 数」を
+    判定し、直近 2 遷移(= 2 周連続)で成立したら発散とみなす。前周回の修正が
+    新指摘を再生産し続けている兆候で、同一指摘の再出現しか見ない振動検知では
+    拾えない膨張(t1 型: 修正由来の指摘だけで周回が回り続ける)を止める。
+    新規ゼロの周回を除外するのは、全件据え置きは stuck(振動)が先に拾うため。
+    """
+    if len(rounds) < 3:
+        return None
+
+    keys_per_round = [{f["key"] for f in actionable(r["findings"], threshold)} for r in rounds]
+    windows: list[dict[str, Any]] = []
+    for idx in (len(rounds) - 2, len(rounds) - 1):
+        new = keys_per_round[idx] - keys_per_round[idx - 1]
+        resolved = keys_per_round[idx - 1] - keys_per_round[idx]
+        if not (len(new) > 0 and len(resolved) <= len(new)):
+            return None
+        windows.append({"round": idx + 1, "new_count": len(new), "resolved_count": len(resolved)})
+
+    latest_new_keys = keys_per_round[-1] - keys_per_round[-2]
+    latest = {f["key"]: f for f in actionable(rounds[-1]["findings"], threshold)}
+    new_findings = [
+        {k: latest[key][k] for k in ("file", "line", "summary", "severity")}
+        for key in sorted(latest_new_keys)
+    ]
+    return {"windows": windows, "new_findings": new_findings}
+
+
 def next_lenses(
     remaining: list[dict[str, Any]], verdict: str, round_no: int, max_rounds: int
 ) -> list[str] | None:
     """次周回で起動すべきレンズ。None は「全レンズ（徹底パス）」を意味する。
 
-    段階戦略: 中間周回は前周回で閾値以上・境界内の指摘を出したレンズだけを回し、
+    段階戦略: 中間周回は前周回で閾値以上・境界内・kind=fix の指摘を出したレンズだけを回し、
     全レンズの徹底パスは初回と最終周回に限る。指摘の出なかったレンズは修正後も
     指摘を出す見込みが薄く、全周回で全レンズを回すと周回数 x レンズ数の
     レビューエージェントが走るため。
@@ -216,12 +283,16 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
 
     remaining = actionable(current["findings"], threshold)
     deferred = [f for f in current["findings"] if f["scope"] == "out"]
+    improvements = collect_improvements(rounds)
     oscillating = detect_oscillation(rounds, threshold)
+    diverging = detect_diverging(rounds, threshold)
 
     if oscillating:
         verdict = "oscillation"
     elif not remaining:
         verdict = "converged"
+    elif diverging:
+        verdict = "diverging"
     elif len(rounds) >= max_rounds:
         verdict = "limit-reached"
     else:
@@ -238,7 +309,10 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
         "remaining_count": len(remaining),
         "deferred": deferred,
         "deferred_count": len(deferred),
+        "improvements": improvements,
+        "improvements_count": len(improvements),
         "oscillating": oscillating,
+        "diverging": diverging,
         "next_lenses": next_lenses(remaining, verdict, len(rounds), max_rounds),
     }
 

@@ -2,10 +2,12 @@
 # Verifies converge_state.py (review-converge の収束ループ制御):
 #   - 閾値以上の指摘ゼロ           -> converged
 #   - 閾値未満のみ / 境界外のみ    -> converged(修正対象から除外される)
+#   - improvement のみ             -> converged(見送り一覧 improvements へ蓄積)
 #   - 指摘が残る                   -> continue
 #   - 周回上限(既定 5)到達        -> limit-reached
 #   - 同一指摘が 2 周連続で未解消  -> oscillation (stuck)
 #   - 一度消えた指摘の再出現       -> oscillation (reappeared)
+#   - 解消数 <= 新規数が 2 周連続  -> diverging (自己増殖)
 #   - prev-head / status / reset   -> 前周回 sha の取得・再出力・初期化
 #   - 壊れた入力                   -> exit 2
 # python3 が無い環境では SKIP して exit 0。
@@ -53,6 +55,7 @@ F_MUST='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severit
 F_OTHER='[{"file":"src/b.py","line":20,"summary":"命名が不明瞭","severity":"must"}]'
 F_NIT='[{"file":"src/a.py","line":10,"summary":"空白の揺れ","severity":"nit"}]'
 F_OUT='[{"file":"other/x.py","line":1,"summary":"別タスクの問題","severity":"must","scope":"out"}]'
+F_IMPROVE='[{"file":"src/a.py","line":30,"summary":"bool を enum に型化すべき","severity":"want+","kind":"improvement"}]'
 F_EMPTY='[]'
 
 # --- 収束 ---
@@ -68,6 +71,25 @@ OUT=$(record "$S" "$F_OUT" --head aaa111)
 check "converged-out-of-scope" "converged" "$(verdict "$OUT")"
 has "deferred-listed" "$OUT" '"deferred_count": 1'
 has "deferred-detail" "$OUT" "別タスクの問題"
+
+# improvement は severity が閾値以上でも修正対象にならない(見送り一覧へ)
+S="$WORK/converged-improvement.json"
+OUT=$(record "$S" "$F_IMPROVE" --head aaa111)
+check "converged-improvement-only" "converged" "$(verdict "$OUT")"
+has "improvements-listed" "$OUT" '"improvements_count": 1'
+has "improvements-detail" "$OUT" "bool を enum に型化すべき"
+
+# improvement は周回横断で union される(後の周回で再報告されなくても残る)
+S="$WORK/improvements-union.json"
+record "$S" "$F_IMPROVE" --head aaa111 >/dev/null
+OUT=$(record "$S" "$F_EMPTY" --head bbb222)
+check "improvements-union-verdict" "converged" "$(verdict "$OUT")"
+has "improvements-union-kept" "$OUT" '"improvements_count": 1'
+
+# improvement は振動検知の対象外(同じ improvement が 2 周続いても oscillation にしない)
+S="$WORK/improvement-no-stuck.json"
+record "$S" "$F_IMPROVE" --head aaa111 >/dev/null
+check "improvement-not-stuck" "converged" "$(verdict "$(record "$S" "$F_IMPROVE" --head bbb222)")"
 
 # nit 閾値なら nit も修正対象になる
 S="$WORK/nit-threshold.json"
@@ -108,12 +130,44 @@ check "reappear-oscillation" "oscillation" "$(verdict "$OUT")"
 has "reappear-kind" "$OUT" '"kind": "reappeared"'
 has "reappear-which" "$OUT" "境界値が未処理"
 
+# --- 自己増殖(解消数 <= 新規数 が 2 周連続) -> diverging ---
+# 周回ごとに全て入れ替えて stuck / reappeared を避け、発散判定だけを見る
+D1='[{"file":"src/a.py","line":1,"summary":"seed","severity":"must"}]'
+D2='[{"file":"src/a.py","line":2,"summary":"grow-b","severity":"must"},
+     {"file":"src/a.py","line":3,"summary":"grow-c","severity":"must"}]'
+D3='[{"file":"src/a.py","line":4,"summary":"grow-d","severity":"must"},
+     {"file":"src/a.py","line":5,"summary":"grow-e","severity":"must"}]'
+S="$WORK/diverging.json"
+record "$S" "$D1" --head r1 >/dev/null
+record "$S" "$D2" --head r2 >/dev/null   # 解消 1 <= 新規 2
+OUT=$(record "$S" "$D3" --head r3)       # 解消 2 <= 新規 2 -> 2 周連続
+check "diverging" "diverging" "$(verdict "$OUT")"
+has "diverging-window" "$OUT" '"new_count": 2'
+has "diverging-new-findings" "$OUT" "grow-d"
+
+# 1 周だけの膨張では発散にしない(解消が上回る周回を挟む)
+S="$WORK/diverging-single.json"
+record "$S" "$D2" --head r1 >/dev/null   # A,B の 2 件から開始
+record "$S" "$D1" --head r2 >/dev/null   # 解消 2 > 新規 1
+OUT=$(record "$S" "$D3" --head r3)       # 解消 1 <= 新規 2(単発)
+check "diverging-needs-two-windows" "continue" "$(verdict "$OUT")"
+
+# 発散パターンでも remaining ゼロなら収束が優先される
+S="$WORK/diverging-but-clean.json"
+record "$S" "$D1" --head r1 >/dev/null
+record "$S" "$D2" --head r2 >/dev/null
+check "diverging-but-converged" "converged" "$(verdict "$(record "$S" "$F_EMPTY" --head r3)")"
+
 # --- 周回上限 ---
 S="$WORK/limit.json"
-FINDINGS_1='[{"file":"src/a.py","line":1,"summary":"one","severity":"must"}]'
-FINDINGS_2='[{"file":"src/a.py","line":2,"summary":"two","severity":"must"}]'
-FINDINGS_3='[{"file":"src/a.py","line":3,"summary":"three","severity":"must"}]'
-# 毎周回別の指摘にして stuck / reappeared を避け、上限判定だけを見る
+FINDINGS_1='[{"file":"src/a.py","line":1,"summary":"one","severity":"must"},
+             {"file":"src/a.py","line":2,"summary":"two","severity":"must"},
+             {"file":"src/a.py","line":3,"summary":"three","severity":"must"}]'
+FINDINGS_2='[{"file":"src/a.py","line":4,"summary":"four","severity":"must"},
+             {"file":"src/a.py","line":5,"summary":"five","severity":"must"}]'
+FINDINGS_3='[{"file":"src/a.py","line":6,"summary":"six","severity":"must"}]'
+# 毎周回別の指摘へ入れ替えて stuck / reappeared を避けつつ、
+# 指摘数を減衰させて(解消 > 新規)diverging も避け、上限判定だけを見る
 record "$S" "$FINDINGS_1" --head r1 --max-rounds 3 >/dev/null
 record "$S" "$FINDINGS_2" --head r2 --max-rounds 3 >/dev/null
 OUT=$(record "$S" "$FINDINGS_3" --head r3 --max-rounds 3)
@@ -153,6 +207,14 @@ has "lens-narrow-picked" "$OUT" '"design"'
 check "lens-narrow-excludes-nit-only-lens" "design" \
     "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["next_lenses"]))')"
 
+# improvement しか出さなかったレンズは次周回で回さない
+S="$WORK/lens-improvement.json"
+F_LENS_IMPROVE='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severity":"must","lens":"logic"},
+                 {"file":"src/b.py","line":20,"summary":"enum に型化すべき","severity":"want+","kind":"improvement","lens":"design"}]'
+OUT=$(record "$S" "$F_LENS_IMPROVE" --head aaa111 --max-rounds 5)
+check "lens-excludes-improvement-only-lens" "logic" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["next_lenses"]))')"
+
 # 最終周回の直前(次が上限周回)は徹底パスへ戻す -> null(= 全レンズ)
 S="$WORK/lens-final.json"
 record "$S" "$F_MUST" --head r1 --max-rounds 3 >/dev/null
@@ -178,5 +240,7 @@ printf 'not json' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
 check "invalid-json" 2 $?
 printf '[{"file":"a","line":1,"summary":"s","scope":"nowhere"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
 check "invalid-scope" 2 $?
+printf '[{"file":"a","line":1,"summary":"s","kind":"refactor"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
+check "invalid-kind" 2 $?
 
 exit $fail
