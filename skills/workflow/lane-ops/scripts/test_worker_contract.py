@@ -58,6 +58,15 @@ def test_scope_forbids_convention_overextension():
     assert "既存の適用範囲を超えて新しい種類の対象へ拡張適用しない" in s
 
 
+def test_subagent_liveness_management():
+    s = wc.render(task())
+    assert "サブエージェントの生存管理" in s
+    assert "TaskStop" in s
+    assert "10 分" in s
+    assert "2 回" in s
+    assert s.index("サブエージェント委任") < s.index("サブエージェントの生存管理")
+
+
 def test_structural_change_escalation_after_tdd():
     s = wc.render(task())
     assert "構造変更エスカレーション" in s
