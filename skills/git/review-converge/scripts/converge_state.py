@@ -41,10 +41,15 @@ diff-review の周回ごとの指摘一覧を状態ファイルへ記録し、�
                     - 同一指摘が 2 周連続で未解消(stuck)
                     - 一度消えた指摘が再出現(reappeared)
                     "oscillating" にどの指摘かを列挙する
+    diverging       自己増殖(発散)を検出。ユーザーへエスカレーションする
+                    - 「新規指摘 > 0 かつ 解消数 <= 新規数」が 2 周連続で成立
+                      (修正が新指摘を再生産し続けている兆候)
+                    "diverging" に周回ごとの増減と直近の新規指摘を列挙する
 
-verdict の優先順位は oscillation > converged > limit-reached > continue。
+verdict の優先順位は oscillation > converged > diverging > limit-reached > continue。
 振動していても閾値以上の指摘が消えていれば収束を優先しないのは、打ち消し合いが
-起きた状態のまま終わらせないため。
+起きた状態のまま終わらせないため。発散していても remaining がゼロなら収束を
+優先するのは、修正対象が尽きた時点で発散の懸念が消えるため。
 
 レンズ段階戦略("next_lenses"): continue の中間周回では、前周回で閾値以上・境界内・
 kind=fix の指摘を出したレンズだけを次周回の対象として返す。次が最終周回のとき・continue 以外・
@@ -219,6 +224,36 @@ def detect_oscillation(rounds: list[dict[str, Any]], threshold: str) -> list[dic
     return sorted(oscillating.values(), key=lambda f: (f["kind"], f["file"], str(f["line"])))
 
 
+def detect_diverging(rounds: list[dict[str, Any]], threshold: str) -> dict[str, Any] | None:
+    """自己増殖(発散)の検出。対象は閾値以上・境界内・kind=fix の指摘のみ。
+
+    周回間の遷移ごとに「新規出現 key 数 > 0 かつ 解消 key 数 <= 新規出現 key 数」を
+    判定し、直近 2 遷移(= 2 周連続)で成立したら発散とみなす。前周回の修正が
+    新指摘を再生産し続けている兆候で、同一指摘の再出現しか見ない振動検知では
+    拾えない膨張(t1 型: 修正由来の指摘だけで周回が回り続ける)を止める。
+    新規ゼロの周回を除外するのは、全件据え置きは stuck(振動)が先に拾うため。
+    """
+    if len(rounds) < 3:
+        return None
+
+    keys_per_round = [{f["key"] for f in actionable(r["findings"], threshold)} for r in rounds]
+    windows: list[dict[str, Any]] = []
+    for idx in (len(rounds) - 2, len(rounds) - 1):
+        new = keys_per_round[idx] - keys_per_round[idx - 1]
+        resolved = keys_per_round[idx - 1] - keys_per_round[idx]
+        if not (len(new) > 0 and len(resolved) <= len(new)):
+            return None
+        windows.append({"round": idx + 1, "new_count": len(new), "resolved_count": len(resolved)})
+
+    latest_new_keys = keys_per_round[-1] - keys_per_round[-2]
+    latest = {f["key"]: f for f in actionable(rounds[-1]["findings"], threshold)}
+    new_findings = [
+        {k: latest[key][k] for k in ("file", "line", "summary", "severity")}
+        for key in sorted(latest_new_keys)
+    ]
+    return {"windows": windows, "new_findings": new_findings}
+
+
 def next_lenses(
     remaining: list[dict[str, Any]], verdict: str, round_no: int, max_rounds: int
 ) -> list[str] | None:
@@ -250,11 +285,14 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
     deferred = [f for f in current["findings"] if f["scope"] == "out"]
     improvements = collect_improvements(rounds)
     oscillating = detect_oscillation(rounds, threshold)
+    diverging = detect_diverging(rounds, threshold)
 
     if oscillating:
         verdict = "oscillation"
     elif not remaining:
         verdict = "converged"
+    elif diverging:
+        verdict = "diverging"
     elif len(rounds) >= max_rounds:
         verdict = "limit-reached"
     else:
@@ -274,6 +312,7 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
         "improvements": improvements,
         "improvements_count": len(improvements),
         "oscillating": oscillating,
+        "diverging": diverging,
         "next_lenses": next_lenses(remaining, verdict, len(rounds), max_rounds),
     }
 

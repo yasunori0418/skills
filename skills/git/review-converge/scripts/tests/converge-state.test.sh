@@ -7,6 +7,7 @@
 #   - 周回上限(既定 5)到達        -> limit-reached
 #   - 同一指摘が 2 周連続で未解消  -> oscillation (stuck)
 #   - 一度消えた指摘の再出現       -> oscillation (reappeared)
+#   - 解消数 <= 新規数が 2 周連続  -> diverging (自己増殖)
 #   - prev-head / status / reset   -> 前周回 sha の取得・再出力・初期化
 #   - 壊れた入力                   -> exit 2
 # python3 が無い環境では SKIP して exit 0。
@@ -129,12 +130,44 @@ check "reappear-oscillation" "oscillation" "$(verdict "$OUT")"
 has "reappear-kind" "$OUT" '"kind": "reappeared"'
 has "reappear-which" "$OUT" "境界値が未処理"
 
+# --- 自己増殖(解消数 <= 新規数 が 2 周連続) -> diverging ---
+# 周回ごとに全て入れ替えて stuck / reappeared を避け、発散判定だけを見る
+D1='[{"file":"src/a.py","line":1,"summary":"seed","severity":"must"}]'
+D2='[{"file":"src/a.py","line":2,"summary":"grow-b","severity":"must"},
+     {"file":"src/a.py","line":3,"summary":"grow-c","severity":"must"}]'
+D3='[{"file":"src/a.py","line":4,"summary":"grow-d","severity":"must"},
+     {"file":"src/a.py","line":5,"summary":"grow-e","severity":"must"}]'
+S="$WORK/diverging.json"
+record "$S" "$D1" --head r1 >/dev/null
+record "$S" "$D2" --head r2 >/dev/null   # 解消 1 <= 新規 2
+OUT=$(record "$S" "$D3" --head r3)       # 解消 2 <= 新規 2 -> 2 周連続
+check "diverging" "diverging" "$(verdict "$OUT")"
+has "diverging-window" "$OUT" '"new_count": 2'
+has "diverging-new-findings" "$OUT" "grow-d"
+
+# 1 周だけの膨張では発散にしない(解消が上回る周回を挟む)
+S="$WORK/diverging-single.json"
+record "$S" "$D2" --head r1 >/dev/null   # A,B の 2 件から開始
+record "$S" "$D1" --head r2 >/dev/null   # 解消 2 > 新規 1
+OUT=$(record "$S" "$D3" --head r3)       # 解消 1 <= 新規 2(単発)
+check "diverging-needs-two-windows" "continue" "$(verdict "$OUT")"
+
+# 発散パターンでも remaining ゼロなら収束が優先される
+S="$WORK/diverging-but-clean.json"
+record "$S" "$D1" --head r1 >/dev/null
+record "$S" "$D2" --head r2 >/dev/null
+check "diverging-but-converged" "converged" "$(verdict "$(record "$S" "$F_EMPTY" --head r3)")"
+
 # --- 周回上限 ---
 S="$WORK/limit.json"
-FINDINGS_1='[{"file":"src/a.py","line":1,"summary":"one","severity":"must"}]'
-FINDINGS_2='[{"file":"src/a.py","line":2,"summary":"two","severity":"must"}]'
-FINDINGS_3='[{"file":"src/a.py","line":3,"summary":"three","severity":"must"}]'
-# 毎周回別の指摘にして stuck / reappeared を避け、上限判定だけを見る
+FINDINGS_1='[{"file":"src/a.py","line":1,"summary":"one","severity":"must"},
+             {"file":"src/a.py","line":2,"summary":"two","severity":"must"},
+             {"file":"src/a.py","line":3,"summary":"three","severity":"must"}]'
+FINDINGS_2='[{"file":"src/a.py","line":4,"summary":"four","severity":"must"},
+             {"file":"src/a.py","line":5,"summary":"five","severity":"must"}]'
+FINDINGS_3='[{"file":"src/a.py","line":6,"summary":"six","severity":"must"}]'
+# 毎周回別の指摘へ入れ替えて stuck / reappeared を避けつつ、
+# 指摘数を減衰させて(解消 > 新規)diverging も避け、上限判定だけを見る
 record "$S" "$FINDINGS_1" --head r1 --max-rounds 3 >/dev/null
 record "$S" "$FINDINGS_2" --head r2 --max-rounds 3 >/dev/null
 OUT=$(record "$S" "$FINDINGS_3" --head r3 --max-rounds 3)
