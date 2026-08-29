@@ -33,6 +33,47 @@ def test_review_converge_bounds():
     assert "見送り" in s
 
 
+def test_improvement_deferred_in_pr_gate():
+    s = wc.render(task())
+    assert "improvement" in s
+    assert "修正せず見送る" in s
+    assert "迷ったら improvement に倒す" in s
+    assert "review-converge が書き出す見送りファイルに委ねる" in s
+
+
+def test_iteration_bounds_limited_to_diff_introduced():
+    s = wc.render(task())
+    assert "このタスクの diff が導入した問題" in s
+    assert "既存コードへの改修提案（improvement）は実質的な指摘に含めない" in s
+    assert "improvement だけが残った状態も同様に収束扱いで終了してよい" in s
+
+
+def test_scope_overrides_review_converge():
+    s = wc.render(task())
+    assert "スコープ規約は review-converge の指摘にも優先して適用される" in s
+
+
+def test_scope_forbids_convention_overextension():
+    s = wc.render(task())
+    assert "既存の適用範囲を超えて新しい種類の対象へ拡張適用しない" in s
+
+
+def test_subagent_liveness_management():
+    s = wc.render(task())
+    assert "サブエージェントの生存管理" in s
+    assert "TaskStop" in s
+    assert "10 分" in s
+    assert "2 回" in s
+    assert s.index("サブエージェント委任") < s.index("サブエージェントの生存管理")
+
+
+def test_structural_change_escalation_after_tdd():
+    s = wc.render(task())
+    assert "構造変更エスカレーション" in s
+    assert "実施せず「作業のブロック」として親へ報告し裁定を待つ" in s
+    assert s.index("TDD 順序") < s.index("構造変更エスカレーション")
+
+
 def test_push_and_pr_preapproved():
     s = wc.render(task())
     assert "計画承認済みの前提" in s
@@ -44,6 +85,12 @@ def test_report_command_embeds_script_path_and_parent():
     assert "report.sh orc-repo T1" in s
     assert wc.report_script() in s
     assert "報告は承認の代わりにならない" in s
+
+
+def test_report_before_textual_approval_wait():
+    s = wc.render(task())
+    assert "親の承認・裁定待ちで停止する直前（ダイアログ以外の承認待ちを含む）" in s
+    assert "テキストで承認を問うてターンを終える場合も、その直前に必ず報告する" in s
 
 
 def test_report_omitted_without_parent():

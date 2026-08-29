@@ -9,10 +9,14 @@ herdr の socket（NDJSON over Unix domain socket）へ `events.subscribe` を�
 
 使い方:
     python3 watch_events.py [--pane <pane_id>]... [--status <status>]... \
-        [--type <event_type>]... [--include-self]
+        [--type <event_type>]... [--include-self] [--once]
 
 - --type 省略時は pane.agent_status_changed を購読する
 - --status を付けるとその状態に絞る（省略 = 全状態）
+- --once はマッチしたイベントを 1 行出力した時点で exit 0 する。Monitor が無い
+  セッションでは常駐 watch は push 通知にならない（バックグラウンド Bash は
+  完了時にしか親を起こさない）ため、--once の完了通知を push 通知として使い、
+  処理後に再起動する
 - **--pane 省略時は全 pane を自動追随する**: `pane.list` で既存 pane を列挙して
   購読し、併せて `pane.agent_detected`（グローバル購読・pane_id 不要）を購読する。
   エージェントが載った pane が現れたら購読ストリームを張り直して取り込む
@@ -226,6 +230,7 @@ class Options:
     statuses: tuple[AgentStatus, ...] = ()
     types: tuple[str, ...] = (DEFAULT_TYPE,)
     include_self: bool = False
+    once: bool = False
 
     @property
     def follow(self) -> bool:
@@ -251,12 +256,14 @@ def parse_args(argv: list[str]) -> Options:
     )
     parser.add_argument("--type", action="append", default=[], metavar="EVENT_TYPE")
     parser.add_argument("--include-self", action="store_true")
+    parser.add_argument("--once", action="store_true")
     ns = parser.parse_args(argv[1:])
     return Options(
         panes=tuple(ns.pane),
         statuses=tuple(ns.status),
         types=tuple(ns.type) or (DEFAULT_TYPE,),
         include_self=ns.include_self,
+        once=ns.once,
     )
 
 
@@ -413,8 +420,8 @@ def is_stale_pane_error(line: str) -> bool:
 
 
 def stream_events(
-    sock_path: str, subs: list[Subscription], known: set[str] | None
-) -> str | None:
+    sock_path: str, subs: list[Subscription], known: set[str] | None, once: bool = False
+) -> tuple[str | None, bool]:
     """購読ストリームを 1 本張り、受信行を stdout へ流す。
 
     known が渡されたとき（自動追随モード）は `pane_agent_detected` を監視し、
@@ -425,8 +432,13 @@ def stream_events(
     消えた pane による `pane_not_found` も張り直しで回復する（そのままだと
     購読が成立せず接続が閉じられる）。
 
-    戻り値: pane_id = その pane を取り込むため張り直す / "" = 理由を特定しない
-    張り直し（stale pane の回復）/ None = 接続断（回復不能）
+    once=True のときはマッチしたイベントを 1 行出力した時点で終える
+    （--once。呼び出し側はそのまま exit 0 する）。
+
+    戻り値 (trigger, matched):
+    - trigger: pane_id = その pane を取り込むため張り直す / "" = 理由を特定
+      しない張り直し（stale pane の回復）/ None = 接続断（回復不能）
+    - matched: once 指定でイベントを出力し終えたか
     """
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.connect(sock_path)
@@ -436,9 +448,9 @@ def stream_events(
             try:
                 chunk = s.recv(65536)
             except ConnectionResetError:
-                return None
+                return None, False
             if not chunk:
-                return None
+                return None, False
             buf += chunk
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
@@ -449,19 +461,21 @@ def stream_events(
                 if known is not None:
                     if is_stale_pane_error(text):
                         # 購読は成立していない。列挙し直して張り直す。
-                        return ""
+                        return "", False
                     detected = parse_agent_detected(text)
                     if detected is not None:
                         if detected not in known:
                             # イベント自体がエージェント搭載の証明なので、
                             # pane.get での在否確認は不要（確認を挟むと
                             # 検出タイミングによっては見送りが起きる）。
-                            return detected
+                            return detected, False
                         continue
 
                 if is_ack(text):
                     continue
                 print(text, flush=True)
+                if once:
+                    return None, True
 
 
 def main(argv: list[str]) -> int:
@@ -505,7 +519,11 @@ def main(argv: list[str]) -> int:
 
         # 親 pane も known に混ぜて渡す（agent_detected が来ても張り直さない）。
         watch_known = known | ignored | ({self_pane} if self_pane else set())
-        trigger = stream_events(sock_path, subs, watch_known if follow else None)
+        trigger, matched = stream_events(
+            sock_path, subs, watch_known if follow else None, once=opts.once
+        )
+        if matched:
+            return 0
         if trigger is None:
             print("ERROR: herdr socket が切断された", file=sys.stderr)
             return 1
