@@ -17,7 +17,7 @@ allowed-tools: Bash, Read, AskUserQuestion, ExitPlanMode
 2. **タスクは直列・並列混在のグラフ。** 無理に並列化しない。依存があるなら stacked（直列）に積み、独立なら並列に走らせる。グラフの形はタスクの内容から決まるのであって、並列度を稼ぐために依存を無視しない。
 3. **worktree・起動コマンドはスクリプトが生成する。** worktree は `wt`（worktrunk）で作られ、常に `--base <解決済み base>` が明示される。手で組み立てない。
 4. **stacked の起動ゲートは「前段の PR 作成」。** コミット数到達をゲートにすると前段の収束修正（amend）で下流の base がずれ、PR diff 汚染と restack を誘発する。後段は `gh pr list --head <前段ブランチ>` で PR の存在を確認してから起動する。
-5. **push と PR 作成は計画承認済みの前提。** Phase 1 の plan 承認がそのまま push・`/pr-create` の承認を兼ねる。親は計画の範囲内である限り、各レーンの対話ゲートに自分で応答し、個別にユーザーへ確認しない。ユーザーへ上げるのは**計画の範囲外だけ**（境界の拡大要求・スコープ逸脱・計画の前提と実態の食い違い）。
+5. **push と PR 作成は計画承認済みの前提。** Phase 1 の plan 承認がそのまま push・`/pr-create` の承認を兼ねる。親は計画の範囲内である限り、各レーンの対話ゲートに自分で応答し、個別にユーザーへ確認しない。ユーザーへ上げるのは**計画の範囲外だけ**（境界の拡大要求・スコープ逸脱・計画の前提と実態の食い違い）。範囲内かどうかの判定は lane-ops の判定基準表に従い、その除外リスト（仕様の解釈変更・検査の緩和・計画に無い型/関数の追加など）に当たる裁定は親が下さない。除外リストに当たる裁定は handoff に「ユーザー確認済み」でしか記録できない。
 6. **レーンの操縦・監視・承認代行は lane-ops スキルに従う。** 指示送信・blocked 検知・報告受信・機械検証・境界拡張はすべて lane-ops の運用ループとスクリプトで行う。job-graph が定めるのはグラフと起動までであり、運用規約を重複して定義しない。
 
 herdr 上では**レーン（直列チェーン）ごとに workspace を立てる**。レーン先頭の task は `herdr workspace create` の root pane で起動し、stacked の後続段は同じレーンの workspace へ `herdr tab create` で tab を足して起動する（並列レーン = workspace の並び。レーンを別 session へ分けることはしない。session はランタイム名前空間が分かれて親の socket からレーンへ到達できなくなるため）。レーン割当と各 ID の取り回しはスクリプトが `LANES` / `COMMANDS` として決定論的に算出する。手で決めない。
@@ -40,9 +40,11 @@ AI の責務は計画ファイル・issue から「タスクと依存辺・境�
   # 起動引数のオプションはそのまま前に付ける（--remote-control / --model / --permission-mode / --effort）
   ```
 
-  spec の形は `scripts/example-spec.json` を参照。task には任意で `issue`（GitHub issue 番号）・`boundary`（触ってよい glob 配列）・`model`/`permission_mode`/`effort`（起動上書き）を書ける。`--prompt-dir` は実質必須（未指定だと COMMANDS を出力しない）。プロンプトは `<prompt-dir>/<task-id>.md` へ書き出され、起動コマンドが `"$(cat <path>)"` で読む。
+  spec の形は `scripts/example-spec.json`、フィールドの意味と `expected_files` / `expected_scale` の起草基準は `references/spec.md`。`--prompt-dir` は実質必須（未指定だと COMMANDS を出力しない）。プロンプト `<task-id>.md` と起動スクリプト `launch_<task-id>.sh` がそこへ書き出される。
 
-  出力の `SCHEDULE`・`LANES`・`BOUNDARY`・`PROMPTS`・`COMMANDS`・`MONITOR` をそのまま plan と実行に使う。スクリプトのロジックを本文で再現しない。
+  出力の `SCHEDULE`・`LANES`・`BOUNDARY`・`PROMPTS`・`COMMANDS`・`PR`・`VERIFY`・`MONITOR` をそのまま plan と実行に使う。スクリプトのロジックを本文で再現しない。
+
+- **`scripts/check_scope.py`**（stdlib のみ）: PR（`--pr`）またはローカル diff（`--base`）の変更を計画の期待ファイル一覧・規模目安と突合し `VERDICT: PASS|FAIL|SKIP` を返す。ワーカーは規約で PR 前に、親は Phase 4 で使う（手順は `references/scope-gate.md`）。
 
 - **ワーカー規約の正本は lane-ops の `worker_contract.py`**。`plan_orchestration.py` が同一プラグイン内の兄弟パスから子プロセスで呼び、spec の `prompt`（タスク固有の内容と完了条件だけを書く）へ連結する。job-graph と lane-ops は必ずセットで配置する。
 
@@ -64,7 +66,7 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 - **計画ファイル**（引数のパス）: 事前に対話で固めた計画を読む
 - **epic issue 番号**: `gh issue view <番号>` で本文とサブ issue を読み、タスクの叩き台を組む
 
-各タスクの依存辺・境界を意味的に判定し JSON spec に落とす（判定基準は `references/dependency-analysis.md`）。**依存関係や境界が欠けている・曖昧なときは、憶測で埋めずユーザーへ問いを立てて締める**。依存の読み違えはグラフを破綻させ、境界の読み違えは誤 deny かドリフト取り逃がしになる。タスク数が多く spec 起草が重い場合に限り、起草をサブエージェントへ委任してよい（任意の最適化）。
+各タスクの依存辺・境界を意味的に判定し JSON spec に落とす（判定基準は `references/dependency-analysis.md`）。計画の変更ファイル一覧・規模目安も `expected_files` / `expected_scale` として spec に落とし、計画ファイルは `plan` に書く（基準は `references/spec.md`。計画に無ければ問う）。**依存関係や境界が欠けている・曖昧なときは、憶測で埋めずユーザーへ問いを立てて締める**。依存の読み違えはグラフを破綻させ、境界の読み違えは誤 deny かドリフト取り逃がしになる。タスク数が多く spec 起草が重い場合に限り、起草をサブエージェントへ委任してよい（任意の最適化）。
 
 ### Phase 1: 事前確認・スケジュール算出 → plan 承認
 
@@ -76,8 +78,9 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
    - **コミット計画**: `commit-plan` スキル準拠（タスク＝ブランチ単位）
    - **PR 戦略**: 各ブランチの base（`PR` セクション）
    - **承認代行の宣言**: 「計画内の push・PR 作成・対話ゲートへの応答は親が判断する」ことを明記（この承認が Phase 3 の代行根拠になる）
+   - **計画突合の基準**: `VERIFY` セクション（task ごとの期待ファイル・規模目安）。PR 報告のたびにこれで突合し、FAIL は次段を止めてユーザーへ上げることを明記
 
-承認なしで worktree 生成・エージェント起動に進まない。
+承認なしで worktree 生成・エージェント起動に進まない。親自身の permission mode に注意: `auto` では classifier が `send_instruction.sh` 等の指示送信を止めて運用が停滞した実績がある（恒久策は dotfiles#341）。親は `acceptEdits` 等の明示モードで動かす。
 
 ### Phase 2: worktree 作成・レーン起動
 
@@ -100,7 +103,7 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 
 ### Phase 4: PR 作成と凍結
 
-各ワーカーは `/review-converge` 収束後に自分で `/pr-create [base]` を実行する（規約で指示済み）。PR 作成の報告を受けたら機械検証し、レーンの凍結（以降の実装変更・push 停止）を確認する。逸脱を見つけたら lane-ops の `send_instruction.sh` で明示的に止める。
+各ワーカーは `/review-converge` 収束後・計画突合（`check_scope.py --base`）の PASS 後に自分で `/pr-create [base]` を実行する（規約で指示済み）。PR 報告を受けたら `references/scope-gate.md` の手順で突合し、**PASS のときだけ**凍結確認・次段起動へ進む。FAIL は次段を起動せずユーザーの裁定を待つ（分離・削除の指示を親が自分で出さない）。
 
 ### Phase 5: 後始末
 
@@ -114,4 +117,4 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 
 - `lane-ops`（Phase 3〜4 の実体）/ `commit-plan`（Phase 1）/ `review-converge`・`pr-create`（各ワーカーが実行）/ `post-merge-cleanup`（Phase 5）
 - `herdr` / `worktrunk`: herdr CLI・`wt` の一般規約が要るとき
-- `references/`: `dependency-analysis.md`（依存辺・境界の判定基準）/ `launch.md`（COMMANDS の解説）/ `boundary.md`（境界ファイルと deny 後のフロー）/ `restack.md`（下段変更時の載せ替え）/ `handoff.md`（セッション跨ぎ引き継ぎ書の様式と生成規約）
+- `references/`: `spec.md`（spec のフィールド表と `expected_*` の起草基準）/ `dependency-analysis.md`（依存辺・境界の判定基準）/ `launch.md`（COMMANDS の解説）/ `boundary.md`（境界ファイルと deny 後のフロー）/ `scope-gate.md`（Phase 4 の計画突合と FAIL 時の処置）/ `restack.md`（下段変更時の載せ替え）/ `handoff.md`（セッション跨ぎ引き継ぎ書の様式と生成規約）
