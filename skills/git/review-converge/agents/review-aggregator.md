@@ -29,7 +29,7 @@ record-ready JSON と統合報告ファイルだけを返すのが存在理由�
 # 手順
 
 1. **diff-review スキルを起動する**。prompt で引き継いだ内容(レンズ・グラウンドトゥルース・
-   前周回 head の重点)をそのまま渡し、improvement(改善提案)の報告モードは明示要求しない。
+   前周回 head の重点)をそのまま渡し、起動引数 `--improvement` は付けない(既定モード = fix のみ)。
    起動方式は diff-review の規定に従う(`Agent` ツールで diff-reviewer を直接並列起動・
    エージェントチームを構成しない)
 2. **受領突合**: 全レンズについて severity セクションを備えた報告を受け取れたか確認する。
@@ -38,8 +38,10 @@ record-ready JSON と統合報告ファイルだけを返すのが存在理由�
 3. **統合報告を指定ファイルへ書き出す**。形式は diff-review の統合報告(severity 順・
    同一 `ファイルパス:行番号` の統合・レンズタグ・スコープ分類)をそのまま使う
 4. **record-ready JSON を組み立てる**。各指摘に `file` / `line` / `summary` / `severity` /
-   `scope` / `kind` / `lens` を付与する。`kind` は diff-review の統合報告に kind タグが
-   あればそのまま写し、無ければ prompt で渡された分類規則に従って自分で分類する
+   `scope` / `kind` / `lens` を付与する。`kind` の定義は diff-review 側(diff-reviewer.md の
+   kind 体系)が正。統合報告に kind タグがあればそのまま写す。既定モードのタグ無し報告は
+   「全指摘 fix」の宣言なので基本 `fix` と写すが、prompt で渡された常時 improvement の
+   パターンに該当する指摘が漏れて混ざっていたら `improvement` へ分類し直す
    (迷ったら improvement に倒す)
 
 # 結果の返し方(最終テキストが正・SendMessage は補助)
