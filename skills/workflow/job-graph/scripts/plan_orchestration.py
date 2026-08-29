@@ -23,6 +23,10 @@ AI の責務は spec（特に depends_on の意味的判定と boundary の範�
 - worktree 生成は常に `wt switch --create --base <解決済み base>`（base は必ず明示する）
 - ワーカープロンプトは herdr pane へ流し込める長さに限界があるためファイル渡し
   （--prompt-dir 配下に <task-id>.md を書き出し、起動コマンドは "$(cat <path>)" で読む）
+- 起動コマンド自体（env -u ... wt switch ... -x claude ...）も 1 行で数百文字になり、
+  pane run への長文注入で「入力されたまま未実行」「途中で切れる」事故が起きた実績がある。
+  そのため起動コマンドは --prompt-dir 配下の launch_<task-id>.sh へ書き出し、
+  pane run には `bash <path>` の短いコマンドだけを流す
 - ワーカー規約（報告・凍結・承認の振る舞い）の正本は lane-ops の worker_contract.py。
   本スクリプトはタスク情報 JSON を渡して規約セクションを取得し、prompt へ連結する
 - boundary を宣言した task には `tmp_claude/**` を自動で追加する（PR 本文ドラフト等の
@@ -42,9 +46,11 @@ AI の責務は spec（特に depends_on の意味的判定と boundary の範�
 spec の形:
 {
   "default_base": "main",
+  "plan": "tmp_claude/<job>/plan.md",
   "tasks": [
     {"id": "A",  "branch": "refactor-logger",  "depends_on": [],     "prompt": "...",
-     "boundary": ["pkg/logger/**"], "issue": 123},
+     "boundary": ["pkg/logger/**"], "issue": 123,
+     "expected_files": ["pkg/logger/logger.go", "pkg/logger/logger_test.go"], "expected_scale": 120},
     {"id": "B1", "branch": "feat-config-retry", "depends_on": [],     "prompt": "..."},
     {"id": "B2", "branch": "feat-client-retry", "depends_on": ["B1"], "prompt": "...",
      "boundary": ["internal/client/**", "docs/dev/retry/**"],
@@ -58,6 +64,12 @@ spec の形:
 - 親 複数 = 単純な線形 stack 不可。WARNING（base は先頭親を仮採用）。
 - issue は任意の GitHub issue 番号。ワーカー指示に issue 参照と PR へのリンク指示が載る。
 - model / permission_mode / effort / boundary の意味は parallel-worktree と同じ。
+- plan は計画ファイルのパス（相対なら cwd 基準で絶対化。指定されていて存在しなければ ERROR）。
+  ワーカー規約の「計画の参照」条項に載り、review-converge のグラウンドトゥルースになる。
+- expected_files / expected_scale は計画に書かれた変更ファイル一覧（glob 不可）と規模目安
+  （追加+削除の行数）。check_scope.py の突合基準になり、ワーカー規約（PR 前）と VERIFY 節
+  （親が PR に対して行う）の両方に埋め込まれる。expected_files が無い task は WARNING
+  （ファイル照合なしに縮退）。フィールドの詳細は references/spec.md。
 
 レーン割当（= workspace 割当。レーン先頭が workspace、後続段はその tab）:
 - 依存が無い、または親に複数の子がいる task は新しいレーンを開始する。
@@ -67,19 +79,21 @@ spec の形:
 終了コード: 致命的検証エラー（循環・未定義参照・重複・必須欠落）があれば 1、警告のみなら 0。
 
 設計: 純粋関数（parse_spec / analyze / detect_cycle / compute_levels / compute_lanes /
-resolve_base / sanitize / render）には副作用を持たせない。I/O・終了コード・
-ワーカー規約の取得（lane-ops worker_contract.py の子プロセス実行）・プロンプト
-ファイル書き出しは read_spec / contract_sections / write_prompts / main にまとめる。
+resolve_base / sanitize / scope_check_command / render）には副作用を持たせない。
+I/O・終了コード・ワーカー規約の取得（lane-ops worker_contract.py の子プロセス実行）・
+プロンプトファイル書き出し・計画ファイルの存在確認は read_spec / contract_sections /
+write_prompts / check_plan_file / main にまとめる。
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 # claude CLI の受け付ける選択肢（`claude --help` 準拠）。
@@ -106,12 +120,18 @@ class Task:
     effort: str = ""
     # 触ってよいパスの glob。空 = 境界宣言なし（境界ファイルを生成しない）。
     boundary: tuple[str, ...] = ()
+    # 計画に書かれた変更ファイル一覧（リポジトリルート相対。glob 不可）。空 = ファイル照合なし。
+    expected_files: tuple[str, ...] = ()
+    # 計画の規模目安（追加+削除の行数）。0 = 規模照合なし。
+    expected_scale: int = 0
 
 
 @dataclass(frozen=True)
 class Plan:
     default_base: str
     tasks: tuple[Task, ...]
+    # 計画ファイルの絶対パス。空 = 未指定（ワーカー規約に計画参照を載せない）。
+    plan: str = ""
 
 
 @dataclass(frozen=True)
@@ -174,8 +194,14 @@ def parse_spec(data: object) -> Plan:
         if not isinstance(bounds_raw, list):
             raise SpecError(f"boundary は配列でない: {t.get('id')!r}")
         issue_raw = t.get("issue", 0) or 0
-        if not isinstance(issue_raw, int) or issue_raw < 0:
+        if isinstance(issue_raw, bool) or not isinstance(issue_raw, int) or issue_raw < 0:
             raise SpecError(f"issue は非負整数でない: {t.get('id')!r}")
+        expected_raw = t.get("expected_files", []) or []
+        if not isinstance(expected_raw, list) or not all(isinstance(x, str) for x in expected_raw):
+            raise SpecError(f"expected_files は文字列配列でない: {t.get('id')!r}")
+        scale_raw = t.get("expected_scale", 0) or 0
+        if isinstance(scale_raw, bool) or not isinstance(scale_raw, int) or scale_raw < 0:
+            raise SpecError(f"expected_scale は非負整数でない: {t.get('id')!r}")
         tasks.append(
             Task(
                 id=str(t.get("id", "")).strip(),
@@ -189,10 +215,16 @@ def parse_spec(data: object) -> Plan:
                 boundary=with_default_boundary(
                     tuple(g for g in (str(b).strip() for b in bounds_raw) if g)
                 ),
+                expected_files=tuple(x for x in (e.strip() for e in expected_raw) if x),
+                expected_scale=scale_raw,
             )
         )
     default_base = str(data.get("default_base", "main")).strip() or "main"
-    return Plan(default_base=default_base, tasks=tuple(tasks))
+    plan_raw = data.get("plan", "") or ""
+    if not isinstance(plan_raw, str):
+        raise SpecError("plan は文字列でない")
+    plan_path = os.path.abspath(plan_raw.strip()) if plan_raw.strip() else ""
+    return Plan(default_base=default_base, tasks=tuple(tasks), plan=plan_path)
 
 
 # 境界宣言に必ず含める glob。PR 本文ドラフト等の一時出力先（tmp_claude/）が
@@ -329,6 +361,11 @@ def analyze(plan: Plan) -> Analysis:
                 f"task {t.id} は複数親 {list(t.depends_on)} に依存。単純な線形 stack 不可。"
                 "integration ブランチか逐次 rebase を検討（base は先頭親を仮採用）"
             )
+        if not t.expected_files:
+            warnings.append(
+                f"task {t.id} に expected_files が無い。計画突合（check_scope.py）はファイル照合なしに"
+                "縮退する（規模目安のみ、それも無ければ SKIP）。計画の変更ファイル一覧を spec へ落とす"
+            )
 
     cycle = detect_cycle(plan)
     if cycle is not None:
@@ -428,37 +465,81 @@ def boundary_json(task: Task) -> str:
 
 # ワーカー規約の正本は lane-ops の worker_contract.py（同一プラグイン内の兄弟スキル）。
 # 規約の文言をここへ複製せず、子プロセスで取得して prompt へ連結する。
-WORKER_CONTRACT = (
-    Path(__file__).resolve().parents[2] / "lane-ops" / "scripts" / "worker_contract.py"
-)
+LANE_OPS_SCRIPTS = Path(__file__).resolve().parents[2] / "lane-ops" / "scripts"
+WORKER_CONTRACT = LANE_OPS_SCRIPTS / "worker_contract.py"
 
 
 class ContractError(Exception):
     """lane-ops worker_contract.py が見つからない・実行に失敗した場合。"""
 
 
-def contract_sections(task: Task, base: str, default_base: str, launch: Launch) -> str:
+# 同梱の計画突合スクリプト。ワーカー規約（--base）と VERIFY 節（--pr）の両方から参照する。
+CHECK_SCOPE = Path(__file__).resolve().parent / "check_scope.py"
+
+
+def scope_check_args(task: Task) -> str:
+    """期待（expected_files / expected_scale）を check_scope.py の引数列にする（純粋）。"""
+    parts: list[str] = []
+    for f in task.expected_files:
+        parts += ["--expected-file", f]
+    if task.expected_scale:
+        parts += ["--expected-scale", str(task.expected_scale)]
+    return "".join(f" {shlex.quote(a)}" for a in parts)
+
+
+def scope_check_command(task: Task, base: str) -> str:
+    """ワーカーが PR 前に worktree で実行する突合コマンド（純粋）。"""
+    return f"python3 {shlex.quote(str(CHECK_SCOPE))} --base {shlex.quote(base)}{scope_check_args(task)}"
+
+
+def verify_command(task: Task) -> str:
+    """親が PR 報告を受けて実行する突合コマンド（PR 番号はプレースホルダ。純粋）。"""
+    return f"python3 {shlex.quote(str(CHECK_SCOPE))} --pr <{task.id} の PR 番号>{scope_check_args(task)}"
+
+
+@dataclass(frozen=True)
+class ContractPayload:
+    """worker_contract.py へ渡すタスク情報（lane-ops の TaskInfo と同じ項目）。"""
+
+    task_id: str
+    branch: str
+    base: str
+    default_base: str
+    boundary: tuple[str, ...]
+    issue: int
+    parent: str
+    plan: str
+    scope_check: str
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), ensure_ascii=False)
+
+
+def contract_payload(task: Task, base: str, plan: Plan, launch: Launch) -> ContractPayload:
+    """Task + 解決済み base + Plan + Launch -> worker_contract.py への入力（純粋）。"""
+    return ContractPayload(
+        task_id=task.id,
+        branch=task.branch,
+        base=base,
+        default_base=plan.default_base,
+        boundary=task.boundary,
+        issue=task.issue,
+        parent=launch.parent_name,
+        plan=plan.plan,
+        scope_check=scope_check_command(task, base),
+    )
+
+
+def contract_sections(task: Task, base: str, plan: Plan, launch: Launch) -> str:
     """lane-ops worker_contract.py を呼び、ワーカー規約セクションを取得する（副作用: 子プロセス）。"""
     if not WORKER_CONTRACT.is_file():
         raise ContractError(
             f"lane-ops の worker_contract.py が見つからない: {WORKER_CONTRACT}\n"
             "job-graph は lane-ops スキルと同時に配置される前提（同一プラグイン）。"
         )
-    payload = json.dumps(
-        {
-            "task_id": task.id,
-            "branch": task.branch,
-            "base": base,
-            "default_base": default_base,
-            "boundary": list(task.boundary),
-            "issue": task.issue,
-            "parent": launch.parent_name,
-        },
-        ensure_ascii=False,
-    )
     proc = subprocess.run(
         [sys.executable, str(WORKER_CONTRACT)],
-        input=payload,
+        input=contract_payload(task, base, plan, launch).to_json(),
         capture_output=True,
         text=True,
         # 失敗は下で returncode を見て ContractError に変換する（例外送出に頼らない）。
@@ -474,10 +555,65 @@ def prompt_path(prompt_dir: str, task: Task) -> str:
     return str(Path(prompt_dir) / f"{sanitize(task.id)}.md")
 
 
-def full_prompt(task: Task, base: str, default_base: str, launch: Launch) -> str:
+def launch_script_path(prompt_dir: str, task: Task) -> str:
+    """task の起動スクリプトを書き出すファイルパス（純粋: パス算出のみ）。"""
+    return str(Path(prompt_dir) / f"launch_{sanitize(task.id)}.sh")
+
+
+@dataclass(frozen=True)
+class LaunchScript:
+    """pane へ `bash <path>` で流す起動スクリプト（path と本文）。"""
+
+    path: str
+    body: str
+
+
+def launch_script(task: Task, base: str, launch: Launch, prompt_dir: str) -> LaunchScript:
+    """task の起動コマンド（env -u ... wt switch --create ... -x claude|bash ...）を
+    スクリプト本文として組む（純粋）。
+
+    claude 引数列: 起動フラグ -> --remote-control（オプトイン）-> プロンプト（ファイルから
+    読む）。プロンプトは複数行のため直接埋め込まず "$(cat <path>)" で bash に展開させる
+    （wt は EXECUTE_ARGS を shell-escape して exec するので安全）。
+    親セッション固有のマーカーは wt より前で断ち切る（ENV_STRIP_PREFIX 参照）。
+    """
+    ppath = prompt_path(prompt_dir, task)
+    rc_args = f" --remote-control {shlex.quote(sanitize(task.branch))}" if launch.remote_control else ""
+    flags_str = "".join(f" {shlex.quote(a)}" for a in launch_flags(task, launch))
+    prompt_ref = f'"$(cat {shlex.quote(ppath)})"'
+    if task.boundary:
+        # 境界宣言ありは -x bash の bootstrap 経由（worktree 生成後・claude 起動前に
+        # 境界ファイルを置く）。境界 JSON は 1 行なので positional で渡す。
+        cmd = (
+            f"{ENV_STRIP_PREFIX}"
+            f" wt switch --create {shlex.quote(task.branch)} --base {shlex.quote(base)}"
+            f" -x bash -- -c {shlex.quote(BOUNDARY_BOOTSTRAP)}"
+            f" {shlex.quote('wt-boundary-' + task.id)} {shlex.quote(boundary_json(task))}"
+            f"{flags_str}{rc_args} {prompt_ref}"
+        )
+    else:
+        cmd = (
+            f"{ENV_STRIP_PREFIX}"
+            f" wt switch --create {shlex.quote(task.branch)} --base {shlex.quote(base)}"
+            f" -x claude --{flags_str}{rc_args} {prompt_ref}"
+        )
+    body = "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            f"# job-graph launch: {task.id} ({task.branch}) base={base}",
+            "# pane run へ長文を注入せず、このファイルを `bash <path>` で実行する",
+            "set -e",
+            f"exec {cmd}",
+            "",
+        ]
+    )
+    return LaunchScript(path=launch_script_path(prompt_dir, task), body=body)
+
+
+def full_prompt(task: Task, base: str, plan: Plan, launch: Launch) -> str:
     """spec の prompt + lane-ops ワーカー規約（プロンプトファイルの内容）。"""
     body = task.prompt or f"<{task.id} のタスクプロンプト未記入>"
-    return f"{body}\n\n{contract_sections(task, base, default_base, launch)}\n"
+    return f"{body}\n\n{contract_sections(task, base, plan, launch)}\n"
 
 
 def shell_var(prefix: str, name: str) -> str:
@@ -543,9 +679,11 @@ def render(
             )
 
     if prompt_dir:
-        out.append("\n=== PROMPTS (書き出し済みワーカープロンプト) ===")
+        out.append("\n=== PROMPTS (書き出し済みワーカープロンプトと起動スクリプト) ===")
         for t in sorted(plan.tasks, key=lambda x: (an.levels[x.id], x.id)):
-            out.append(f"  {t.id}: {prompt_path(prompt_dir, t)}")
+            out.append(
+                f"  {t.id}: {prompt_path(prompt_dir, t)}  launch: {launch_script_path(prompt_dir, t)}"
+            )
 
     defaults = []
     if launch.model:
@@ -621,34 +759,12 @@ def render(
                 out.append(
                     f"{pane_var}=$(printf '%s' \"$resp\" | jq -r '.result.root_pane.pane_id')"
                 )
-            # claude 引数列: 起動フラグ -> --remote-control（オプトイン）->
-            # プロンプト（ファイルから読む）。プロンプトは複数行のため直接埋め込まず
-            # "$(cat <path>)" で pane の shell に展開させる（wt は EXECUTE_ARGS を
-            # shell-escape して exec するので安全）。
-            ppath = prompt_path(prompt_dir, t)
-            rc_args = f" --remote-control {shlex.quote(sess)}" if launch.remote_control else ""
-            flags = launch_flags(t, launch)
-            flags_str = ("".join(f" {shlex.quote(a)}" for a in flags))
-            prompt_ref = f'"$(cat {shlex.quote(ppath)})"'
-            # 親セッション固有のマーカーは wt より前で断ち切る（ENV_STRIP_PREFIX 参照）。
-            if t.boundary:
-                # 境界宣言ありは -x bash の bootstrap 経由（worktree 生成後・claude 起動前に
-                # 境界ファイルを置く）。境界 JSON は 1 行なので positional で渡す。
-                inner = (
-                    f"{ENV_STRIP_PREFIX}"
-                    f" wt switch --create {shlex.quote(t.branch)} --base {shlex.quote(base)}"
-                    f" -x bash -- -c {shlex.quote(BOUNDARY_BOOTSTRAP)}"
-                    f" {shlex.quote('wt-boundary-' + t.id)} {shlex.quote(boundary_json(t))}"
-                    f"{flags_str}{rc_args} {prompt_ref}"
-                )
-            else:
-                inner = (
-                    f"{ENV_STRIP_PREFIX}"
-                    f" wt switch --create {shlex.quote(t.branch)} --base {shlex.quote(base)}"
-                    f" -x claude --{flags_str}{rc_args} {prompt_ref}"
-                )
+            # 起動コマンド本体は launch_<id>.sh（write_prompts が書き出す）にあり、pane には
+            # `bash <path>` だけを流す（長文注入で未実行・切断が起きた実績への対策）。
+            script = launch_script(t, base, launch, prompt_dir)
             out.append(
-                f"herdr --session \"$HSESSION\" pane run \"${pane_var}\" {shlex.quote(inner)}"
+                f"herdr --session \"$HSESSION\" pane run \"${pane_var}\""
+                f" {shlex.quote('bash ' + shlex.quote(script.path))}"
             )
 
     out.append("\n=== PR (各ワーカーが実装・コミット後、/review-converge 収束後に自分で実行) ===")
@@ -658,13 +774,36 @@ def render(
         note = "（base 省略=デフォルト）" if base == plan.default_base else "（stacked: base=前段）"
         out.append(f"# {t.id} ({t.branch}): /pr-create{arg}   {note}")
 
+    out.append("\n=== VERIFY (PR 報告を受けたら親が実行する計画突合。手順は references/scope-gate.md) ===")
+    out.append("# VERDICT: PASS のときだけ凍結確認・次段起動へ進む。FAIL なら次段を起動せずユーザーへ報告する")
+    for t in sorted(plan.tasks, key=lambda x: (an.levels[x.id], x.id)):
+        out.append(f"# {t.id} ({t.branch}):")
+        out.append(f"#   {verify_command(t)}")
+
     out.append("\n=== MONITOR (親のゲート監視。lane-ops スキルの運用ループに従う) ===")
-    out.append("# 状態監視:     python3 <lane-ops>/scripts/watch_events.py --status blocked を 1 本常駐")
+    pane_args = "".join(
+        f" --pane \"${shell_var('PANE_', t.id)}\"" for t in sorted(plan.tasks, key=lambda x: x.id)
+    )
+    out.append(
+        "# 状態監視: 自レーンの pane に限定し、--once でバックグラウンド Bash の完了通知を push 通知にする"
+        "（起動済みの pane だけを列挙。未起動の wave は起動後に足して再起動）"
+    )
+    out.append(
+        f"#   python3 {shlex.quote(str(LANE_OPS_SCRIPTS / 'watch_events.py'))}"
+        f" --once --status blocked --status idle{pane_args}"
+    )
+    out.append(
+        "# イベント処理後は watch を再起動し、直後に"
+        " herdr --session \"$HSESSION\" agent get <pane> で現在状態を直接確認する（停止中の変化を取りこぼさない）"
+    )
     out.append(
         "# 画面確認:     herdr --session \"$HSESSION\" agent read <pane>"
         " --source recent-unwrapped --lines 120"
     )
-    out.append("# 報告の裏取り: bash <lane-ops>/scripts/verify_lane.sh <branch> <worktree>")
+    out.append(
+        f"# 報告の裏取り: bash {shlex.quote(str(LANE_OPS_SCRIPTS / 'verify_lane.sh'))} <branch> <worktree>"
+    )
+    out.append("# 計画突合:     VERIFY 節の check_scope.py --pr（PR 報告のたびに実行。PASS のときだけ次段へ）")
     out.append("# ワーカーの報告（[lane-ops:report ...]）は自己申告。必ず裏取りしてから次段を起動する")
 
     return "\n".join(out)
@@ -692,12 +831,21 @@ def read_spec(arg: str) -> object:
 
 
 def write_prompts(plan: Plan, an: Analysis, launch: Launch, prompt_dir: str) -> None:
-    """各 task のワーカープロンプト（本文 + 標準セクション）を prompt_dir へ書き出す。"""
+    """各 task のワーカープロンプト（本文 + 標準セクション）と起動スクリプトを prompt_dir へ書き出す。"""
     Path(prompt_dir).mkdir(parents=True, exist_ok=True)
     for t in plan.tasks:
         Path(prompt_path(prompt_dir, t)).write_text(
-            full_prompt(t, an.bases[t.id], plan.default_base, launch), encoding="utf-8"
+            full_prompt(t, an.bases[t.id], plan, launch), encoding="utf-8"
         )
+        script = launch_script(t, an.bases[t.id], launch, prompt_dir)
+        Path(script.path).write_text(script.body, encoding="utf-8")
+
+
+def check_plan_file(plan: Plan) -> list[str]:
+    """spec の plan が指定されていて存在しなければ ERROR 文を返す（副作用: ファイル存在確認）。"""
+    if plan.plan and not Path(plan.plan).is_file():
+        return [f"plan が存在しない: {plan.plan}（相対パスは cwd 基準で絶対化される）"]
+    return []
 
 
 def parse_args(argv: list[str]) -> Options:
@@ -771,6 +919,12 @@ def main(argv: list[str]) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
     an = analyze(plan)
+    plan_errors = check_plan_file(plan)
+    if plan_errors:
+        an = Analysis(
+            errors=an.errors + plan_errors, warnings=an.warnings,
+            levels={}, bases={}, lanes=(), lane_of={},
+        )
     if not an.errors and opts.prompt_dir:
         try:
             write_prompts(plan, an, opts.launch, opts.prompt_dir)

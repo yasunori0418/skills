@@ -15,7 +15,10 @@ stdin にタスク情報 JSON を受け取り、ワーカー（レーン内エ�
   "default_base": "main",
   "boundary": ["internal/client/**"],   // 省略可（空 = 境界宣言なし）
   "issue": 123,                          // 省略可（0/なし = issue 参照なし）
-  "parent": "orc-myrepo"                 // 省略可（空 = 報告先未指定）
+  "parent": "orc-myrepo",                // 省略可（空 = 報告先未指定）
+  "plan": "/abs/path/to/plan.md",        // 省略可（空 = 計画参照の条項を出さない）
+  "scope_check": "python3 .../check_scope.py --base main --expected-file a.py"
+                                         // 省略可（空 = PR 前の計画突合の条項を出さない）
 }
 
 使い方:
@@ -29,6 +32,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 BOUNDARY_FILE = ".claude/task-boundary.json"
@@ -39,20 +43,73 @@ MILESTONES = (
 )
 
 
+class ContractError(Exception):
+    """入力 JSON の構造・型が規約の入力として不正な場合。"""
+
+
+@dataclass(frozen=True)
+class TaskInfo:
+    """規約の描画に必要なタスク情報（parse_task で正規化済み）。"""
+
+    task_id: str = ""
+    branch: str = ""
+    base: str = "main"
+    default_base: str = "main"
+    boundary: tuple[str, ...] = ()
+    issue: int = 0
+    parent: str = ""
+    # 計画ファイルの絶対パス。空 = 計画参照の条項を出さない。
+    plan: str = ""
+    # 計画との突合コマンド完全形。空 = PR 前の突合の条項を出さない。
+    scope_check: str = ""
+
+
+def _str_field(data: dict, key: str, default: str = "") -> str:
+    v = data.get(key, default)
+    if v is None:
+        return default
+    if not isinstance(v, str):
+        raise ContractError(f"{key} は文字列でない: {v!r}")
+    return v.strip() or default
+
+
+def parse_task(data: object) -> TaskInfo:
+    """JSON 由来の値 -> TaskInfo（既定値の補完と型検証）。不正なら ContractError。"""
+    if not isinstance(data, dict):
+        raise ContractError("入力はオブジェクトではない")
+    boundary_raw = data.get("boundary") or []
+    if not isinstance(boundary_raw, list) or not all(isinstance(g, str) for g in boundary_raw):
+        raise ContractError(f"boundary は文字列配列でない: {boundary_raw!r}")
+    issue_raw = data.get("issue") or 0
+    if isinstance(issue_raw, bool) or not isinstance(issue_raw, int) or issue_raw < 0:
+        raise ContractError(f"issue は非負整数でない: {issue_raw!r}")
+    return TaskInfo(
+        task_id=_str_field(data, "task_id"),
+        branch=_str_field(data, "branch"),
+        base=_str_field(data, "base", "main"),
+        default_base=_str_field(data, "default_base", "main"),
+        boundary=tuple(g.strip() for g in boundary_raw if g.strip()),
+        issue=issue_raw,
+        parent=_str_field(data, "parent"),
+        plan=_str_field(data, "plan"),
+        scope_check=_str_field(data, "scope_check"),
+    )
+
+
 def report_script() -> str:
     """同梱 report.sh の絶対パス（設置場所から解決）。"""
     return str(Path(__file__).resolve().parent / "report.sh")
 
 
-def render(task: dict) -> str:
+def render(task: TaskInfo) -> str:
     """タスク情報 -> 標準セクション Markdown（純粋）。"""
-    task_id = str(task.get("task_id", "")).strip()
-    branch = str(task.get("branch", "")).strip()
-    base = str(task.get("base", "")).strip() or "main"
-    default_base = str(task.get("default_base", "")).strip() or "main"
-    boundary = [str(g).strip() for g in task.get("boundary") or [] if str(g).strip()]
-    issue = task.get("issue") or 0
-    parent = str(task.get("parent", "")).strip()
+    task_id = task.task_id
+    branch = task.branch
+    base = task.base
+    default_base = task.default_base
+    boundary = task.boundary
+    issue = task.issue
+    parent = task.parent
 
     if boundary:
         scope = (
@@ -65,6 +122,31 @@ def render(task: dict) -> str:
         )
     else:
         scope = "- 編集してよい範囲（境界）: このタスクの担当範囲に限る。他タスクのファイルに触れない"
+
+    plan_lines = []
+    if task.plan:
+        plan_lines = [
+            (
+                f"- 計画の参照: このタスクの計画は {task.plan} にある"
+                "（worktree からは相対で辿れないため絶対パス）。"
+                "`/review-converge` 起動時にこの計画を確定グラウンドトゥルース"
+                f"（`DIFF_REVIEW_GROUND_TRUTH={task.plan}`）として渡す。"
+                "diff-review の spec レンズが計画との突合を行い、計画に無い変更を指摘として返す。"
+                "候補の採否を親へ問い合わせない（計画が判断基準）"
+            ),
+        ]
+
+    scope_check_lines = []
+    if task.scope_check:
+        scope_check_lines = [
+            (
+                "- 計画との突合（PR 作成前）: `/review-converge` 収束後・`/pr-create` 前に "
+                f"`{task.scope_check}` を実行する。"
+                "`VERDICT: FAIL`（計画に無いファイルの変更・規模超過）なら PR を作らず、"
+                "報告コマンドで「作業のブロック」として親へ報告し裁定を待つ"
+                "（何を削る・分離するかを自分で判断しない。計画の範囲は親・ユーザーが決める）"
+            ),
+        ]
 
     issue_lines = []
     if issue:
@@ -96,6 +178,7 @@ def render(task: dict) -> str:
         [
             "## 制約（lane-ops ワーカー規約）",
             scope,
+            *plan_lines,
             *issue_lines,
             "- TDD 順序: テストを先に実装し（失敗を確認）、その後アプリケーション実装で通す",
             (
@@ -122,6 +205,7 @@ def render(task: dict) -> str:
                 "計画・依頼範囲外の追加修正の提案。severity に関わらず。迷ったら improvement に倒す — は"
                 "修正せず見送る。見送りの記録は review-converge が書き出す見送りファイルに委ねる"
             ),
+            *scope_check_lines,
             (
                 "- review-converge の反復境界: 実質的な指摘 — このタスクの diff が導入した問題"
                 "（出力形状・型安全性・contract・退行）— が出ている間は反復を続ける。"
@@ -164,12 +248,14 @@ def render(task: dict) -> str:
 
 def main() -> int:
     try:
-        task = json.loads(sys.stdin.read())
+        data = json.loads(sys.stdin.read())
     except json.JSONDecodeError as e:
         print(f"ERROR: 入力が不正な JSON: {e}", file=sys.stderr)
         return 1
-    if not isinstance(task, dict):
-        print("ERROR: 入力はオブジェクトではない", file=sys.stderr)
+    try:
+        task = parse_task(data)
+    except ContractError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
         return 1
     print(render(task))
     return 0

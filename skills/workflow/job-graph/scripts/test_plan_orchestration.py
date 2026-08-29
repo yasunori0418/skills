@@ -53,6 +53,43 @@ def test_parse_spec_rejects_empty_tasks():
         po.parse_spec({"tasks": []})
 
 
+def test_parse_spec_expected_fields():
+    plan = spec([task("A", expected_files=["src/a.py", " ", "tests/test_a.py"], expected_scale=40)])
+    assert plan.tasks[0] == po.Task(
+        id="A", branch="br-A", depends_on=(), prompt="task A",
+        expected_files=("src/a.py", "tests/test_a.py"), expected_scale=40,
+    )
+    assert spec([task("A")]).tasks[0].expected_files == ()
+    assert spec([task("A")]).tasks[0].expected_scale == 0
+
+
+def test_parse_spec_rejects_bad_expected_fields():
+    with pytest.raises(po.SpecError):
+        spec([task("A", expected_files="src/a.py")])
+    with pytest.raises(po.SpecError):
+        spec([task("A", expected_scale="40")])
+    with pytest.raises(po.SpecError):
+        spec([task("A", expected_scale=-1)])
+
+
+def test_parse_spec_plan_absolutized(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    plan = po.parse_spec({"plan": "docs/plan.md", "tasks": [task("A")]})
+    assert plan.plan == str(tmp_path / "docs" / "plan.md")
+    assert po.parse_spec({"tasks": [task("A")]}).plan == ""
+    with pytest.raises(po.SpecError):
+        po.parse_spec({"plan": 1, "tasks": [task("A")]})
+
+
+def test_check_plan_file_reports_missing(tmp_path):
+    missing = po.Plan(default_base="main", tasks=(), plan=str(tmp_path / "no.md"))
+    assert po.check_plan_file(missing) == [f"plan が存在しない: {tmp_path / 'no.md'}（相対パスは cwd 基準で絶対化される）"]
+    exists = tmp_path / "plan.md"
+    exists.write_text("x", encoding="utf-8")
+    assert po.check_plan_file(po.Plan(default_base="main", tasks=(), plan=str(exists))) == []
+    assert po.check_plan_file(po.Plan(default_base="main", tasks=())) == []
+
+
 def test_boundary_auto_adds_tmp_claude():
     plan = spec([task("A", boundary=["src/**"]), task("B")])
     assert "tmp_claude/**" in plan.tasks[0].boundary
@@ -91,6 +128,13 @@ def test_analyze_detects_undefined_dep():
 def test_analyze_detects_duplicates():
     an = po.analyze(spec([task("A"), task("A")]))
     assert any("id が重複" in e for e in an.errors)
+
+
+def test_analyze_warns_missing_expected_files():
+    an = po.analyze(spec([task("A"), task("B", expected_files=["b.py"])]))
+    assert an.errors == []
+    hits = [w for w in an.warnings if "expected_files が無い" in w]
+    assert len(hits) == 1 and "task A" in hits[0] and "縮退" in hits[0]
 
 
 def test_analyze_warns_multi_parent():
@@ -153,10 +197,42 @@ def test_boundary_json_single_line_contract():
 def test_full_prompt_appends_lane_ops_contract():
     plan = spec([task("A")])
     t = plan.tasks[0]
-    out = po.full_prompt(t, "main", "main", po.Launch(parent_name="orc"))
+    out = po.full_prompt(t, "main", plan, po.Launch(parent_name="orc"))
     assert out.startswith("task A")
     assert "## 制約（lane-ops ワーカー規約）" in out
     assert "report.sh orc A" in out
+
+
+def test_scope_check_command_is_base_form_with_expectations():
+    plan = spec([task("A", expected_files=["src/a b.py", "tests/t.py"], expected_scale=30)])
+    cmd = po.scope_check_command(plan.tasks[0], "feat-x")
+    assert cmd.startswith(f"python3 {po.CHECK_SCOPE} --base feat-x")
+    assert "--expected-file 'src/a b.py' --expected-file tests/t.py --expected-scale 30" in cmd
+    bare = po.scope_check_command(spec([task("B")]).tasks[0], "main")
+    assert bare == f"python3 {po.CHECK_SCOPE} --base main"
+
+
+def test_contract_payload_to_json_carries_plan_and_scope_check():
+    plan = po.Plan(default_base="main", tasks=(), plan="/abs/plan.md")
+    t = spec([task("A", expected_files=["a.py"], boundary=["src/**"], issue=3)]).tasks[0]
+    payload = po.contract_payload(t, "main", plan, po.Launch(parent_name="orc"))
+    assert payload == po.ContractPayload(
+        task_id="A", branch="br-A", base="main", default_base="main",
+        boundary=("src/**", "tmp_claude/**"), issue=3, parent="orc", plan="/abs/plan.md",
+        scope_check=po.scope_check_command(t, "main"),
+    )
+    data = json.loads(payload.to_json())
+    assert data["plan"] == "/abs/plan.md"
+    assert data["scope_check"].endswith("--expected-file a.py")
+    assert data["boundary"] == ["src/**", "tmp_claude/**"]
+
+
+def test_full_prompt_embeds_scope_check_and_plan():
+    plan = po.Plan(default_base="main", tasks=(), plan="/abs/plan.md")
+    t = spec([task("A", expected_files=["a.py"], expected_scale=10)]).tasks[0]
+    out = po.full_prompt(t, "main", plan, po.Launch(parent_name="orc"))
+    assert "check_scope.py --base main --expected-file a.py --expected-scale 10" in out
+    assert "DIFF_REVIEW_GROUND_TRUTH=/abs/plan.md" in out
 
 
 # ------------------------------------------------------------
@@ -203,10 +279,9 @@ def test_render_all_herdr_calls_pin_session():
     assert bare == []
 
 
-def test_render_base_always_explicit():
+def test_launch_script_base_always_explicit():
     # wave 0 の独立タスクにも必ず --base を明示する
-    out = rendered([task("A")], default_base="develop")
-    assert "--create br-A --base develop" in out
+    assert "--create br-A --base develop" in launch_body([task("A")], default_base="develop")["A"]
 
 
 def test_render_lane_head_creates_workspace_and_stacked_adds_tab():
@@ -231,61 +306,81 @@ def test_render_stacked_gate_is_pr_creation():
     assert "gh pr list --head br-A" in out
 
 
-def test_render_launch_uses_wt_and_prompt_file():
-    out = rendered([task("A")])
-    assert "wt switch --create br-A --base main -x claude --" in out
-    assert "$(cat /tmp/jg-prompts/A.md)" in out
+def launch_body(tasks, launch=None, prompt_dir="/tmp/jg-prompts", default_base="main"):
+    """各 task の起動スクリプト本文（task id -> body）。"""
+    plan = spec(tasks, default_base=default_base)
+    an = po.analyze(plan)
+    assert an.errors == []
+    return {
+        t.id: po.launch_script(t, an.bases[t.id], launch or po.Launch(), prompt_dir).body
+        for t in plan.tasks
+    }
 
 
-def test_render_strips_parent_session_markers():
-    # 各レーンは独立したセッションなので、親セッション固有のマーカーを wt より前で
-    # 断ち切る（放置するとレーンが親の子と誤認され transcript 保存が切られる）。
-    # 境界あり（-x bash bootstrap）・境界なし（-x claude）の両経路が対象。
+def test_launch_script_uses_wt_and_prompt_file():
+    script = po.launch_script(spec([task("A")]).tasks[0], "main", po.Launch(), "/tmp/jg-prompts")
+    assert script.path == "/tmp/jg-prompts/launch_A.sh"
+    assert script.body.startswith("#!/usr/bin/env bash\n")
+    assert "wt switch --create br-A --base main -x claude --" in script.body
+    assert "$(cat /tmp/jg-prompts/A.md)" in script.body
+    assert "\nexec env -u" in script.body
+
+
+def test_render_pane_run_only_references_launch_script():
+    # pane run には `bash <launch_<id>.sh>` の短いコマンドだけを流す
+    # （長文注入で未実行・切断が起きた実績への対策）。
     out = rendered([task("A"), task("B", boundary=["pkg/**"])])
     launches = [ln for ln in out.splitlines() if "pane run" in ln]
     assert len(launches) == 2
-    for ln in launches:
+    assert any("'bash /tmp/jg-prompts/launch_A.sh'" in ln for ln in launches)
+    assert any("'bash /tmp/jg-prompts/launch_B.sh'" in ln for ln in launches)
+    assert "wt switch" not in out.split("=== COMMANDS")[1]
+    assert "launch: /tmp/jg-prompts/launch_A.sh" in out.split("=== PROMPTS")[1]
+
+
+def test_launch_script_strips_parent_session_markers():
+    # 各レーンは独立したセッションなので、親セッション固有のマーカーを wt より前で
+    # 断ち切る（放置するとレーンが親の子と誤認され transcript 保存が切られる）。
+    # 境界あり（-x bash bootstrap）・境界なし（-x claude）の両経路が対象。
+    bodies = launch_body([task("A"), task("B", boundary=["pkg/**"])])
+    assert len(bodies) == 2
+    for body in bodies.values():
         # env -u は wt より前に置く（wt 自身にもその子の claude にも渡らないように）。
-        assert "env -u CLAUDE_CODE_CHILD_SESSION" in ln
-        assert ln.index("env -u CLAUDE_CODE_CHILD_SESSION") < ln.index("wt switch")
-    for var in po.INHERITED_SESSION_VARS:
-        assert all(f"-u {var}" in ln for ln in launches)
-    # ユーザー設定・実行ファイル解決に使うものは落とさない。
-    assert "CLAUDE_CODE_EXECPATH" not in out
-    # COMMANDS をコピペした shell の環境は壊さない（unset は使わない）。
-    assert "unset CLAUDE_CODE" not in out
+        assert "env -u CLAUDE_CODE_CHILD_SESSION" in body
+        assert body.index("env -u CLAUDE_CODE_CHILD_SESSION") < body.index("wt switch")
+        for var in po.INHERITED_SESSION_VARS:
+            assert f"-u {var}" in body
+        # ユーザー設定・実行ファイル解決に使うものは落とさない。
+        assert "CLAUDE_CODE_EXECPATH" not in body
+        # 実行した shell の環境は壊さない（unset は使わない）。
+        assert "unset CLAUDE_CODE" not in body
 
 
-def test_render_no_claude_name_flag():
+def test_launch_script_no_claude_name_flag():
     # 報告は lane-ops（herdr agent prompt）経由なので --name は付けない
-    out = rendered([task("A")])
-    assert "--name" not in out
+    assert "--name" not in launch_body([task("A")])["A"]
 
 
-def test_render_remote_control_optin():
-    out = rendered([task("A")], launch=po.Launch(remote_control=True))
-    assert "--remote-control br-A" in out
-    out2 = rendered([task("A")])
-    assert "--remote-control" not in out2
+def test_launch_script_remote_control_optin():
+    assert "--remote-control br-A" in launch_body([task("A")], launch=po.Launch(remote_control=True))["A"]
+    assert "--remote-control" not in launch_body([task("A")])["A"]
 
 
-def test_render_model_flags_task_over_global():
-    out = rendered(
+def test_launch_script_model_flags_task_over_global():
+    bodies = launch_body(
         [task("A", model="sonnet"), task("B")],
         launch=po.Launch(model="opus", effort="high"),
     )
-    a_line = next(l for l in out.splitlines() if "br-A" in l and "pane run" in l)
-    b_line = next(l for l in out.splitlines() if "br-B" in l and "pane run" in l)
-    assert "--model sonnet" in a_line
-    assert "--model opus" in b_line
-    assert "--effort high" in a_line and "--effort high" in b_line
+    assert "--model sonnet" in bodies["A"]
+    assert "--model opus" in bodies["B"]
+    assert "--effort high" in bodies["A"] and "--effort high" in bodies["B"]
 
 
-def test_render_boundary_uses_bootstrap():
-    out = rendered([task("A", boundary=["src/**"])])
-    assert "-x bash --" in out
-    assert "wt-boundary-A" in out
-    assert "task-boundary.json" in out
+def test_launch_script_boundary_uses_bootstrap():
+    body = launch_body([task("A", boundary=["src/**"])])["A"]
+    assert "-x bash --" in body
+    assert "wt-boundary-A" in body
+    assert "task-boundary.json" in body
 
 
 def test_render_lanes_section():
@@ -294,11 +389,27 @@ def test_render_lanes_section():
     assert "A -> B" in out
 
 
+def test_render_verify_section_lists_pr_form_per_task():
+    out = rendered([task("A", expected_files=["a.py"], expected_scale=5), task("B", deps=["A"])])
+    verify = out.split("=== VERIFY")[1].split("=== MONITOR")[0]
+    assert "scope-gate.md" in verify
+    assert "FAIL なら次段を起動せず" in verify
+    assert f"python3 {po.CHECK_SCOPE} --pr <A の PR 番号> --expected-file a.py --expected-scale 5" in verify
+    assert f"python3 {po.CHECK_SCOPE} --pr <B の PR 番号>" in verify
+    assert out.index("=== PR") < out.index("=== VERIFY") < out.index("=== MONITOR")
+
+
 def test_render_monitor_section_points_to_lane_ops():
-    out = rendered([task("A")])
-    assert "watch_events.py" in out
-    assert "verify_lane.sh" in out
-    assert "[lane-ops:report" in out
+    out = rendered([task("B"), task("A")])
+    monitor = out.split("=== MONITOR")[1]
+    assert f"python3 {po.LANE_OPS_SCRIPTS / 'watch_events.py'} --once --status blocked --status idle" in monitor
+    # 自レーンの pane に限定（id 順に列挙）
+    assert '--pane "$PANE_A" --pane "$PANE_B"' in monitor
+    assert "agent get <pane>" in monitor
+    assert f"bash {po.LANE_OPS_SCRIPTS / 'verify_lane.sh'}" in monitor
+    assert "check_scope.py --pr" in monitor
+    assert "[lane-ops:report" in monitor
+    assert "常駐" not in monitor
 
 
 # ------------------------------------------------------------
@@ -323,6 +434,22 @@ def test_write_prompts_and_main(tmp_path):
     assert "task A" in a and "lane-ops ワーカー規約" in a
     assert "gh issue view 7" in b
     assert "report.sh orc" in a
+    la = (pdir / "launch_A.sh").read_text(encoding="utf-8")
+    lb = (pdir / "launch_B.sh").read_text(encoding="utf-8")
+    assert "wt switch --create br-A --base main" in la
+    assert "wt switch --create br-B --base br-A" in lb
+    assert f"$(cat {pdir / 'B.md'})" in lb
+
+
+def test_main_exit_1_on_missing_plan(tmp_path):
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text(json.dumps({
+        "plan": str(tmp_path / "missing.md"),
+        "tasks": [task("A")],
+    }), encoding="utf-8")
+    rc = po.main(["plan_orchestration.py", str(spec_file), "--prompt-dir", str(tmp_path / "p")])
+    assert rc == 1
+    assert not (tmp_path / "p").exists()
 
 
 def test_main_exit_1_on_cycle(tmp_path):

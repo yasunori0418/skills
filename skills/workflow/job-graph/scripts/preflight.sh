@@ -68,6 +68,28 @@ else
     echo "clean"
 fi
 
+section "PERMISSIONS (permissions.ask の git 系ルール)"
+# レーン（非対話 pane の claude）では permissions.ask の承認プロンプトが誰にも届かず
+# 自動 deny される。git reset / rebase / push が ask に載っていると、ワーカーの restack や
+# push がそこで止まる。該当ルールを列挙して、親の代行（restack.md）を事前に決めておく。
+# 設定ファイルが無い・jq が失敗した場合は沈黙する（read-only・fail-open）。
+ask_hits=""
+for cfg in "$HOME/.claude/settings.json" ".claude/settings.json"; do
+    [ -f "$cfg" ] || continue
+    hits=$(jq -r '.permissions.ask // [] | .[] | select(test("git (reset|rebase|push)"))' "$cfg" 2>/dev/null)
+    if [ -n "$hits" ]; then
+        ask_hits=1
+        printf '%s:\n' "$cfg"
+        printf '%s\n' "$hits" | sed 's/^/  /'
+    fi
+done
+if [ -n "$ask_hits" ]; then
+    echo "WARNING: 上記は permissions.ask のためレーン（非対話 pane）では承認プロンプトが誰にも届かず自動 deny される。"
+    echo "  レーンで止まったら親が代行する: reset は親が git -C <worktree>（references/restack.md の役割分担）、push は lane-ops の代行 push。"
+else
+    echo "git reset/rebase/push を ask にしているルールなし"
+fi
+
 section "EXISTING WORKTREES"
 git worktree list 2>/dev/null || echo "(なし)"
 

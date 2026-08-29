@@ -7,14 +7,21 @@
       "depends_on": [],
       "prompt": "pkg/logger のインターフェースを整理する。完了条件: 既存テストが全て通ること。",
       "boundary": ["pkg/logger/**"],
-      "issue": 123
+      "issue": 123,
+      "expected_files": ["pkg/logger/logger.go", "pkg/logger/logger_test.go"],
+      "expected_scale": 120
     },
     {
       "id": "B1",
       "branch": "feat-config-retry",
       "depends_on": [],
       "prompt": "リトライ設定を config に追加する。完了条件: 設定の読み込みテストが通ること。",
-      "boundary": ["internal/config/**", "tests/config/**"]
+      "boundary": ["internal/config/**", "tests/config/**"],
+      "expected_files": [
+        "internal/config/retry.go",
+        "tests/config/retry_test.go"
+      ],
+      "expected_scale": 80
     },
     {
       "id": "B2",
@@ -23,7 +30,13 @@
       "prompt": "B1 のリトライ設定を使って client にリトライを実装する。完了条件: リトライの単体テストが通ること。",
       "boundary": ["internal/client/**", "tests/client/**"],
       "model": "opus",
-      "effort": "high"
+      "effort": "high",
+      "expected_files": [
+        "internal/client/retry.go",
+        "internal/client/client.go",
+        "tests/client/retry_test.go"
+      ],
+      "expected_scale": 150
     }
   ]
 }

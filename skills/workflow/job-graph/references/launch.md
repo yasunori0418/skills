@@ -11,6 +11,12 @@
   - なお `env -u` は **pane の shell へ渡すコマンド文字列の先頭**に置く。pane の環境を決めるのは herdr **server** の environ だけで、`herdr ... pane run` を打つ側の環境は伝播しないため、CLI 呼び出し側に `env -u` を付けても無意味（実測で確認済み）
   - **前提**: herdr server 自体がクリーンな環境で起動していること。汚染された claude の子シェルから `herdr --session <name> server` を起こすと、その session の**全 pane の shell**がマーカーを持つ。この状態ではレーン起動時の `env -u` で claude 自身は救えるが、ユーザーが手で開いた tab では警告が出る（`project-session` の `herdr_start_session` はこれを踏まえて server 起動を `env -u` 越しにしている）
 
+## 起動スクリプト方式（pane run には `bash <path>` だけを流す）
+
+起動コマンド本体（`env -u … wt switch --create … -x claude|bash …`）は `plan_orchestration.py` が `<prompt-dir>/launch_<task-id>.sh` へ書き出し、pane には `bash <path>` の短い 1 行だけを流す。
+
+起動コマンドは 1 行で数百文字（境界 bootstrap を含むと 1000 文字超）になり、`pane run` への長文注入で **pane に入力されたまま実行されない**・**途中で切れて壊れたコマンドが走る** 事故が実運用で起きた。スクリプト化すれば pane へ渡す文字列は短く一定になり、起動コマンドの完全形がファイルとして残る（handoff からの再投入も `bash <path>` で済む）。スクリプトの中身は下記の解説どおりで、**手で書き換えない**（spec を直して再生成する）。
+
 ## レーン先頭の起動（workspace 作成）
 
 レーン（直列チェーン）ごとに workspace を 1 つ立てる。レーン先頭の task は `herdr workspace create` の root pane で起動する。
@@ -20,14 +26,16 @@ HSESSION="${HERDR_SESSION:-default}"   # COMMANDS 先頭で 1 度だけ定義さ
 resp=$(herdr --session "$HSESSION" workspace create --cwd "$PWD" --label refactor-logger --no-focus)
 WS_LANE_0=$(printf '%s' "$resp" | jq -r '.result.workspace.workspace_id')
 PANE_A=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
-herdr --session "$HSESSION" pane run "$PANE_A" 'env -u CLAUDE_CODE_CHILD_SESSION -u … wt switch --create refactor-logger --base main -x claude -- "$(cat <prompt-dir>/A.md)"'
+herdr --session "$HSESSION" pane run "$PANE_A" 'bash <prompt-dir>/launch_A.sh'
 ```
+
+`launch_A.sh` の中身（`exec env -u CLAUDE_CODE_CHILD_SESSION -u … wt switch --create refactor-logger --base main -x claude -- "$(cat <prompt-dir>/A.md)"`）について:
 
 - workspace のラベルはレーン先頭のブランチ名。並列レーンは workspace が並ぶ
 - `--no-focus` でユーザーの現在フォーカスを奪わない。ID は JSON 応答から jq で掴む（予測しない）
-- `wt switch --create` が worktree を作り、`-x claude` で wt プロセスが claude に置き換わる。herdr は pane 内の claude をエージェントとして自動認識する
+- `wt switch --create` が worktree を作り、`-x claude` で wt プロセスが claude に置き換わる。herdr は pane 内の claude をエージェントとして自動認識する（スクリプトは `exec` で wt に置き換わるので bash は残らない）
 - **`--base` は常に明示**される。省略すると wt はリポジトリの default branch から切るため、spec の意図と食い違う事故が起きる
-- プロンプトは複数行のためファイル渡し。`"$(cat <path>)"` は pane の shell が展開し、wt が EXECUTE_ARGS として shell-escape して claude に 1 引数で渡す
+- プロンプトは複数行のためファイル渡し。`"$(cat <path>)"` はスクリプトを実行する bash が展開し、wt が EXECUTE_ARGS として shell-escape して claude に 1 引数で渡す
 
 ## 直列の次段（同 workspace への tab 追加）
 
@@ -48,3 +56,5 @@ PANE_B=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
 ## 起動確認
 
 `herdr --session "$HSESSION" agent list` に pane が現れれば認識済み。現れないまま `herdr --session "$HSESSION" pane read <pane>` で shell エラーが見えるなら wt の失敗（ブランチ名衝突など）なので preflight に戻る。
+
+pane に `bash …/launch_<id>.sh` が**入力されたまま実行されていない**（プロンプト行にコマンドが残り、`agent list` にも現れない）ときは、その入力を `herdr … pane send-keys <pane> ctrl-u` 等で破棄してから同じ `pane run` を再投入する。Enter だけを送ると、切れた入力が部分的に実行される可能性がある。

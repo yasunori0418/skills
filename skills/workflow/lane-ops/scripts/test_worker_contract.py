@@ -1,5 +1,7 @@
-"""worker_contract.py のユニットテスト。render の純粋な入出力を検証する。"""
+"""worker_contract.py のユニットテスト。parse_task / render の純粋な入出力を検証する。"""
 from __future__ import annotations
+
+import pytest
 
 import worker_contract as wc
 
@@ -13,7 +15,40 @@ def task(**kw):
         "parent": "orc",
     }
     base.update(kw)
-    return base
+    return wc.parse_task(base)
+
+
+# ------------------------------------------------------------
+# parse_task
+# ------------------------------------------------------------
+
+
+def test_parse_task_defaults():
+    assert wc.parse_task({}) == wc.TaskInfo()
+    assert wc.TaskInfo().base == "main" and wc.TaskInfo().default_base == "main"
+
+
+def test_parse_task_normalizes_values():
+    info = wc.parse_task(
+        {"task_id": " T1 ", "branch": "b", "base": "", "boundary": ["src/**", " ", "t/**"],
+         "issue": 7, "parent": None}
+    )
+    assert info == wc.TaskInfo(
+        task_id="T1", branch="b", base="main", boundary=("src/**", "t/**"), issue=7, parent=""
+    )
+
+
+def test_parse_task_rejects_bad_types():
+    with pytest.raises(wc.ContractError):
+        wc.parse_task([])
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"issue": "7"})
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"issue": -1})
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"boundary": "src/**"})
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"branch": 1})
 
 
 def test_header_is_lane_ops_contract():
@@ -129,3 +164,44 @@ def test_stacked_pr_base():
 def test_default_base_pr_no_arg():
     s = wc.render(task(base="main", default_base="main"))
     assert "/pr-create`" in s
+
+
+# ------------------------------------------------------------
+# plan / scope_check（job-graph の計画突合）
+# ------------------------------------------------------------
+
+
+def test_parse_task_plan_and_scope_check_default_empty():
+    info = wc.parse_task({})
+    assert info.plan == "" and info.scope_check == ""
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"plan": ["/p"]})
+
+
+def test_plan_clause_rendered_after_scope_with_ground_truth():
+    s = wc.render(task(plan="/abs/plan.md"))
+    assert "計画の参照" in s
+    assert "DIFF_REVIEW_GROUND_TRUTH=/abs/plan.md" in s
+    assert "候補の採否を親へ問い合わせない" in s
+    assert s.index("編集してよい範囲") < s.index("計画の参照") < s.index("TDD 順序")
+
+
+def test_scope_check_clause_between_pr_gate_and_iteration_bounds():
+    cmd = "python3 /x/check_scope.py --base main --expected-file a.py"
+    s = wc.render(task(scope_check=cmd))
+    assert "計画との突合（PR 作成前）" in s
+    assert f"`{cmd}`" in s
+    assert "VERDICT: FAIL" in s
+    assert "何を削る・分離するかを自分で判断しない" in s
+    assert (
+        s.index("PR 作成前ゲート")
+        < s.index("計画との突合（PR 作成前）")
+        < s.index("review-converge の反復境界")
+    )
+
+
+def test_plan_and_scope_check_omitted_when_empty():
+    s = wc.render(task())
+    assert "計画の参照" not in s
+    assert "計画との突合" not in s
+    assert "DIFF_REVIEW_GROUND_TRUTH" not in s
