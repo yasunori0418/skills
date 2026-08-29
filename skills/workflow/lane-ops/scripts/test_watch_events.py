@@ -163,6 +163,12 @@ def test_parse_args_include_self_flag():
     assert we.parse_args(["watch_events.py", "--include-self"]).include_self is True
 
 
+def test_parse_args_once_flag():
+    """--once は最初のマッチで exit 0 する（Monitor 無しセッションの push 通知用）。"""
+    assert we.parse_args(["watch_events.py"]).once is False
+    assert we.parse_args(["watch_events.py", "--once"]).once is True
+
+
 def test_self_pane_excluded_by_default():
     """親自身の pane は既定で購読対象から外す（自己ノイズ対策）。"""
     env = {"HERDR_PANE_ID": "w1:p2"}
