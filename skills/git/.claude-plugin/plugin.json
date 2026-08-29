@@ -18,5 +18,8 @@
     "./reset-flow",
     "./review-converge"
   ],
-  "agents": ["./diff-review/agents/diff-reviewer.md"]
+  "agents": [
+    "./diff-review/agents/diff-reviewer.md",
+    "./review-converge/agents/review-aggregator.md"
+  ]
 }
