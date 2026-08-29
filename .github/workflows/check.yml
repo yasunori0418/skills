@@ -1,9 +1,6 @@
 name: Nix Flake Check
 
 on:
-  push:
-    branches-ignore:
-      - main # main is updated via PR only
   pull_request:
   workflow_dispatch: # allow manual runs from the Actions tab
 

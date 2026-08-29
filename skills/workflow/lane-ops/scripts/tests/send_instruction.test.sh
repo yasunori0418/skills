@@ -30,9 +30,12 @@ check() { # label expected actual
 
 # herdr スタブ: agent get は $WORK/status の状態を返し、agent prompt は
 # 呼び出し記録を $WORK/prompt.log へ残す。
+# shebang は /usr/bin/env を使わず実行環境の bash 実パスへ解決する。
+# nix サンドボックス(Linux)には /usr/bin/env が無く、実行時生成のスタブは
+# flake 側の patchShebangs の対象外のため、env 形だと bad interpreter で落ちる。
 mkdir -p "$WORK/bin"
-cat > "$WORK/bin/herdr" << 'STUB'
-#!/usr/bin/env bash
+printf '#!%s\n' "$(command -v bash)" > "$WORK/bin/herdr"
+cat >> "$WORK/bin/herdr" << 'STUB'
 case "$1 $2" in
 "agent get")
     printf '{"id":"cli:agent:get","result":{"agent":{"agent_status":"%s"},"type":"agent_info"}}\n' \
