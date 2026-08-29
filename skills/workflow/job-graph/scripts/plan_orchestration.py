@@ -465,9 +465,8 @@ def boundary_json(task: Task) -> str:
 
 # ワーカー規約の正本は lane-ops の worker_contract.py（同一プラグイン内の兄弟スキル）。
 # 規約の文言をここへ複製せず、子プロセスで取得して prompt へ連結する。
-WORKER_CONTRACT = (
-    Path(__file__).resolve().parents[2] / "lane-ops" / "scripts" / "worker_contract.py"
-)
+LANE_OPS_SCRIPTS = Path(__file__).resolve().parents[2] / "lane-ops" / "scripts"
+WORKER_CONTRACT = LANE_OPS_SCRIPTS / "worker_contract.py"
 
 
 class ContractError(Exception):
@@ -782,12 +781,29 @@ def render(
         out.append(f"#   {verify_command(t)}")
 
     out.append("\n=== MONITOR (親のゲート監視。lane-ops スキルの運用ループに従う) ===")
-    out.append("# 状態監視:     python3 <lane-ops>/scripts/watch_events.py --status blocked を 1 本常駐")
+    pane_args = "".join(
+        f" --pane \"${shell_var('PANE_', t.id)}\"" for t in sorted(plan.tasks, key=lambda x: x.id)
+    )
+    out.append(
+        "# 状態監視: 自レーンの pane に限定し、--once でバックグラウンド Bash の完了通知を push 通知にする"
+        "（起動済みの pane だけを列挙。未起動の wave は起動後に足して再起動）"
+    )
+    out.append(
+        f"#   python3 {shlex.quote(str(LANE_OPS_SCRIPTS / 'watch_events.py'))}"
+        f" --once --status blocked --status idle{pane_args}"
+    )
+    out.append(
+        "# イベント処理後は watch を再起動し、直後に"
+        " herdr --session \"$HSESSION\" agent get <pane> で現在状態を直接確認する（停止中の変化を取りこぼさない）"
+    )
     out.append(
         "# 画面確認:     herdr --session \"$HSESSION\" agent read <pane>"
         " --source recent-unwrapped --lines 120"
     )
-    out.append("# 報告の裏取り: bash <lane-ops>/scripts/verify_lane.sh <branch> <worktree>")
+    out.append(
+        f"# 報告の裏取り: bash {shlex.quote(str(LANE_OPS_SCRIPTS / 'verify_lane.sh'))} <branch> <worktree>"
+    )
+    out.append("# 計画突合:     VERIFY 節の check_scope.py --pr（PR 報告のたびに実行。PASS のときだけ次段へ）")
     out.append("# ワーカーの報告（[lane-ops:report ...]）は自己申告。必ず裏取りしてから次段を起動する")
 
     return "\n".join(out)

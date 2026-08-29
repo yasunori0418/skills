@@ -400,10 +400,16 @@ def test_render_verify_section_lists_pr_form_per_task():
 
 
 def test_render_monitor_section_points_to_lane_ops():
-    out = rendered([task("A")])
-    assert "watch_events.py" in out
-    assert "verify_lane.sh" in out
-    assert "[lane-ops:report" in out
+    out = rendered([task("B"), task("A")])
+    monitor = out.split("=== MONITOR")[1]
+    assert f"python3 {po.LANE_OPS_SCRIPTS / 'watch_events.py'} --once --status blocked --status idle" in monitor
+    # 自レーンの pane に限定（id 順に列挙）
+    assert '--pane "$PANE_A" --pane "$PANE_B"' in monitor
+    assert "agent get <pane>" in monitor
+    assert f"bash {po.LANE_OPS_SCRIPTS / 'verify_lane.sh'}" in monitor
+    assert "check_scope.py --pr" in monitor
+    assert "[lane-ops:report" in monitor
+    assert "常駐" not in monitor
 
 
 # ------------------------------------------------------------
