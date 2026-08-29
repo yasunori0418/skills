@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 BOUNDARY_FILE = ".claude/task-boundary.json"
@@ -39,20 +40,67 @@ MILESTONES = (
 )
 
 
+class ContractError(Exception):
+    """入力 JSON の構造・型が規約の入力として不正な場合。"""
+
+
+@dataclass(frozen=True)
+class TaskInfo:
+    """規約の描画に必要なタスク情報（parse_task で正規化済み）。"""
+
+    task_id: str = ""
+    branch: str = ""
+    base: str = "main"
+    default_base: str = "main"
+    boundary: tuple[str, ...] = ()
+    issue: int = 0
+    parent: str = ""
+
+
+def _str_field(data: dict, key: str, default: str = "") -> str:
+    v = data.get(key, default)
+    if v is None:
+        return default
+    if not isinstance(v, str):
+        raise ContractError(f"{key} は文字列でない: {v!r}")
+    return v.strip() or default
+
+
+def parse_task(data: object) -> TaskInfo:
+    """JSON 由来の値 -> TaskInfo（既定値の補完と型検証）。不正なら ContractError。"""
+    if not isinstance(data, dict):
+        raise ContractError("入力はオブジェクトではない")
+    boundary_raw = data.get("boundary") or []
+    if not isinstance(boundary_raw, list) or not all(isinstance(g, str) for g in boundary_raw):
+        raise ContractError(f"boundary は文字列配列でない: {boundary_raw!r}")
+    issue_raw = data.get("issue") or 0
+    if isinstance(issue_raw, bool) or not isinstance(issue_raw, int) or issue_raw < 0:
+        raise ContractError(f"issue は非負整数でない: {issue_raw!r}")
+    return TaskInfo(
+        task_id=_str_field(data, "task_id"),
+        branch=_str_field(data, "branch"),
+        base=_str_field(data, "base", "main"),
+        default_base=_str_field(data, "default_base", "main"),
+        boundary=tuple(g.strip() for g in boundary_raw if g.strip()),
+        issue=issue_raw,
+        parent=_str_field(data, "parent"),
+    )
+
+
 def report_script() -> str:
     """同梱 report.sh の絶対パス（設置場所から解決）。"""
     return str(Path(__file__).resolve().parent / "report.sh")
 
 
-def render(task: dict) -> str:
+def render(task: TaskInfo) -> str:
     """タスク情報 -> 標準セクション Markdown（純粋）。"""
-    task_id = str(task.get("task_id", "")).strip()
-    branch = str(task.get("branch", "")).strip()
-    base = str(task.get("base", "")).strip() or "main"
-    default_base = str(task.get("default_base", "")).strip() or "main"
-    boundary = [str(g).strip() for g in task.get("boundary") or [] if str(g).strip()]
-    issue = task.get("issue") or 0
-    parent = str(task.get("parent", "")).strip()
+    task_id = task.task_id
+    branch = task.branch
+    base = task.base
+    default_base = task.default_base
+    boundary = task.boundary
+    issue = task.issue
+    parent = task.parent
 
     if boundary:
         scope = (
@@ -164,12 +212,14 @@ def render(task: dict) -> str:
 
 def main() -> int:
     try:
-        task = json.loads(sys.stdin.read())
+        data = json.loads(sys.stdin.read())
     except json.JSONDecodeError as e:
         print(f"ERROR: 入力が不正な JSON: {e}", file=sys.stderr)
         return 1
-    if not isinstance(task, dict):
-        print("ERROR: 入力はオブジェクトではない", file=sys.stderr)
+    try:
+        task = parse_task(data)
+    except ContractError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
         return 1
     print(render(task))
     return 0

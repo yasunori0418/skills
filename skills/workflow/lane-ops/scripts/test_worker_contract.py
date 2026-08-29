@@ -1,5 +1,7 @@
-"""worker_contract.py のユニットテスト。render の純粋な入出力を検証する。"""
+"""worker_contract.py のユニットテスト。parse_task / render の純粋な入出力を検証する。"""
 from __future__ import annotations
+
+import pytest
 
 import worker_contract as wc
 
@@ -13,7 +15,40 @@ def task(**kw):
         "parent": "orc",
     }
     base.update(kw)
-    return base
+    return wc.parse_task(base)
+
+
+# ------------------------------------------------------------
+# parse_task
+# ------------------------------------------------------------
+
+
+def test_parse_task_defaults():
+    assert wc.parse_task({}) == wc.TaskInfo()
+    assert wc.TaskInfo().base == "main" and wc.TaskInfo().default_base == "main"
+
+
+def test_parse_task_normalizes_values():
+    info = wc.parse_task(
+        {"task_id": " T1 ", "branch": "b", "base": "", "boundary": ["src/**", " ", "t/**"],
+         "issue": 7, "parent": None}
+    )
+    assert info == wc.TaskInfo(
+        task_id="T1", branch="b", base="main", boundary=("src/**", "t/**"), issue=7, parent=""
+    )
+
+
+def test_parse_task_rejects_bad_types():
+    with pytest.raises(wc.ContractError):
+        wc.parse_task([])
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"issue": "7"})
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"issue": -1})
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"boundary": "src/**"})
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"branch": 1})
 
 
 def test_header_is_lane_ops_contract():
