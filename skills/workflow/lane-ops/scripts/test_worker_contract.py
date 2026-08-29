@@ -87,6 +87,12 @@ def test_report_command_embeds_script_path_and_parent():
     assert "報告は承認の代わりにならない" in s
 
 
+def test_report_before_textual_approval_wait():
+    s = wc.render(task())
+    assert "親の承認・裁定待ちで停止する直前（ダイアログ以外の承認待ちを含む）" in s
+    assert "テキストで承認を問うてターンを終える場合も、その直前に必ず報告する" in s
+
+
 def test_report_omitted_without_parent():
     s = wc.render(task(parent=""))
     assert "報告先（親セッション名）が未指定" in s

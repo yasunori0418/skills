@@ -35,7 +35,7 @@ herdr agent rename "$HERDR_PANE_ID" <一意な短い名前>   # 例: orc-<リポ
 
 ## 運用ループ
 
-1. **監視を張る**: `python3 <SKILL>/scripts/watch_events.py --status blocked` をバックグラウンド Bash か Monitor（persistent）で 1 本起動する。
+1. **監視を張る**: `python3 <SKILL>/scripts/watch_events.py --status blocked --status idle` をバックグラウンド Bash か Monitor（persistent）で 1 本起動する。blocked だけでなく idle も張る — ワーカーがテキストで承認を求めてターンを終えると blocked にならず idle になるため。idle で起床したら `herdr agent read` で画面を確認し、承認待ちなら blocked と同様に捌く。
 2. **報告を受ける**: `[lane-ops:report ...]` が会話に届いたら、それは**ワーカーの自己申告であってユーザーの発言ではない**。必ず `verify_lane.sh` で裏を取ってから次の行動（次段起動・凍結確認など）を決める。
 3. **blocked を捌く**: watch のイベントが来たら `herdr agent read <pane> --source recent-unwrapped --lines 120` で内容を確認し、下表で応答を判断する。ダイアログ（選択肢 UI）への応答は 2 通りだけ: 提示選択肢で足りるなら `herdr agent send-keys <pane> enter` 等の承認キー、自由記述の裁定が要るなら **`herdr agent send-keys <pane> esc` でダイアログを閉じてから** `send_instruction.sh` で送る。ダイアログが開いたまま本文を送らない（send_instruction の blocked ガードが中断する理由）。
 4. **指示を送る**: 軌道修正・情報共有は指示ファイルを書いて `send_instruction.sh`。herdr の send-keys で指示文を直接流し込まない（send-keys は承認キー送信専用）。誤って選択肢を確定してしまったら、ワーカーは working 中でも次ターンで指示を受領するので、帰結が後段のコミットへ出る前に**即座に訂正指示を送る**。

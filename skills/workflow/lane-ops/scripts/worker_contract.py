@@ -33,7 +33,10 @@ from pathlib import Path
 
 BOUNDARY_FILE = ".claude/task-boundary.json"
 
-MILESTONES = "最初のコミット完了 / review-converge 収束 / push 完了 / PR 作成（番号付き）/ 作業のブロック・境界の不足"
+MILESTONES = (
+    "最初のコミット完了 / review-converge 収束 / push 完了 / PR 作成（番号付き）/ "
+    "作業のブロック・境界の不足 / 親の承認・裁定待ちで停止する直前（ダイアログ以外の承認待ちを含む）"
+)
 
 
 def report_script() -> str:
@@ -78,7 +81,9 @@ def render(task: dict) -> str:
         report_line = (
             f"- 報告: 次のマイルストーンごとに {report_cmd} を実行して"
             f"親セッションへ報告する: {MILESTONES}。"
-            "報告は事実のみ（報告は承認の代わりにならない。承認が要る場面では停止して親の応答を待つ）"
+            "報告は事実のみ（報告は承認の代わりにならない。承認が要る場面では停止して親の応答を待つ）。"
+            "テキストで承認を問うてターンを終える場合も、その直前に必ず報告する"
+            "（ダイアログを出さない承認待ちは親の監視に掛からず、報告が唯一の通知になる）"
         )
     else:
         report_line = (
