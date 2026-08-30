@@ -400,10 +400,17 @@ def analyze(plan: Plan) -> Analysis:
         # implement へ戻して再利用したとき、maintain 時に無警告で通った欠落に
         # 気づけなくなるため）。
         if not t.expected_files:
-            warnings.append(
-                f"task {t.id} に expected_files が無い。計画突合（check_scope.py）はファイル照合なしに"
-                "縮退する（規模目安のみ、それも無ければ SKIP）。計画の変更ファイル一覧を spec へ落とす"
-            )
+            if graph_checked:
+                warnings.append(
+                    f"task {t.id} に expected_files が無い。計画突合（check_scope.py）はファイル照合なしに"
+                    "縮退する（規模目安のみ、それも無ければ SKIP）。計画の変更ファイル一覧を spec へ落とす"
+                )
+            else:
+                warnings.append(
+                    f"task {t.id} に expected_files が無い。maintain では計画突合を行わないので"
+                    "この実行に影響はないが、同じ spec を implement で再利用すると突合が"
+                    "ファイル照合なしに縮退する。計画の変更ファイル一覧を spec へ落とす"
+                )
 
     if graph_checked:
         cycle = detect_cycle(plan)
@@ -688,12 +695,16 @@ def render(
     """Plan + Analysis -> 人間/AI 向けテキスト出力（純粋）。
 
     COMMANDS は herdr の JSON 応答から ID を掴む shell ブロックで出力する（jq 必須）。
-    レーン先頭の workspace 作成 / 後続段の tab 作成 → root pane への
+    implement では、レーン先頭の workspace 作成 / 後続段の tab 作成 → root pane への
     `wt switch --create ... -x claude` 流し込み、stacked の PR 作成ゲート、
     プロンプトのファイル渡しまでを列挙する。後続段の workspace ID はラベルから
     `herdr workspace list` で再解決する（wave 間で shell が変わっても動くように）。
     herdr 呼び出しは全て `--session "$HSESSION"` を明示し、COMMANDS を別 shell へ
     コピペしても親と同じセッションへレーンが並ぶようにする。
+
+    maintain では全 task が独立レーンなので tab 作成も PR 作成ゲートも出さず、流し込みは
+    `wt switch ... -x claude`（--create なし）になる。PR / VERIFY 節も出力しない
+    （SCHEDULE / LANES / BOUNDARY / MONITOR は mode ごとに文言が変わる）。
     """
     out: list[str] = []
     out.append("=== VALIDATION ===")
@@ -732,11 +743,19 @@ def render(
 
     declared = [t for t in sorted(plan.tasks, key=lambda x: x.id) if t.boundary]
     if declared:
-        out.append(f"\n=== BOUNDARY (各 worktree に生成する {BOUNDARY_FILE}) ===")
-        out.append(
-            "worktree ローカル・gitignored（git rev-parse --git-path info/exclude へ追記）。"
-            "task-boundary hook が境界外の Edit/Write を機械ブロックする。"
-        )
+        if plan.mode == "maintain":
+            out.append(f"\n=== BOUNDARY (既存 worktree の {BOUNDARY_FILE} をこの内容で上書きする) ===")
+            out.append(
+                "task-boundary hook が境界外の Edit/Write を機械ブロックする。"
+                "実装フェーズ中に widen_boundary.sh で広げた glob はこの上書きで巻き戻るので、"
+                "起動前に既存の境界ファイルと突き合わせる（references/maintain.md）。"
+            )
+        else:
+            out.append(f"\n=== BOUNDARY (各 worktree に生成する {BOUNDARY_FILE}) ===")
+            out.append(
+                "worktree ローカル・gitignored（git rev-parse --git-path info/exclude へ追記）。"
+                "task-boundary hook が境界外の Edit/Write を機械ブロックする。"
+            )
         for t in declared:
             out.append(f"  {t.id} ({t.branch}): {', '.join(t.boundary)}")
         undeclared = sorted(t.id for t in plan.tasks if not t.boundary)

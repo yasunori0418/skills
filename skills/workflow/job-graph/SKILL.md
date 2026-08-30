@@ -89,7 +89,7 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 承認後、`COMMANDS` をウェーブ順に実行する。
 
 - **wave 0**: 独立レーン。まとめて起動してよい
-- **後続 wave**: 制約 4 のゲート（`gh pr list --head <前段ブランチ>` が非空）を確認してから起動
+- **後続 wave**: 制約 4 のゲート（`gh pr list --head <前段ブランチ>` が非空）を確認してから起動（`mode: "maintain"` では後続 wave が生成されないので、この確認は起きない）
 - pane ID（`PANE_<task-id>` 変数）は監視・承認で使うので控えておく
 
 起動コマンドの中身の解説は `references/launch.md`。

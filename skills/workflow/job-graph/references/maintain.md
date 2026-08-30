@@ -25,10 +25,12 @@ lane-ops の `worker_contract.py` が決定論的に行う。
    自分で作らない（`scope-gate.md` が「分離・削除の指示を親が自分で出さない」と
    しているのと同じ理由。取捨選択は仕様の解釈変更に届きうる）
 3. 確定した対応対象を task ごとの `prompt` に落として spec を起草する
-4. **plan 承認を取る**（`ExitPlanMode`）。実装フェーズの Phase 1 と同じくレーン起動の前に承認を取るが、
-   maintain では `PR` / `VERIFY` 節が出ないので plan に含めるのは次に置き換わる:
+4. **plan 承認を取る**（`ExitPlanMode`）。実装フェーズの Phase 1 と同じくレーン起動の前に承認を取る。
+   Phase 1 の必須要素のうち **PR 戦略と計画突合の基準だけ**を次に差し替える
+   （起動ウェーブとレーン割当・コミット計画・承認代行の宣言はそのまま含める）:
    - 起動するレーン（どの PR のどの指摘へ、どの task が対応するか）
-   - **push は都度親が承認する**こと（Phase 1 の plan 承認は push の承認を兼ねない）
+   - **push は都度親が承認する**こと（Phase 1 の plan 承認は push の承認を兼ねない。
+     承認代行の宣言も push だけはこの例外に従う）
    - stacked なら下段・上段の関係と、下段 push 後に restack が要ること（下記 §5）
 
 ### 注意: stack 関係は spec の外に控える
@@ -55,6 +57,7 @@ issue 番号は実装フェーズと同じものを使い続ける）。
   implement へ戻して再利用したときに欠落へ気づけるようにするため）
 - **`plan` は消すか、実在するパスにする。** 存在確認だけは mode に依らず走るため、
   実在しないパスが残っていると ERROR で COMMANDS が出力されない
+- **`boundary` は実装フェーズ中に広げた分を反映してから起動する**（下記の注意）
 
 `plan_orchestration.py` の呼び出しは implement と同じ（`--prompt-dir` は
 `tmp_claude/<job>/job-graph/prompts` を再利用してよい。上書きされる）。
@@ -71,6 +74,26 @@ grep -n 'wt switch' tmp_claude/<job>/job-graph/prompts/launch_*.sh
 
 `--create` が残っていると既存 worktree に対して `Path occupied` で失敗し、レーンが
 起動しない（起動失敗は pane に残るので、実行後に `herdr agent read <pane>` で確認する）。
+
+### 注意: 境界ファイルは上書きされる（widen した分が巻き戻る）
+
+境界宣言のある task の起動は、implement と同じ bootstrap（`-x bash --`）を通り、
+**`.claude/task-boundary.json` を spec の `boundary` で無条件に上書きする**。maintain は
+既存 worktree へ入るので、実装フェーズ中に `widen_boundary.sh`（親専用）で広げた glob は
+この上書きで**無言で巻き戻る**。task-boundary hook は呼び出しのたびにファイルを読み直すため
+狭まりは即座に効き、広げてもらったはずの範囲でワーカーが deny を食って停止する。
+
+起動前に、既存の境界ファイルと spec を突き合わせる:
+
+```sh
+# 実装フェーズで実際に許可されていた範囲
+cat <worktree>/.claude/task-boundary.json
+# spec 側の宣言と差分がないか確認し、広げた glob を spec の boundary へ写す
+```
+
+差分があれば **spec の `boundary` へ写してから起動する**（起動後に widen し直すより、
+最初から正しい境界で入る方が確実）。境界を宣言していない task はこの問題を持たない
+（境界ファイルを生成せず、hook も沈黙する）。
 
 ### 注意: 既存 worktree への switch では hook が走らない
 
@@ -106,6 +129,8 @@ maintain のワーカー規約は「push・force-push は親の承認を得て�
    （コミットの有無・未コミット変更の残り・push 同期状態。報告は自己申告）
 2. 差分が対応対象の指摘の範囲に収まっているかを見る:
    `git -C <worktree> diff <PR の base>...HEAD --stat`
+   （`<PR の base>` は maintain の出力には出ない。§1 の注意で控えた stack 関係、または
+   `gh pr view <PR#> --json baseRefName` から取る）
 3. 範囲内なら `send_instruction.sh` で「push してよい」と伝える。
    **範囲外（指摘に無いファイル・計画外のリファクタ）ならユーザーへ上げる**
    （何を削る・分離するかを親が自分で決めない。`scope-gate.md` の FAIL 時と同じ扱い）

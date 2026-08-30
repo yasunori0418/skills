@@ -517,7 +517,29 @@ def test_launch_script_boundary_uses_bootstrap():
 def test_render_lanes_section():
     out = rendered([task("A"), task("B", deps=["A"]), task("C")])
     assert "=== LANES" in out
+    assert "先頭 task が workspace create、後続段は同 workspace への tab" in out
     assert "A -> B" in out
+
+
+def test_render_maintain_lanes_header_states_no_tab():
+    # LANES ヘッダも SCHEDULE と同じく mode で分ける（implement 前提の説明が
+    # maintain で空振りしないように）。両側を断定する。
+    out = rendered([task("A"), task("B", deps=["A"])], mode="maintain")
+    assert "maintain は全 task が単独レーン。tab 追加は起きない" in out
+    assert "先頭 task が workspace create、後続段は同 workspace への tab" not in out
+
+
+def test_render_maintain_boundary_header_says_overwrite():
+    # maintain は既存 worktree へ入るので境界ファイルは「生成」ではなく「上書き」。
+    # widen_boundary.sh で広げた分が巻き戻る旨まで出す。
+    out = rendered([task("A", boundary=["src/**"])], mode="maintain")
+    assert f"既存 worktree の {po.BOUNDARY_FILE} をこの内容で上書きする" in out
+    assert "widen_boundary.sh で広げた glob はこの上書きで巻き戻る" in out
+    assert "各 worktree に生成する" not in out
+    # implement 側は従来の文言のまま（退行検知）。
+    impl = rendered([task("A", boundary=["src/**"])])
+    assert f"各 worktree に生成する {po.BOUNDARY_FILE}" in impl
+    assert "上書きする" not in impl
 
 
 def test_render_verify_section_lists_pr_form_per_task():
@@ -552,6 +574,10 @@ def test_render_maintain_without_expected_files_warns_in_validation():
     validation = rendered([task("A")], mode="maintain").split("=== SCHEDULE")[0]
     assert "WARNING: task A に expected_files が無い" in validation
     assert "ok（致命的問題なし）" not in validation
+    # maintain 版の文言は「この実行では突合しない」と断る（implement 前提の
+    # 「縮退する」だけだと、この実行で突合が動くと読める）。
+    assert "maintain では計画突合を行わないのでこの実行に影響はない" in validation
+    assert "同じ spec を implement で再利用すると" in validation
 
 
 def test_render_maintain_monitor_section_is_push_approval():
