@@ -230,10 +230,11 @@ def test_common_clauses_omits_conditional_clauses_as_empty_lists():
 # ------------------------------------------------------------
 
 
-def test_parse_task_mode_defaults_to_implement():
-    assert wc.parse_task({}).mode == "implement"
-    assert wc.parse_task({"mode": " maintain "}).mode == "maintain"
-    assert wc.parse_task({"mode": ""}).mode == "implement"
+def test_parse_task_converts_mode_string_to_enum():
+    assert wc.parse_task({}).mode is wc.Mode.IMPLEMENT
+    assert wc.parse_task({"mode": " maintain "}).mode is wc.Mode.MAINTAIN
+    assert wc.parse_task({"mode": ""}).mode is wc.Mode.IMPLEMENT
+    assert wc.Mode.MAINTAIN.value == "maintain" and wc.Mode.IMPLEMENT.value == "implement"
 
 
 def test_parse_task_rejects_unknown_mode():

@@ -41,11 +41,18 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 BOUNDARY_FILE = ".claude/task-boundary.json"
 
-MODES = ("implement", "maintain")
+
+class Mode(Enum):
+    """規約のモード。入力 JSON では文字列で受け取り parse_task で変換する。"""
+
+    IMPLEMENT = "implement"
+    MAINTAIN = "maintain"
+
 
 MILESTONES = (
     "最初のコミット完了 / review-converge 収束 / push 完了 / PR 作成（番号付き）/ "
@@ -78,7 +85,7 @@ class TaskInfo:
     # 計画との突合コマンド完全形。空 = PR 前の突合の条項を出さない。
     scope_check: str = ""
     # 規約のモード。implement = 実装〜PR 作成 / maintain = PR 作成後のレビュー対応。
-    mode: str = "implement"
+    mode: Mode = Mode.IMPLEMENT
 
 
 def _str_field(data: dict, key: str, default: str = "") -> str:
@@ -100,9 +107,12 @@ def parse_task(data: object) -> TaskInfo:
     issue_raw = data.get("issue") or 0
     if isinstance(issue_raw, bool) or not isinstance(issue_raw, int) or issue_raw < 0:
         raise ContractError(f"issue は非負整数でない: {issue_raw!r}")
-    mode = _str_field(data, "mode", "implement")
-    if mode not in MODES:
-        raise ContractError(f"mode は {' / '.join(MODES)} のいずれかでない: {mode!r}")
+    mode_raw = _str_field(data, "mode", Mode.IMPLEMENT.value)
+    try:
+        mode = Mode(mode_raw)
+    except ValueError:
+        allowed = " / ".join(m.value for m in Mode)
+        raise ContractError(f"mode は {allowed} のいずれかでない: {mode_raw!r}") from None
     return TaskInfo(
         task_id=_str_field(data, "task_id"),
         branch=_str_field(data, "branch"),
@@ -365,7 +375,7 @@ def render_maintain(task: TaskInfo) -> str:
 
 def render(task: TaskInfo) -> str:
     """タスク情報 -> 標準セクション Markdown（純粋）。mode で描画を振り分ける。"""
-    if task.mode == "maintain":
+    if task.mode is Mode.MAINTAIN:
         return render_maintain(task)
     return render_implement(task)
 
