@@ -205,3 +205,109 @@ def test_plan_and_scope_check_omitted_when_empty():
     assert "計画の参照" not in s
     assert "計画との突合" not in s
     assert "DIFF_REVIEW_GROUND_TRUTH" not in s
+
+
+# ------------------------------------------------------------
+# mode（implement / maintain）
+# ------------------------------------------------------------
+
+
+def test_parse_task_mode_defaults_to_implement():
+    assert wc.parse_task({}).mode == "implement"
+    assert wc.parse_task({"mode": " maintain "}).mode == "maintain"
+    assert wc.parse_task({"mode": ""}).mode == "implement"
+
+
+def test_parse_task_rejects_unknown_mode():
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"mode": "maintainance"})
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"mode": 1})
+
+
+def maintain_task(**kw):
+    return task(mode="maintain", plan="/abs/plan.md", scope_check="python3 /x/check_scope.py", **kw)
+
+
+def test_maintain_drops_implement_only_clauses():
+    s = wc.render(maintain_task())
+    assert "PR 作成前ゲート" not in s
+    assert "review-converge の反復境界" not in s
+    assert "PR 作成後の凍結" not in s
+    assert "計画との突合" not in s
+
+
+def test_maintain_ignores_plan_and_scope_check_clauses():
+    s = wc.render(maintain_task())
+    assert "check_scope.py" not in s
+    assert "VERDICT: FAIL" not in s
+    assert "DIFF_REVIEW_GROUND_TRUTH" not in s
+
+
+def test_maintain_states_pr_already_exists():
+    s = wc.render(task(mode="maintain"))
+    assert "PR の状態" in s
+    assert "既に作成済み" in s
+    assert "実装変更はレビュー指摘への対応に限る" in s
+
+
+def test_maintain_limits_targets_to_review_findings():
+    s = wc.render(task(mode="maintain"))
+    assert "対応対象の限定" in s
+    assert "対応対象はレビュー指摘・親の指示に限る" in s
+    assert "自分で追加の指摘を探しに行かない" in s
+
+
+def test_maintain_push_requires_parent_approval():
+    s = wc.render(task(mode="maintain"))
+    assert "push・force-push は親の承認を得てから実行する" in s
+    assert "計画承認済み扱いにしない" in s
+    assert "push 承認待ち" in s
+    assert "個別の確認へ回さず実行する" not in s
+
+
+def test_maintain_forbids_converge_and_pr_create_with_reason():
+    s = wc.render(task(mode="maintain"))
+    assert "`/review-converge`・`/pr-create` は実行しない" in s
+    assert "PR は既に存在し、修正は既存 PR のブランチへの追加コミットとして反映される" in s
+
+
+def test_maintain_tdd_clause_allows_trivial_fixes_without_tests():
+    s = wc.render(task(mode="maintain"))
+    assert "振る舞いが変わる修正はテストを先に書く" in s
+    assert "typo・コメント・ドキュメントのみの修正はテスト不要" in s
+    assert "テストを先に実装し（失敗を確認）" not in s
+
+
+def test_maintain_structural_escalation_scoped_to_findings():
+    s = wc.render(task(mode="maintain"))
+    assert "構造変更エスカレーション" in s
+    assert "指摘の範囲を超える既存コードの構造変更" in s
+    assert "計画に無い既存コードの構造変更" not in s
+
+
+def test_maintain_milestones_replace_converge_and_pr():
+    s = wc.render(task(mode="maintain"))
+    assert "push 承認待ち" in s
+    assert "review-converge 収束" not in s
+    assert "PR 作成（番号付き）" not in s
+    assert "最初のコミット完了" in s
+    assert "push 完了" in s
+
+
+def test_maintain_scope_clause_drops_review_converge_precedence():
+    s = wc.render(task(mode="maintain"))
+    assert "依頼されたスコープで納品する" in s
+    assert "スコープ規約は review-converge の指摘にも優先して適用される" not in s
+
+
+def test_maintain_keeps_common_clauses():
+    s = wc.render(task(mode="maintain", boundary=["src/**"], issue=42))
+    assert "編集してよい範囲（境界）" in s
+    assert "境界の拡張は親だけが行える" in s
+    assert "コミット粒度" in s
+    assert "サブエージェント委任" in s
+    assert "サブエージェントの生存管理" in s
+    assert "進捗ナレーション" in s
+    assert "報告: 次のマイルストーンごとに" in s
+    assert "gh issue view 42" in s
