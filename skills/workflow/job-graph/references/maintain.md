@@ -37,7 +37,9 @@ issue 番号は実装フェーズと同じものを使い続ける）。
 - `depends_on` は残っていても無視される（全 task が wave 0 の独立レーンになる）。
   maintain では `depends_on` の検証も掛からないので、task を削って参照が宙に浮いても
   エラーにならない（消しても残しても動く）
-- `expected_files` / `expected_scale` は残っていても maintain では使われない（突合を行わないため）
+- `expected_files` / `expected_scale` は残っていても maintain では使われない（突合を行わないため）。
+  ただし `expected_files` 欠落の WARNING は maintain でも出る（処理は止まらない。同じ spec を
+  implement へ戻して再利用したときに欠落へ気づけるようにするため）
 - **`plan` は消すか、実在するパスにする。** 存在確認だけは mode に依らず走るため、
   実在しないパスが残っていると ERROR で COMMANDS が出力されない
 

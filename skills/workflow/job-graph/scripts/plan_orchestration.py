@@ -74,8 +74,8 @@ spec の形:
 - expected_files / expected_scale は計画に書かれた変更ファイル一覧（glob 不可）と規模目安
   （追加+削除の行数）。check_scope.py の突合基準になり、ワーカー規約（PR 前）と VERIFY 節
   （親が PR に対して行う）の両方に埋め込まれる。expected_files が無い task は WARNING
-  （ファイル照合なしに縮退）。maintain は計画突合を行わないので、depends_on ともども
-  検証せず WARNING も出さない。フィールドの詳細は references/spec.md。
+  （ファイル照合なしに縮退。この WARNING は maintain でも出す）。突合そのものと depends_on の
+  検証は maintain では行わない。フィールドの詳細は references/spec.md。
 
 レーン割当（= workspace 割当。レーン先頭が workspace、後続段はその tab）:
 - 依存が無い、または親に複数の子がいる task は新しいレーンを開始する。
@@ -393,8 +393,10 @@ def analyze(plan: Plan) -> Analysis:
                     f"task {t.id} は複数親 {list(t.depends_on)} に依存。単純な線形 stack 不可。"
                     "integration ブランチか逐次 rebase を検討（base は先頭親を仮採用）"
                 )
-        # maintain は計画突合を行わないので expected_files の不足は警告しない。
-        if not t.expected_files and plan.mode != "maintain":
+        # 突合は maintain では行わないが、WARNING は両モードで出す（同じ spec を
+        # implement へ戻して再利用したとき、maintain 時に無警告で通った欠落に
+        # 気づけなくなるため）。
+        if not t.expected_files:
             warnings.append(
                 f"task {t.id} に expected_files が無い。計画突合（check_scope.py）はファイル照合なしに"
                 "縮退する（規模目安のみ、それも無ければ SKIP）。計画の変更ファイル一覧を spec へ落とす"

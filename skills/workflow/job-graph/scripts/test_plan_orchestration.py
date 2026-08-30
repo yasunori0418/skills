@@ -194,8 +194,8 @@ def test_lanes_maintain_ignores_depends_on():
     assert an.levels == {"A": 0, "B": 0, "C": 0}
     assert an.lanes == (("A",), ("B",), ("C",))
     assert an.bases == {"A": "main", "B": "main", "C": "main"}
-    # 計画突合を行わないので expected_files 欠落の WARNING も出さない。
-    assert an.warnings == []
+    # 突合は行わないが expected_files 欠落の WARNING は maintain でも出す。
+    assert len([w for w in an.warnings if "expected_files が無い" in w]) == 3
 
 
 def test_analyze_maintain_skips_depends_on_validation():
@@ -213,6 +213,14 @@ def test_analyze_maintain_skips_depends_on_validation():
     ).errors == []
     multi = po.analyze(spec([task("C", deps=["A", "B"])], mode="maintain"))
     assert not any("複数親" in w for w in multi.warnings)
+
+
+def test_analyze_maintain_still_warns_missing_expected_files():
+    # 突合は maintain では行わないが、WARNING は両モードで出す（同じ spec を
+    # implement へ戻して再利用したときに欠落へ気づけるように）。
+    an = po.analyze(spec([task("A"), task("B", expected_files=["b.py"])], mode="maintain"))
+    hits = [w for w in an.warnings if "expected_files が無い" in w]
+    assert len(hits) == 1 and "task A" in hits[0]
 
 
 def test_analyze_implement_still_validates_depends_on():
