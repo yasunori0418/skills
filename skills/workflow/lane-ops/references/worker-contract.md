@@ -13,7 +13,7 @@
 | `default_base` | string | `"main"` | リポジトリの既定ベース。`base` と同じなら `/pr-create` を引数なしで出す |
 | `boundary` | string[] | `[]` | 編集可能範囲の glob。空なら「担当範囲に限る」の汎用文言にフォールバック |
 | `issue` | int (≥0) | `0` | 対応する GH issue 番号。0/未指定なら issue 参照の条項を出さない |
-| `parent` | string | `""` | 報告先の herdr エージェント名。空なら報告を省略してよい旨の条項になる |
+| `parent` | string | `""` | 報告先の herdr エージェント名。空なら報告を省略してよい旨の条項になる。**maintain では必須**（空だと `ContractError`。push 承認待ちの報告先が無いため） |
 | `plan` | string | `""` | 計画ファイルの絶対パス。空なら計画参照の条項を出さない（implement のみ） |
 | `scope_check` | string | `""` | PR 前に実行する計画突合コマンド完全形。空なら突合の条項を出さない（implement のみ） |
 | `mode` | string | `"implement"` | `implement` / `maintain` のいずれか。他の値は `ContractError` |
