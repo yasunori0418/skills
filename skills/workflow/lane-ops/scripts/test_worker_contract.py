@@ -253,7 +253,8 @@ def test_common_clauses_omits_conditional_clauses_as_empty_lists():
 
 def test_parse_task_converts_mode_string_to_enum():
     assert wc.parse_task({}).mode is wc.Mode.IMPLEMENT
-    assert wc.parse_task({"mode": " maintain "}).mode is wc.Mode.MAINTAIN
+    # maintain は parent 必須なので添える（この検証の対象は mode 文字列の変換）。
+    assert wc.parse_task({"mode": " maintain ", "parent": "orc"}).mode is wc.Mode.MAINTAIN
     assert wc.parse_task({"mode": ""}).mode is wc.Mode.IMPLEMENT
     assert wc.Mode.MAINTAIN.value == "maintain" and wc.Mode.IMPLEMENT.value == "implement"
 
@@ -343,6 +344,25 @@ def test_maintain_scope_clause_drops_review_converge_precedence():
     s = wc.render(task(mode="maintain"))
     assert "依頼されたスコープで納品する" in s
     assert "スコープ規約は review-converge の指摘にも優先して適用される" not in s
+
+
+def test_maintain_requires_parent():
+    # maintain は push 承認の報告先が構造として要るので parent 空を弾く
+    # （空だと push 条項「親の応答を待て」と報告条項「省略してよい」が矛盾する）。
+    with pytest.raises(wc.ContractError) as e:
+        task(mode="maintain", parent="")
+    assert "parent" in str(e.value)
+
+
+def test_maintain_with_parent_still_renders():
+    s = wc.render(task(mode="maintain", parent="orc"))
+    assert "report.sh orc" in s
+    assert "push 前に報告コマンドで「push 承認待ち」を報告し、親の応答を待ってから実行する" in s
+
+
+def test_implement_still_allows_empty_parent():
+    s = wc.render(task(parent=""))
+    assert "報告先（親セッション名）が未指定" in s
 
 
 def test_maintain_keeps_common_clauses():
