@@ -137,8 +137,8 @@ class CommonClauses:
     """両モードに出る条項（報告のマイルストーン一覧を除き文言も同一）。
 
     各 render_* は、このフィールドから条項を取り出して並べる。
-    値は条項の行リストで、条件付きの条項（plan / scope_check / issue）は
-    出さないとき空リストになる。
+    値は条項の行リストで、条件付きの条項（plan / scope_check / issue /
+    stop_notification）は出さないとき空リストになる。
     """
 
     scope: list[str]
@@ -146,6 +146,7 @@ class CommonClauses:
     scope_check: list[str]
     issue: list[str]
     commit_granularity: list[str]
+    stop_notification: list[str]
     report: list[str]
     subagent_delegation: list[str]
     subagent_liveness: list[str]
@@ -219,6 +220,7 @@ def _common_clauses(task: TaskInfo, milestones: str) -> CommonClauses:
             "- コミット粒度: 論理的に独立した修正は都度コミットする"
             "（commit-flow スキル準拠、Conventional Commits）"
         ],
+        stop_notification=_stop_notification_clause(parent, task_id),
         report=[_report_clause(parent, task_id, milestones)],
         subagent_delegation=[
             "- サブエージェント委任: 複数ファイル横断調査のような真に独立した大きな作業に限る。"
@@ -239,6 +241,28 @@ def _common_clauses(task: TaskInfo, milestones: str) -> CommonClauses:
     )
 
 
+def _report_command(parent: str, task_id: str) -> str:
+    """報告コマンドの完全形（ワーカーがそのまま実行できる形）。"""
+    return f"`bash {report_script()} {parent} {task_id or '<task-id>'} <マイルストーン> [詳細]`"
+
+
+def _stop_notification_clause(parent: str, task_id: str) -> list[str]:
+    """停止時の通知条項。報告条項とは別立てにし、その直前へ置く。
+
+    進捗の記録（報告）と違い、停止の通知は怠ると親が気付けない。
+    他スキルの承認ゲートで止まる場合も射程に入ることを明示する
+    （そのスキルの手順書には lane-ops への報告が書かれていないため）。
+    """
+    if not parent:
+        return []
+    return [
+        "- 停止時の通知: 親の承認・裁定を待って自分のターンを終えるときは、"
+        f"その直前に必ず {_report_command(parent, task_id)} を実行する。"
+        "他スキル（rebase-flow / pr-create 等）の承認ゲートで止まる場合も含む。"
+        "親はこの通知でしか停止を知れない"
+    ]
+
+
 def _report_clause(parent: str, task_id: str, milestones: str) -> str:
     """報告条項。マイルストーン一覧はモードごとに異なる。"""
     if not parent:
@@ -246,7 +270,7 @@ def _report_clause(parent: str, task_id: str, milestones: str) -> str:
             "- 報告: 報告先（親セッション名）が未指定のため報告は省略してよい。"
             "作業がブロックしたら停止して指示を待つ"
         )
-    report_cmd = f"`bash {report_script()} {parent} {task_id or '<task-id>'} <マイルストーン> [詳細]`"
+    report_cmd = _report_command(parent, task_id)
     return (
         f"- 報告: 次のマイルストーンごとに {report_cmd} を実行して"
         f"親セッションへ報告する: {milestones}。"
@@ -301,6 +325,7 @@ def render_implement(task: TaskInfo) -> str:
                 "- PR 作成後の凍結: PR を作成したら実装を凍結する。以降の実装変更・push を行わず、"
                 "気付いた改善点は親への報告のみとする"
             ),
+            *c.stop_notification,
             *c.report,
             *c.subagent_delegation,
             *c.subagent_liveness,
@@ -359,6 +384,7 @@ def render_maintain(task: TaskInfo) -> str:
                 "PR は既に存在し、修正は既存 PR のブランチへの追加コミットとして反映される"
                 "（push すれば PR に載る）"
             ),
+            *c.stop_notification,
             *c.report,
             *c.subagent_delegation,
             *c.subagent_liveness,

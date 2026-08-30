@@ -135,6 +135,26 @@ def test_report_omitted_without_parent():
     assert "report.sh" not in s
 
 
+@pytest.mark.parametrize("mode", ["implement", "maintain"])
+def test_stop_notification_clause_precedes_report(mode):
+    s = wc.render(task(mode=mode))
+    assert "停止時の通知" in s
+    assert "自分のターンを終えるときは、その直前に必ず" in s
+    assert "親はこの通知でしか停止を知れない" in s
+    assert s.index("停止時の通知") < s.index("- 報告:")
+
+
+@pytest.mark.parametrize("mode", ["implement", "maintain"])
+def test_stop_notification_covers_other_skills_approval_gates(mode):
+    s = wc.render(task(mode=mode))
+    assert "他スキル（rebase-flow / pr-create 等）の承認ゲートで止まる場合も含む" in s
+
+
+def test_stop_notification_omitted_without_parent():
+    s = wc.render(task(parent=""))
+    assert "停止時の通知" not in s
+
+
 def test_boundary_deny_behavior_points_to_parent():
     s = wc.render(task(boundary=["src/x/**", "tests/x/**"]))
     assert "src/x/**" in s and "tests/x/**" in s
@@ -218,6 +238,7 @@ def test_common_clauses_exposes_named_fields():
     assert c.scope[0].startswith("- 編集してよい範囲（境界）")
     assert "gh issue view 42" in c.issue[0]
     assert wc.MILESTONES in c.report[0]
+    assert c.stop_notification[0].startswith("- 停止時の通知")
 
 
 def test_common_clauses_omits_conditional_clauses_as_empty_lists():
