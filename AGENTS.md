@@ -117,7 +117,7 @@ AI エージェント向けスキルを管理するリポジトリ。スキル�
 
 ```sh
 nix fmt                              # treefmt 整形（nixfmt + prettier、markdown は対象外）
-nix flake check                     # skills-ref 検証 + openai.yaml スキーマ検証 + 整形チェック
+nix flake check                     # skills-ref 検証 + openai.yaml スキーマ検証 + hook/pytest テスト + 整形チェック
 claude plugin validate . --strict   # plugin.json / marketplace.json 検証
 ```
 
@@ -129,6 +129,10 @@ claude plugin validate . --strict   # plugin.json / marketplace.json 検証
   対象は `hooks/` と `skills/` の両ツリーから再帰探索した `*/tests/*.test.sh`
   （skill 非依存 hook の `hooks/<plugin>/hooks/<name>/tests/` と skill 連動 hook の
   `skills/<category>/hooks/<name>/tests/` の両方）。
+- スキルの python テストは `checks.pytest`（`nix flake check`）で実行する。
+  対象は `skills/` 配下で `pyproject.toml` を持つディレクトリを再帰探索し、各々で
+  `pytest` を走らせる（スキルを増やしても `flake.nix` の変更は要らない）。
+  テストを追加したら `nix flake check` に拾われることを確認する。
 - devShell では `skills-ref validate <dir>` を直接実行できる。
 
 ## コミット規約
