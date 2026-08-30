@@ -68,6 +68,8 @@ issue 番号は実装フェーズと同じものを使い続ける）。
 - **`plan` は消すか、実在するパスにする。** 存在確認だけは mode に依らず走るため、
   実在しないパスが残っていると ERROR で COMMANDS が出力されない
 - `boundary` は実装フェーズと同じ宣言のままでよい。widen した分は起動時のマージで保たれる（下記の注意）
+- **`plan_orchestration.py` の `--parent-name` は maintain では必須**（無いと ERROR で
+  COMMANDS が出ない。push 承認待ちの報告先が要るため）
 
 `plan_orchestration.py` の呼び出しは implement と同じ（`--prompt-dir` は
 `tmp_claude/<job>/job-graph/prompts` を再利用してよい。上書きされる）。

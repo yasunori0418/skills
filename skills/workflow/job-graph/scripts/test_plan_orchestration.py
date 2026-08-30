@@ -268,6 +268,30 @@ def test_analyze_implement_still_validates_depends_on():
     assert any("自分自身" in e for e in po.analyze(spec([task("A", deps=["A"])])).errors)
 
 
+def test_validate_launch_requires_parent_name_in_maintain():
+    # maintain の push は親の承認制なので報告先が要る（lane-ops 規約も parent 空を拒否する）。
+    errs = po.validate_launch(spec([task("A")], mode="maintain"), po.Launch())
+    assert len(errs) == 1
+    assert "--parent-name" in errs[0]
+
+
+def test_parse_args_treats_blank_parent_name_as_unset():
+    # 空白のみの --parent-name は未指定と同じ。畳まないと必須チェックだけ素通りして
+    # lane-ops 側（parse_task が strip する）の ContractError で落ちる。
+    opts = po.parse_args(["plan_orchestration.py", "s.json", "--parent-name", "   "])
+    assert opts.launch.parent_name == ""
+    assert po.validate_launch(spec([task("A")], mode="maintain"), opts.launch) != []
+
+
+def test_validate_launch_allows_empty_parent_name_in_implement():
+    assert po.validate_launch(spec([task("A")]), po.Launch()) == []
+
+
+def test_validate_launch_ok_when_maintain_has_parent_name():
+    plan = spec([task("A")], mode="maintain")
+    assert po.validate_launch(plan, po.Launch(parent_name="orc")) == []
+
+
 def test_lanes_branching_starts_new_lanes():
     lanes, lane_of = lanes_of([task("A"), task("B", deps=["A"]), task("C", deps=["A"])])
     assert lanes == (("A",), ("B",), ("C",))
@@ -927,6 +951,23 @@ def test_write_prompts_and_main_maintain(tmp_path):
     assert "`/review-converge`・`/pr-create` は実行しない" in (pdir / "A.md").read_text(encoding="utf-8")
 
 
+def test_main_maintain_without_parent_name_errors(capsys, tmp_path):
+    # --parent-name 無しの maintain は VALIDATION の ERROR で止まり COMMANDS を出さない。
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text(json.dumps({
+        "default_base": "main",
+        "mode": "maintain",
+        "tasks": [task("A")],
+    }), encoding="utf-8")
+    pdir = tmp_path / "prompts"
+    rc = po.main(["plan_orchestration.py", str(spec_file), "--prompt-dir", str(pdir)])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "ERROR: mode=maintain は --parent-name が必須" in out
+    assert "herdr" not in out
+    assert not pdir.exists()
+
+
 def test_main_exit_1_on_missing_plan(tmp_path):
     spec_file = tmp_path / "spec.json"
     spec_file.write_text(json.dumps({
@@ -938,15 +979,20 @@ def test_main_exit_1_on_missing_plan(tmp_path):
     assert not (tmp_path / "p").exists()
 
 
-def test_main_exit_1_on_missing_plan_in_maintain(tmp_path):
+def test_main_exit_1_on_missing_plan_in_maintain(capsys, tmp_path):
     # plan の存在確認は mode に依らず走る（spec.md / maintain.md が明文化した挙動）。
+    # --parent-name を与えて maintain の必須チェックを外し、plan 不在だけが原因になるようにする。
     spec_file = tmp_path / "spec.json"
     spec_file.write_text(json.dumps({
         "mode": "maintain",
         "plan": str(tmp_path / "missing.md"),
         "tasks": [task("A")],
     }), encoding="utf-8")
-    rc = po.main(["plan_orchestration.py", str(spec_file), "--prompt-dir", str(tmp_path / "p")])
+    rc = po.main([
+        "plan_orchestration.py", str(spec_file),
+        "--prompt-dir", str(tmp_path / "p"), "--parent-name", "orc",
+    ])
+    assert "ERROR: plan が存在しない" in capsys.readouterr().out
     assert rc == 1
     assert not (tmp_path / "p").exists()
 

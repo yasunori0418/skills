@@ -15,7 +15,8 @@ stdin にタスク情報 JSON を受け取り、ワーカー（レーン内エ�
   "default_base": "main",
   "boundary": ["internal/client/**"],   // 省略可（空 = 境界宣言なし）
   "issue": 123,                          // 省略可（0/なし = issue 参照なし）
-  "parent": "orc-myrepo",                // 省略可（空 = 報告先未指定）
+  "parent": "orc-myrepo",                // implement は省略可（空 = 報告先未指定）。
+                                         // maintain では必須（空なら ContractError）
   "plan": "/abs/path/to/plan.md",        // 省略可（空 = 計画参照の条項を出さない）
   "scope_check": "python3 .../check_scope.py --base main --expected-file a.py",
                                          // 省略可（空 = PR 前の計画突合の条項を出さない）
@@ -113,6 +114,13 @@ def parse_task(data: object) -> TaskInfo:
     except ValueError:
         allowed = " / ".join(m.value for m in Mode)
         raise ContractError(f"mode は {allowed} のいずれかでない: {mode_raw!r}") from None
+    parent = _str_field(data, "parent")
+    # maintain は push 承認の報告先が構造として要る。parent が空だと push 条項
+    # （報告して親の応答を待て）と報告条項（報告先未指定なので省略してよい）が矛盾する。
+    if mode is Mode.MAINTAIN and not parent:
+        raise ContractError(
+            "maintain では parent（報告先の親セッション名）が必須。push 承認待ちの報告先が無い"
+        )
     return TaskInfo(
         task_id=_str_field(data, "task_id"),
         branch=_str_field(data, "branch"),
@@ -120,7 +128,7 @@ def parse_task(data: object) -> TaskInfo:
         default_base=_str_field(data, "default_base", "main"),
         boundary=tuple(g.strip() for g in boundary_raw if g.strip()),
         issue=issue_raw,
-        parent=_str_field(data, "parent"),
+        parent=parent,
         plan=_str_field(data, "plan"),
         scope_check=_str_field(data, "scope_check"),
         mode=mode,
