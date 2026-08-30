@@ -292,6 +292,7 @@ def test_maintain_structural_escalation_scoped_to_findings():
 def test_maintain_milestones_replace_converge_and_pr():
     s = wc.render(task(mode="maintain"))
     assert wc.MILESTONES_MAINTAIN in s
+    assert "最初のコミット完了 / push 承認待ち / push 完了 / 作業のブロック・境界の不足" in s
     assert "review-converge 収束" not in s
     assert "PR 作成（番号付き）" not in s
 
