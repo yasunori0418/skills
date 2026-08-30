@@ -111,7 +111,8 @@ from pathlib import Path
 PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
-# ジョブ全体の性質。lane-ops worker_contract.py の MODES と同じ語彙。
+# ジョブ全体の性質。lane-ops worker_contract.py の Mode(Enum) の値と同じ語彙。
+# 規約へは文字列のまま渡し、lane-ops 側の parse_task が Mode へ変換する。
 # implement = 実装 → PR 作成 / maintain = PR 作成後のレビュー対応（Phase 4.5）。
 MODES = ("implement", "maintain")
 
