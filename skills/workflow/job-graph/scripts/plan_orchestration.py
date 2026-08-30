@@ -87,8 +87,8 @@ spec の形:
 警告のみなら 0。maintain では depends_on を検証しないので、循環・未定義参照・自己依存は
 エラーにならない（重複・必須欠落・plan の不在は両モードで見る）。
 
-設計: 純粋関数（parse_spec / analyze / detect_cycle / compute_levels / compute_lanes /
-resolve_base / sanitize / scope_check_command / render）には副作用を持たせない。
+設計: 純粋関数（parse_spec / analyze / validate_launch / detect_cycle / compute_levels /
+compute_lanes / resolve_base / sanitize / scope_check_command / render）には副作用を持たせない。
 I/O・終了コード・ワーカー規約の取得（lane-ops worker_contract.py の子プロセス実行）・
 プロンプトファイル書き出し・計画ファイルの存在確認は read_spec / contract_sections /
 write_prompts / check_plan_file / main にまとめる。
@@ -498,6 +498,21 @@ def analyze(plan: Plan) -> Analysis:
     return Analysis(
         errors=[], warnings=warnings, levels=levels, bases=bases, lanes=lanes, lane_of=lane_of
     )
+
+
+def validate_launch(plan: Plan, launch: Launch) -> list[str]:
+    """Plan と起動既定（CLI 由来）の噛み合わせを検証する（純粋）。致命的エラー文の一覧を返す。
+
+    spec 単体では判定できず Launch と組み合わせて初めて分かる不整合だけを見る
+    （spec 内部の整合は analyze の担当）。
+    """
+    errors: list[str] = []
+    if plan.mode.push_needs_parent_approval and not launch.parent_name:
+        errors.append(
+            "mode=maintain は --parent-name が必須"
+            "（push 承認待ちの報告先。lane-ops 規約も parent 空を拒否する）"
+        )
+    return errors
 
 
 def launch_flags(task: Task, launch: Launch) -> list[str]:
@@ -1072,7 +1087,7 @@ def parse_args(argv: list[str]) -> Options:
         default="",
         metavar="NAME",
         help="親（オーケストレータ）の herdr エージェント名。ワーカー規約の報告先"
-        "（lane-ops report.sh の宛先）として埋め込む",
+        "（lane-ops report.sh の宛先）として埋め込む。mode=maintain では必須",
     )
     parser.add_argument(
         "--remote-control",
@@ -1120,10 +1135,12 @@ def main(argv: list[str]) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
     an = analyze(plan)
-    plan_errors = check_plan_file(plan)
-    if plan_errors:
+    # spec 単体では判定できないエラー（計画ファイルの実在・起動既定との噛み合わせ）を
+    # analyze の結果へ合流させ、VALIDATION の ERROR として COMMANDS を止める。
+    extra_errors = check_plan_file(plan) + validate_launch(plan, opts.launch)
+    if extra_errors:
         an = Analysis(
-            errors=an.errors + plan_errors, warnings=an.warnings,
+            errors=an.errors + extra_errors, warnings=an.warnings,
             levels={}, bases={}, lanes=(), lane_of={},
         )
     if not an.errors and opts.prompt_dir:
