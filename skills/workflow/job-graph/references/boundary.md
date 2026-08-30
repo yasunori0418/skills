@@ -27,6 +27,8 @@ worktree のパスは `wt` の設定で決まり事前に確定できないた�
 
 - 境界ファイルは gitignored にする（`git rev-parse --git-path info/exclude` へ 1 行追記）。linked worktree からでも common dir へ正しく解決され、追跡ファイルを汚さず、冪等で、`wt remove` で worktree ごと消える
 - bootstrap は `set -e` の **fail-closed**。境界の無い状態でガードレール無しに claude を起動するより、起動せず pane に失敗を残す方が安全（hook 側の fail-open とは役割が逆）
+- 既存の境界ファイルがあれば（`mode: "maintain"` が既存 worktree へ入るとき）上書きせず、`allow` を既存 ∪ 宣言の和集合にして**マージ**する（`task_id` / `branch` は宣言が正、契約外のキーは既存側を保持）。実装フェーズ中に `widen_boundary.sh` で広げた glob はこのマージで保たれる（`maintain.md`）
+- 既存ファイルが空・不正 JSON・境界の書式でない（object でない / `allow` が配列でない）ときは上書きせず**起動を中止する**（`widen_boundary.sh` の空 stdin 事故跡などを消さない）
 
 ## deny 後のフロー（境界の拡張）
 

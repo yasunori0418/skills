@@ -108,8 +108,9 @@ herdr --session "$HSESSION" workspace close <旧 workspace>  # 実装フェー�
 cat <worktree>/.claude/task-boundary.json
 ```
 
-既存ファイルが空か不正 JSON のとき（`widen_boundary.sh` の空 stdin 事故跡など）は bootstrap が
-**起動を中止する**（上書きせず exit≠0。pane に `ERROR: 既存の境界ファイルが空か不正 JSON` が残る）。
+既存ファイルが空・不正 JSON・境界の書式でない（object でない / `allow` が配列でない）とき
+（`widen_boundary.sh` の空 stdin 事故跡など）は bootstrap が**起動を中止する**（上書きせず exit≠0。
+pane に `ERROR: 既存の境界ファイルが空・不正 JSON・境界の書式でない` が残る）。
 壊れたファイルを直すか消してから起動し直す。起動失敗は「worktree が消えている・使えない場合」と
 同じく全 pane を直接見て拾う。境界を宣言していない task はこの問題を持たない（境界ファイルを
 生成せず、hook も沈黙する）。
