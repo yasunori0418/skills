@@ -104,6 +104,7 @@ import shlex
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
+from enum import Enum
 from pathlib import Path
 
 # claude CLI の受け付ける選択肢（`claude --help` 準拠）。
@@ -111,10 +112,71 @@ from pathlib import Path
 PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
-# ジョブ全体の性質。lane-ops worker_contract.py の Mode(Enum) の値と同じ語彙。
-# 規約へは文字列のまま渡し、lane-ops 側の parse_task が Mode へ変換する。
-# implement = 実装 → PR 作成 / maintain = PR 作成後のレビュー対応（Phase 4.5）。
-MODES = ("implement", "maintain")
+
+class Mode(Enum):
+    """ジョブ全体の性質。lane-ops worker_contract.py の Mode(Enum) と同じ語彙。
+
+    implement = 実装 → PR 作成 / maintain = PR 作成後のレビュー対応（Phase 4.5）。
+    入力 JSON では文字列で受け取り parse_spec で変換する。規約へも文字列
+    （`.value`）のまま渡し、lane-ops 側の parse_task が自分で Mode へ変換する。
+
+    mode による分岐は「軸」ごとのプロパティで表す。呼び出し側は
+    `plan.mode.<軸>` を肯定形で読み、`!=` / `is not` による否定を書かない。
+    軸ごとに独立した判断であることを名前で保証するため、意味の違う分岐へ
+    同じプロパティを流用しない（新しい分岐が要るなら新しい軸を足す）。
+    """
+
+    IMPLEMENT = "implement"
+    MAINTAIN = "maintain"
+
+    @property
+    def checks_dependency_graph(self) -> bool:
+        """依存グラフ（未定義参照・自己依存・複数親・循環）を検証するか。
+
+        maintain で検証を残すと、maintain.md が指示する「対応不要な task を spec から
+        削る」操作で残った task の depends_on が宙に浮き、致命的エラーで COMMANDS が
+        出なくなる。
+        """
+        return self is Mode.IMPLEMENT
+
+    @property
+    def lanes_follow_dependency_graph(self) -> bool:
+        """レーン割当・起動ウェーブを依存グラフから決めるか。
+
+        maintain は全 task を独立レーン（wave 0）として扱う。レビュー対応の起動順序は
+        指摘の内容次第で決まり、「前段の PR 作成」というゲートは空回りするため。
+        """
+        return self is Mode.IMPLEMENT
+
+    @property
+    def uses_existing_worktree(self) -> bool:
+        """既存 worktree（ブランチ作成済み・PR 済み）へ入るか。
+
+        maintain は `wt switch <branch>`（`--create` を付けると Path occupied で失敗）。
+        既存の境界ファイルもこのとき上書きされる。
+        """
+        return self is Mode.MAINTAIN
+
+    @property
+    def runs_scope_check(self) -> bool:
+        """計画突合（check_scope.py）を行うか。
+
+        maintain の差分は元計画に無いので突合が成立しない。
+        """
+        return self is Mode.IMPLEMENT
+
+    @property
+    def creates_pull_request(self) -> bool:
+        """ワーカーが PR を作成するか（PR / VERIFY 節を出すか）。
+
+        maintain の PR は既にあるので、両節を出すと規約が禁じた操作を親へ指示することになる。
+        """
+        return self is Mode.IMPLEMENT
+
+    @property
+    def push_needs_parent_approval(self) -> bool:
+        """ワーカーの push に親の承認が要るか（親の監視項目が変わる）。"""
+        return self is Mode.MAINTAIN
 
 
 class SpecError(Exception):
@@ -147,8 +209,8 @@ class Plan:
     tasks: tuple[Task, ...]
     # 計画ファイルの絶対パス。空 = 未指定（ワーカー規約に計画参照を載せない）。
     plan: str = ""
-    # ジョブ全体のモード（MODES のいずれか）。task ごとの混在は想定しない。
-    mode: str = "implement"
+    # ジョブ全体のモード。task ごとの混在は想定しない。
+    mode: Mode = Mode.IMPLEMENT
 
 
 @dataclass(frozen=True)
@@ -245,9 +307,12 @@ def parse_spec(data: object) -> Plan:
     if not isinstance(mode_raw, str):
         raise SpecError("mode は文字列でない")
     # 空文字・null・空白のみは既定へ縮退する（兄弟フィールドの plan と同じ扱い）。
-    mode = mode_raw.strip() or "implement"
-    if mode not in MODES:
-        raise SpecError(f"mode は {' / '.join(MODES)} のいずれかでない: {mode!r}")
+    mode_name = mode_raw.strip() or Mode.IMPLEMENT.value
+    try:
+        mode = Mode(mode_name)
+    except ValueError:
+        allowed = " / ".join(m.value for m in Mode)
+        raise SpecError(f"mode は {allowed} のいずれかでない: {mode_name!r}") from None
     return Plan(default_base=default_base, tasks=tuple(tasks), plan=plan_path, mode=mode)
 
 
@@ -380,12 +445,10 @@ def analyze(plan: Plan) -> Analysis:
     if dup_br:
         errors.append(f"branch が重複: {dup_br}")
 
-    # maintain は depends_on を無視するので、その検証も掛けない。検証を残すと、
-    # maintain.md が指示する「対応不要な task を spec から削る」操作で残った task の
-    # depends_on が宙に浮き、致命的エラーで COMMANDS が出なくなる。
-    # この名前は依存グラフ検証の on/off 専用。他の mode 分岐へ使い回さない
-    # （expected_files の WARNING のように、依存グラフと無関係な分岐は mode を直接見る）。
-    graph_checked = plan.mode != "maintain"
+    # 依存グラフ検証の on/off（理由は Mode.checks_dependency_graph）。この軸は
+    # 依存グラフの検証専用で、他の mode 分岐へ流用しない（expected_files の WARNING の
+    # ように依存グラフと無関係な分岐は、それぞれ自分の軸のプロパティを見る）。
+    graph_checked = plan.mode.checks_dependency_graph
     idset = set(ids)
     for t in plan.tasks:
         if graph_checked:
@@ -403,7 +466,7 @@ def analyze(plan: Plan) -> Analysis:
         # implement へ戻して再利用したとき、maintain 時に無警告で通った欠落に
         # 気づけなくなるため）。
         if not t.expected_files:
-            if plan.mode != "maintain":
+            if plan.mode.runs_scope_check:
                 warnings.append(
                     f"task {t.id} に expected_files が無い。計画突合（check_scope.py）はファイル照合なしに"
                     "縮退する（規模目安のみ、それも無ければ SKIP）。計画の変更ファイル一覧を spec へ落とす"
@@ -423,11 +486,10 @@ def analyze(plan: Plan) -> Analysis:
     if errors:
         return Analysis(errors=errors, warnings=warnings, levels={}, bases={}, lanes=(), lane_of={})
 
-    # maintain は全 task を独立レーンとして扱う（depends_on を無視する）。レビュー対応の
-    # 起動順序は指摘の内容次第で決まり、「前段の PR 作成」というゲートは空回りする。
-    # 下段 PR に追加コミットが入ったときの上段の載せ替えは references/restack.md の手順として
-    # 親が制御する。
-    graph = independent(plan) if plan.mode == "maintain" else plan
+    # レーン割当・ウェーブは依存グラフに従う（理由は Mode.lanes_follow_dependency_graph）。
+    # 従わない maintain では全 task を独立レーンにする。下段 PR に追加コミットが入った
+    # ときの上段の載せ替えは references/restack.md の手順として親が制御する。
+    graph = plan if plan.mode.lanes_follow_dependency_graph else independent(plan)
     by_id = {t.id: t for t in graph.tasks}
     levels = compute_levels(graph)
     bases = {t.id: resolve_base(t, by_id, graph.default_base) for t in graph.tasks}
@@ -582,7 +644,8 @@ def contract_payload(task: Task, base: str, plan: Plan, launch: Launch) -> Contr
         parent=launch.parent_name,
         plan=plan.plan,
         scope_check=scope_check_command(task, base),
-        mode=plan.mode,
+        # lane-ops の契約は文字列で受け取り自分で Enum へ変換する。ここでは値を渡す。
+        mode=plan.mode.value,
     )
 
 
@@ -624,15 +687,15 @@ class LaunchScript:
     body: str
 
 
-def wt_switch(task: Task, base: str, mode: str) -> str:
+def wt_switch(task: Task, base: str, mode: Mode) -> str:
     """worktree へ入る `wt switch` 部分（純粋）。mode で --create / --base の有無が変わる。
 
-    implement は worktree を新規生成するので `--create <branch> --base <解決済み base>`。
-    maintain は既存 worktree（ブランチ作成済み・PR 済み）へ入るので素の
-    `wt switch <branch>` にする（既存 worktree に --create を付けると Path occupied で
-    失敗する。--create なしの switch は既存 worktree があればそこへ入り冪等）。
+    既存 worktree（ブランチ作成済み・PR 済み）へ入る maintain は素の
+    `wt switch <branch>`（既存 worktree に --create を付けると Path occupied で失敗する。
+    --create なしの switch は既存 worktree があればそこへ入り冪等）。
+    worktree を新規生成する implement は `--create <branch> --base <解決済み base>`。
     """
-    if mode == "maintain":
+    if mode.uses_existing_worktree:
         return f"wt switch {shlex.quote(task.branch)}"
     return f"wt switch --create {shlex.quote(task.branch)} --base {shlex.quote(base)}"
 
@@ -667,7 +730,7 @@ def launch_script(
             f"{ENV_STRIP_PREFIX} {switch}"
             f" -x claude --{flags_str}{rc_args} {prompt_ref}"
         )
-    where = "既存 worktree へ switch" if plan.mode == "maintain" else f"base={base}"
+    where = "既存 worktree へ switch" if plan.mode.uses_existing_worktree else f"base={base}"
     body = "\n".join(
         [
             "#!/usr/bin/env bash",
@@ -727,26 +790,26 @@ def render(
     max_level = max(an.levels.values())
 
     out.append("\n=== SCHEDULE (起動ウェーブ) ===")
-    if plan.mode == "maintain":
-        out.append("maintain は depends_on を無視して全 task を wave 0 に置く（全レーン同時起動）。")
-    else:
+    if plan.mode.lanes_follow_dependency_graph:
         out.append("同一ウェーブ内は並列起動可。後続ウェーブは依存親の『PR 作成』を確認してから起動する。")
+    else:
+        out.append("maintain は depends_on を無視して全 task を wave 0 に置く（全レーン同時起動）。")
     for level in range(max_level + 1):
         wave = sorted(t.id for t in plan.tasks if an.levels[t.id] == level)
         kind = "独立・並列" if level == 0 else f"stacked {level}段目"
         out.append(f"  wave {level} ({kind}): {', '.join(wave)}")
 
-    if plan.mode == "maintain":
-        out.append("\n=== LANES (レーン = workspace: maintain は全 task が単独レーン。tab 追加は起きない) ===")
-    else:
+    if plan.mode.lanes_follow_dependency_graph:
         out.append("\n=== LANES (レーン = workspace: 先頭 task が workspace create、後続段は同 workspace への tab) ===")
+    else:
+        out.append("\n=== LANES (レーン = workspace: maintain は全 task が単独レーン。tab 追加は起きない) ===")
     for i, lane in enumerate(an.lanes):
         chain = " -> ".join(lane)
         out.append(f"  lane {i}: {chain}")
 
     declared = [t for t in sorted(plan.tasks, key=lambda x: x.id) if t.boundary]
     if declared:
-        if plan.mode == "maintain":
+        if plan.mode.uses_existing_worktree:
             out.append(f"\n=== BOUNDARY (既存 worktree の {BOUNDARY_FILE} をこの内容で上書きする) ===")
             out.append(
                 "task-boundary hook が境界外の Edit/Write を機械ブロックする。"
@@ -856,9 +919,9 @@ def render(
                 f" {shlex.quote('bash ' + shlex.quote(script.path))}"
             )
 
-    # maintain のワーカーは /pr-create を実行せず（PR は既にある）、レビュー対応の差分は
-    # 元計画に無いので計画突合も成立しない。両節を出すと規約が禁じた操作を親へ指示することになる。
-    if plan.mode != "maintain":
+    # PR 節はワーカーの /pr-create、VERIFY 節はその PR に対する計画突合なので、
+    # PR を作るモードでだけ出す（理由は Mode.creates_pull_request）。
+    if plan.mode.creates_pull_request:
         out.append("\n=== PR (各ワーカーが実装・コミット後、/review-converge 収束後に自分で実行) ===")
         for t in sorted(plan.tasks, key=lambda x: (an.levels[x.id], x.id)):
             base = an.bases[t.id]
@@ -895,7 +958,7 @@ def render(
     out.append(
         f"# 報告の裏取り: bash {shlex.quote(str(LANE_OPS_SCRIPTS / 'verify_lane.sh'))} <branch> <worktree>"
     )
-    if plan.mode == "maintain":
+    if plan.mode.push_needs_parent_approval:
         out.append(
             "# push 承認:    ワーカーは push 前に停止して「push 承認待ち」を報告する。"
             "裏取りしてから承認する（手順は references/maintain.md）。"

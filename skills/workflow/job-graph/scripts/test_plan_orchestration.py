@@ -49,16 +49,17 @@ def test_parse_spec_rejects_bad_issue():
 
 
 def test_parse_spec_mode_defaults_to_implement():
-    assert spec([task("A")]).mode == "implement"
+    # 入力 JSON は文字列のまま。parse_spec が Mode へ変換する。
+    assert spec([task("A")]).mode is po.Mode.IMPLEMENT
     # 空文字・null・空白のみは拒否ではなく既定へ縮退する（plan と同じ扱い）。
-    assert spec([task("A")], mode="").mode == "implement"
-    assert spec([task("A")], mode=None).mode == "implement"
-    assert spec([task("A")], mode="  ").mode == "implement"
-    assert spec([task("A")], mode=" maintain ").mode == "maintain"
+    assert spec([task("A")], mode="").mode is po.Mode.IMPLEMENT
+    assert spec([task("A")], mode=None).mode is po.Mode.IMPLEMENT
+    assert spec([task("A")], mode="  ").mode is po.Mode.IMPLEMENT
+    assert spec([task("A")], mode=" maintain ").mode is po.Mode.MAINTAIN
 
 
 def test_parse_spec_accepts_maintain_mode():
-    assert spec([task("A")], mode="maintain").mode == "maintain"
+    assert spec([task("A")], mode="maintain").mode is po.Mode.MAINTAIN
 
 
 def test_parse_spec_rejects_unknown_mode():
@@ -66,6 +67,35 @@ def test_parse_spec_rejects_unknown_mode():
         spec([task("A")], mode="mantain")
     with pytest.raises(po.SpecError):
         spec([task("A")], mode=1)
+
+
+def test_parse_spec_unknown_mode_message_lists_modes_as_strings():
+    # エラーメッセージは Enum の repr ではなく従来どおりモード名の文字列で読めること。
+    with pytest.raises(po.SpecError) as e:
+        spec([task("A")], mode="mantain")
+    assert "implement / maintain" in str(e.value)
+
+
+def test_mode_values_are_the_wire_strings():
+    # 入力 JSON・ContractPayload へ載る語彙（lane-ops の Mode と同じ）。
+    assert po.Mode.IMPLEMENT.value == "implement"
+    assert po.Mode.MAINTAIN.value == "maintain"
+
+
+def test_mode_behaviour_properties():
+    # mode 分岐は「軸」ごとのプロパティで肯定形に読む（呼び出し側に != / is not を残さない）。
+    assert po.Mode.IMPLEMENT.checks_dependency_graph
+    assert not po.Mode.MAINTAIN.checks_dependency_graph
+    assert po.Mode.IMPLEMENT.lanes_follow_dependency_graph
+    assert not po.Mode.MAINTAIN.lanes_follow_dependency_graph
+    assert po.Mode.MAINTAIN.uses_existing_worktree
+    assert not po.Mode.IMPLEMENT.uses_existing_worktree
+    assert po.Mode.IMPLEMENT.runs_scope_check
+    assert not po.Mode.MAINTAIN.runs_scope_check
+    assert po.Mode.IMPLEMENT.creates_pull_request
+    assert not po.Mode.MAINTAIN.creates_pull_request
+    assert po.Mode.MAINTAIN.push_needs_parent_approval
+    assert not po.Mode.IMPLEMENT.push_needs_parent_approval
 
 
 def test_parse_spec_rejects_empty_tasks():
@@ -300,8 +330,9 @@ def test_contract_payload_to_json_carries_plan_and_scope_check():
 
 def test_contract_payload_carries_plan_mode():
     # mode は top-level（ジョブ全体の性質）なので plan から流す。
+    # ContractPayload へ渡す値は文字列（lane-ops 側が受け取って Enum へ変換する契約）。
     t = spec([task("A")]).tasks[0]
-    maintain = po.Plan(default_base="main", tasks=(), mode="maintain")
+    maintain = po.Plan(default_base="main", tasks=(), mode=po.Mode.MAINTAIN)
     assert po.contract_payload(t, "main", maintain, po.Launch()).mode == "maintain"
     assert json.loads(
         po.contract_payload(t, "main", maintain, po.Launch()).to_json()
