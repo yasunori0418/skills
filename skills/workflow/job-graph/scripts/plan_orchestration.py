@@ -39,7 +39,7 @@ AI の責務は spec（特に depends_on の意味的判定と boundary の範�
         --prompt-dir <dir> <spec.json>
     ... <spec.json> の代わりに - で stdin から読む
     ... --parent-name <name> で親（オーケストレータ）の herdr エージェント名を
-        ワーカー規約へ埋め込む（report.sh の宛先になる）
+        ワーカー規約へ埋め込む（report.sh の宛先になる。mode=maintain では必須）
     ... --remote-control を付けると各 claude を --remote-control <ブランチ名> で起動する
     ... --model / --permission-mode / --effort で各 claude の起動既定を切り替える
 

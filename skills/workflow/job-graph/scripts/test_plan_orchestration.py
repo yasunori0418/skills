@@ -929,15 +929,20 @@ def test_main_exit_1_on_missing_plan(tmp_path):
     assert not (tmp_path / "p").exists()
 
 
-def test_main_exit_1_on_missing_plan_in_maintain(tmp_path):
+def test_main_exit_1_on_missing_plan_in_maintain(capsys, tmp_path):
     # plan の存在確認は mode に依らず走る（spec.md / maintain.md が明文化した挙動）。
+    # --parent-name を与えて maintain の必須チェックを外し、plan 不在だけが原因になるようにする。
     spec_file = tmp_path / "spec.json"
     spec_file.write_text(json.dumps({
         "mode": "maintain",
         "plan": str(tmp_path / "missing.md"),
         "tasks": [task("A")],
     }), encoding="utf-8")
-    rc = po.main(["plan_orchestration.py", str(spec_file), "--prompt-dir", str(tmp_path / "p")])
+    rc = po.main([
+        "plan_orchestration.py", str(spec_file),
+        "--prompt-dir", str(tmp_path / "p"), "--parent-name", "orc",
+    ])
+    assert "ERROR: plan が存在しない" in capsys.readouterr().out
     assert rc == 1
     assert not (tmp_path / "p").exists()
 

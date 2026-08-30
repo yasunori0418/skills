@@ -352,6 +352,11 @@ def test_maintain_requires_parent():
     with pytest.raises(wc.ContractError) as e:
         task(mode="maintain", parent="")
     assert "parent" in str(e.value)
+    # 空文字と同じ扱いになる同値クラス（キー欠落・空白のみ）も弾く。
+    with pytest.raises(wc.ContractError):
+        wc.parse_task({"mode": "maintain"})
+    with pytest.raises(wc.ContractError):
+        task(mode="maintain", parent="   ")
 
 
 def test_maintain_with_parent_still_renders():
