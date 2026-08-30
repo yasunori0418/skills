@@ -209,6 +209,23 @@ def test_plan_and_scope_check_omitted_when_empty():
 
 
 # ------------------------------------------------------------
+# CommonClauses（共通条項の受け渡し）
+# ------------------------------------------------------------
+
+
+def test_common_clauses_exposes_named_fields():
+    c = wc._common_clauses(task(issue=42), wc.MILESTONES)
+    assert c.scope[0].startswith("- 編集してよい範囲（境界）")
+    assert "gh issue view 42" in c.issue[0]
+    assert wc.MILESTONES in c.report[0]
+
+
+def test_common_clauses_omits_conditional_clauses_as_empty_lists():
+    c = wc._common_clauses(task(), wc.MILESTONES)
+    assert c.plan == [] and c.scope_check == [] and c.issue == []
+
+
+# ------------------------------------------------------------
 # mode（implement / maintain）
 # ------------------------------------------------------------
 
