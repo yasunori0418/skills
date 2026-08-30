@@ -755,6 +755,8 @@ def test_render_maintain_has_stack_section():
     assert "spec の depends_on から見た PR の base。レーン割当には使わない" in out
     assert "  A (br-A) -> base: main" in stack
     assert "  B (br-B) -> base: br-A (A)" in stack
+    # ヘッダ直下の用途 1 行も断定する（空文字・誤文言でも task 行の assert は緑のまま通る）。
+    assert "push 承認時の `git diff <base>...HEAD --stat` の base と、restack の下段/上段判定に使う。" in stack
     assert "references/maintain.md §5" in stack
     # LANES の直後に置く（レーン割当と並べて読む節）。
     assert out.index("=== LANES") < out.index("=== STACK") < out.index("=== PROMPTS")
