@@ -752,7 +752,7 @@ def test_render_maintain_has_stack_section():
     # （push 承認の差分確認と restack の下段/上段判定の入力になる）。
     out = rendered([task("A"), task("B", deps=["A"])], mode="maintain")
     stack = out.split("=== STACK")[1].split("=== PROMPTS")[0]
-    assert "spec の depends_on から見た PR の base。レーン割当には使わない" in out
+    assert "spec の depends_on から見た PR の base。レーン割当には使わない" in stack
     assert "  A (br-A) -> base: main" in stack
     assert "  B (br-B) -> base: br-A (A)" in stack
     # ヘッダ直下の用途 1 行も断定する（空文字・誤文言でも task 行の assert は緑のまま通る）。
@@ -771,10 +771,11 @@ def test_render_implement_omits_stack_section():
 def test_stack_lines_dangling_parent_is_a_note_without_error():
     # maintain.md は「対応不要な task を spec から削る」と指示するので、残った
     # depends_on が宙に浮くのは正常運用。ERROR / WARNING は出さず注記に留める。
-    plan = spec([task("B", deps=["X"])], mode="maintain")
+    # expected_files を付けて欠落 WARNING を消し、警告がゼロであることを直に断定する。
+    plan = spec([task("B", deps=["X"], expected_files=["b.py"])], mode="maintain")
     an = po.analyze(plan)
     assert an.errors == []
-    assert not [w for w in an.warnings if "depends_on" in w]
+    assert an.warnings == []
     out = po.render(plan, an, po.Launch(), "/tmp/jg-prompts")
     stack = out.split("=== STACK")[1].split("=== PROMPTS")[0]
     assert "  B (br-B) -> base: (spec に無い task: X。gh pr view <PR#> --json baseRefName で確認)" in stack
