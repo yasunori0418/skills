@@ -34,13 +34,21 @@ spec の top-level に `"mode": "maintain"` を足せば、起動コマンド・
      PR 作成はワーカー規約が禁じているので対象自体が無い
    - stacked なら下段・上段の関係と、下段 push 後に restack が要ること（下記 §5）
 
-### 注意: stack 関係は spec の外に控える
+### 注意: stack 関係は `STACK` 節に出る（`depends_on` は残す）
 
-maintain の出力は `depends_on` を無視するため、`SCHEDULE` / `LANES` / 起動スクリプトのどこにも
-**下段・上段の関係が現れない**（`PR` 節も出ない）。§5 の restack はこの関係を前提にするので、
-**どの PR がどの PR の上に載っているかを handoff.md に控えてから起動する**（`gh pr view <PR#> --json baseRefName`
-で確認できる）。spec の `depends_on` を残しておくと spec 自体が控えになるので、消さずに残す方が安全
-（maintain では無視されるだけで害は無い）。
+maintain のレーン割当は `depends_on` を無視するが、出力には `LANES` の直後に
+**`STACK` 節**が出て、spec の `depends_on` から見た「どの PR がどの PR の上に載っているか」を
+表示する（表示だけで、レーン割当・base 解決には使わない）。§4 の push 承認と §5 の restack は
+この節を入力にする。
+
+```
+=== STACK (spec の depends_on から見た PR の base。レーン割当には使わない) ===
+  A (feat-a) -> base: main
+  B (feat-b) -> base: feat-a (A)
+```
+
+**spec の `depends_on` は消さずに残す**。消すと `STACK` 節からも stack 関係が消え、下段・上段の
+判定材料が無くなる。実 base との照合が要るときは `gh pr view <PR#> --json baseRefName` を使う。
 
 ## 2. 起動 — 元 spec を再利用する
 
@@ -50,9 +58,10 @@ issue 番号は実装フェーズと同じものを使い続ける）。
 - top-level に `"mode": "maintain"` を足す
 - 各 task の `prompt` をレビュー指摘の内容へ差し替える
 - 対応不要な task は spec から削る（起動しないレーンを spec に残さない）
-- `depends_on` は**残す**。maintain では無視される（全 task が wave 0 の独立レーンになる）が、
-  出力に stack 関係が出ない以上、spec が唯一の控えになる（§1 の注意参照）。maintain では
-  `depends_on` の検証も掛からないので、task を削って参照が宙に浮いてもエラーにならない
+- `depends_on` は**残す**。レーン割当では無視される（全 task が wave 0 の独立レーンになる）が、
+  出力の `STACK` 節はこれを読んで stack 関係を表示するので、消すと下段・上段が分からなくなる
+  （§1 の注意参照）。maintain では `depends_on` の検証も掛からないので、task を削って参照が
+  宙に浮いてもエラーにならない（`STACK` 節はその task を注記付きで表示する）
 - `expected_files` / `expected_scale` は残っていても maintain では使われない（突合を行わないため）。
   ただし `expected_files` 欠落の WARNING は maintain でも出る（処理は止まらない。同じ spec を
   implement へ戻して再利用したときに欠落へ気づけるようにするため）
@@ -160,8 +169,8 @@ maintain のワーカー規約は「push・force-push は親の承認を得て�
    （コミットの有無・未コミット変更の残り・push 同期状態。報告は自己申告）
 2. 差分が対応対象の指摘の範囲に収まっているかを見る:
    `git -C <worktree> diff <PR の base>...HEAD --stat`
-   （`<PR の base>` は maintain の出力には出ない。§1 の注意で控えた stack 関係、または
-   `gh pr view <PR#> --json baseRefName` から取る）
+   （`<PR の base>` は出力の `STACK` 節から取る。実 base との照合が要るなら
+   `gh pr view <PR#> --json baseRefName`）
 3. 範囲内なら `send_instruction.sh` で「push してよい」と伝える。
    **範囲外（指摘に無いファイル・計画外のリファクタ）ならユーザーへ上げる**
    （何を削る・分離するかを親が自分で決めない。`scope-gate.md` の FAIL 時と同じ扱い）
@@ -175,8 +184,8 @@ stacked 構成では、下段の PR にレビュー対応のコミットが積�
 ままになる（fast-forward の積み増しでも起きる）。下段の push 承認・push 完了を確認したら
 `restack.md` の手順で上段を載せ替える。
 
-**どれが下段でどれが上段かは maintain の出力に出ない**（§1 の注意）。spec の `depends_on`・
-handoff.md の控え・`gh pr view <PR#> --json baseRefName` のいずれかで確認する。
+**どれが下段でどれが上段かは出力の `STACK` 節で確認する**（§1 の注意）。実 base との照合が
+要るなら `gh pr view <PR#> --json baseRefName`。
 
 maintain は全レーンを同時に起動するので、**下段と上段のレーンが並行して修正している**
 状態になりうる。次段ゲートが無い以上「上段が今は止まっている」という観測は次の瞬間に
