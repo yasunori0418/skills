@@ -400,7 +400,7 @@ def analyze(plan: Plan) -> Analysis:
         # implement へ戻して再利用したとき、maintain 時に無警告で通った欠落に
         # 気づけなくなるため）。
         if not t.expected_files:
-            if graph_checked:
+            if plan.mode != "maintain":
                 warnings.append(
                     f"task {t.id} に expected_files が無い。計画突合（check_scope.py）はファイル照合なしに"
                     "縮退する（規模目安のみ、それも無ければ SKIP）。計画の変更ファイル一覧を spec へ落とす"

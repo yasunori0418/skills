@@ -31,7 +31,7 @@ AI の責務はここまで（依存辺・境界・期待ファイルの意味�
 | `depends_on` | string[] | `[]` | 前段 task の id。空 = 独立（並列）、1 つ = その branch を base にした stacked 段、複数 = WARNING（先頭親を仮採用）。判定基準は `dependency-analysis.md` |
 | `prompt` | string | 必須相当 | タスク固有の内容と完了条件だけを書く（運用規約は worker_contract が連結するので書かない） |
 | `issue` | int | `0` | 対応する GitHub issue 番号。規約に issue 参照と PR へのリンク指示が載る |
-| `boundary` | string[] | `[]` | 編集を許す glob。宣言すると境界ファイルを生成し task-boundary hook が境界外 Edit/Write を deny する。`tmp_claude/**` は自動追加。決め方は `dependency-analysis.md`、仕組みは `boundary.md` |
+| `boundary` | string[] | `[]` | 編集を許す glob。宣言すると境界ファイルを生成し task-boundary hook が境界外 Edit/Write を deny する。`tmp_claude/**` は自動追加。決め方は `dependency-analysis.md`、仕組みは `boundary.md`。maintain では既存 worktree の境界ファイルを**上書き**するため、実装フェーズ中に widen した分が巻き戻る（起動前の突き合わせ手順は `maintain.md`） |
 | `model` / `permission_mode` / `effort` | string | 未指定 | claude 起動の task 個別上書き（CLI フラグのグローバル既定より優先）。`permission_mode` は `acceptEdits` / `auto` / `bypassPermissions` / `manual` / `dontAsk` / `plan`、`effort` は `low` / `medium` / `high` / `xhigh` / `max` |
 | `expected_files` | string[] | `[]` | 計画に書かれた変更ファイル一覧（下記の起草基準）。`check_scope.py` の照合対象。無い task は WARNING（ファイル照合なしに縮退） |
 | `expected_scale` | int | `0` | 計画の規模目安（追加 + 削除の行数）。実測が `expected_scale × 2` を超えると FAIL。`0` = 規模照合なし |

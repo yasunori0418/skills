@@ -155,6 +155,9 @@ def test_analyze_warns_missing_expected_files():
     assert an.errors == []
     hits = [w for w in an.warnings if "expected_files が無い" in w]
     assert len(hits) == 1 and "task A" in hits[0] and "縮退" in hits[0]
+    # implement 側の文言であること（maintain 用の文言と取り違えていない）。
+    assert "計画突合（check_scope.py）はファイル照合なしに縮退する" in hits[0]
+    assert "maintain では計画突合を行わない" not in hits[0]
 
 
 def test_analyze_warns_multi_parent():
@@ -223,6 +226,9 @@ def test_analyze_maintain_still_warns_missing_expected_files():
     an = po.analyze(spec([task("A"), task("B", expected_files=["b.py"])], mode="maintain"))
     hits = [w for w in an.warnings if "expected_files が無い" in w]
     assert len(hits) == 1 and "task A" in hits[0]
+    # maintain 側の文言であること（implement 用の文言と取り違えていない）。
+    assert "maintain では計画突合を行わない" in hits[0]
+    assert "計画突合（check_scope.py）はファイル照合なしに縮退する" not in hits[0]
 
 
 def test_analyze_implement_still_validates_depends_on():
@@ -536,10 +542,12 @@ def test_render_maintain_boundary_header_says_overwrite():
     assert f"既存 worktree の {po.BOUNDARY_FILE} をこの内容で上書きする" in out
     assert "widen_boundary.sh で広げた glob はこの上書きで巻き戻る" in out
     assert "各 worktree に生成する" not in out
-    # implement 側は従来の文言のまま（退行検知）。
+    # implement 側は従来の文言のまま（退行検知）。判定は BOUNDARY 節に限定する
+    # （「上書き」は他の文脈でも使う語なので、出力全体への否定断定にしない）。
     impl = rendered([task("A", boundary=["src/**"])])
+    impl_boundary = impl.split("=== BOUNDARY")[1].split("=== PROMPTS")[0]
     assert f"各 worktree に生成する {po.BOUNDARY_FILE}" in impl
-    assert "上書きする" not in impl
+    assert "上書きする" not in impl_boundary
 
 
 def test_render_verify_section_lists_pr_form_per_task():

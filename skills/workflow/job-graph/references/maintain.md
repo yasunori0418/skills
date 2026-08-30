@@ -29,8 +29,9 @@ lane-ops の `worker_contract.py` が決定論的に行う。
    Phase 1 の必須要素のうち **PR 戦略と計画突合の基準だけ**を次に差し替える
    （起動ウェーブとレーン割当・コミット計画・承認代行の宣言はそのまま含める）:
    - 起動するレーン（どの PR のどの指摘へ、どの task が対応するか）
-   - **push は都度親が承認する**こと（Phase 1 の plan 承認は push の承認を兼ねない。
-     承認代行の宣言も push だけはこの例外に従う）
+   - **push は都度親が承認する**こと（Phase 1 の plan 承認は push の承認を兼ねない）。
+     承認代行の宣言は maintain では対話ゲートへの応答だけに掛かる — push はこの例外に従い、
+     PR 作成はワーカー規約が禁じているので対象自体が無い
    - stacked なら下段・上段の関係と、下段 push 後に restack が要ること（下記 §5）
 
 ### 注意: stack 関係は spec の外に控える
@@ -88,12 +89,17 @@ grep -n 'wt switch' tmp_claude/<job>/job-graph/prompts/launch_*.sh
 ```sh
 # 実装フェーズで実際に許可されていた範囲
 cat <worktree>/.claude/task-boundary.json
-# spec 側の宣言と差分がないか確認し、広げた glob を spec の boundary へ写す
+# これから書き込まれる範囲（plan_orchestration.py 出力の BOUNDARY 節）
 ```
 
-差分があれば **spec の `boundary` へ写してから起動する**（起動後に widen し直すより、
-最初から正しい境界で入る方が確実）。境界を宣言していない task はこの問題を持たない
-（境界ファイルを生成せず、hook も沈黙する）。
+比較は **`plan_orchestration.py` 出力の `BOUNDARY` 節**と行う（spec の `boundary` 宣言と直接
+比べない。`tmp_claude/**` はスクリプトが自動で足すため、spec 側には無くても worktree 側には
+必ず入っており、widen が無くても差分が出る）。
+
+`BOUNDARY` 節に無い glob が worktree 側にあれば、それが実装フェーズ中に widen された分。
+**spec の `boundary` へ写してから起動する**（起動後に widen し直すより、最初から正しい境界で
+入る方が確実）。境界を宣言していない task はこの問題を持たない（境界ファイルを生成せず、
+hook も沈黙する）。
 
 ### 注意: 既存 worktree への switch では hook が走らない
 
