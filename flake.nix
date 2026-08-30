@@ -95,21 +95,21 @@
                 touch "$out"
               '';
 
-          # skills/ 配下の pytest を走らせる。対象は pyproject.toml を持つスキル
-          # (lane-ops / job-graph / parallel-worktree / dev-pipeline / session-insights) を
-          # 自動探索する。job-graph の plan_orchestration.py が lane-ops を兄弟パスで参照する
-          # ため、skills ツリー全体をコピーする必要がある。
+          # skills/ 配下の pytest を走らせる。pyproject.toml を持つスキルだけを自動探索
+          # するため、Python テストを CI に載せる条件は pyproject.toml を置くこと
+          # (現時点の対象は lane-ops / job-graph / parallel-worktree / dev-pipeline /
+          # session-insights の 5 件)。job-graph の plan_orchestration.py が lane-ops を
+          # 兄弟パスで参照するため、skills ツリー全体をコピーする必要がある。
           checks.pytest =
             pkgs.runCommand "check-pytest"
               {
                 nativeBuildInputs = [
                   (pkgs.python3.withPackages (ps: [ ps.pytest ]))
-                  # parallel-worktree の boundary bootstrap 統合テストが git / bash を実行する。
+                  # parallel-worktree の boundary bootstrap 統合テストが git を実行する。
                   pkgs.git
-                  pkgs.bash
                 ];
                 env = {
-                  # session-insights の 2 テストが Path.home() を踏む。
+                  # session-insights のテストが Path.home() を踏む。
                   HOME = "/tmp/home";
                   PYTHONDONTWRITEBYTECODE = "1";
                 };
@@ -118,10 +118,15 @@
                 cp -r ${./skills} skills
                 chmod -R +w skills
                 fail=0
+                found=0
                 while IFS= read -r -d "" p; do
+                  found=$((found + 1))
                   d=$(dirname "$p")
                   (cd "$d" && pytest -q -p no:cacheprovider) || fail=1
                 done < <(find skills -type f -name pyproject.toml -print0)
+                # 探索が 0 件なら「テストが無い」のではなく探索の破綻とみなす
+                # (silent pass で緑になるのを防ぐ)。
+                [ "$found" -gt 0 ] || { echo "no pyproject.toml found under skills/" >&2; fail=1; }
                 [ "$fail" -eq 0 ]
                 touch "$out"
               '';
