@@ -50,6 +50,9 @@ def test_parse_spec_rejects_bad_issue():
 
 def test_parse_spec_mode_defaults_to_implement():
     assert spec([task("A")]).mode == "implement"
+    # 空文字・null は拒否ではなく既定へ縮退する。
+    assert spec([task("A")], mode="").mode == "implement"
+    assert spec([task("A")], mode=None).mode == "implement"
 
 
 def test_parse_spec_accepts_maintain_mode():
@@ -191,6 +194,31 @@ def test_lanes_maintain_ignores_depends_on():
     assert an.levels == {"A": 0, "B": 0, "C": 0}
     assert an.lanes == (("A",), ("B",), ("C",))
     assert an.bases == {"A": "main", "B": "main", "C": "main"}
+    # 計画突合を行わないので expected_files 欠落の WARNING も出さない。
+    assert an.warnings == []
+
+
+def test_analyze_maintain_skips_depends_on_validation():
+    # maintain は depends_on を無視するので、その検証も掛けない。対応不要な task を
+    # spec から削ると残った task の depends_on が宙に浮くが、これは maintain では
+    # エラーにならない（maintain.md §2 が「対応不要な task を削る」と指示している）。
+    an = po.analyze(spec([task("B", deps=["A"])], mode="maintain"))
+    assert an.errors == []
+    assert an.lanes == (("B",),)
+    assert an.bases == {"B": "main"}
+    # 自己依存・循環・複数親も maintain では判定対象外。
+    assert po.analyze(spec([task("A", deps=["A"])], mode="maintain")).errors == []
+    assert po.analyze(
+        spec([task("A", deps=["B"]), task("B", deps=["A"])], mode="maintain")
+    ).errors == []
+    multi = po.analyze(spec([task("C", deps=["A", "B"])], mode="maintain"))
+    assert not any("複数親" in w for w in multi.warnings)
+
+
+def test_analyze_implement_still_validates_depends_on():
+    # implement 側の検証は落とさない（退行検知）。
+    assert any("未定義" in e for e in po.analyze(spec([task("B", deps=["A"])])).errors)
+    assert any("自分自身" in e for e in po.analyze(spec([task("A", deps=["A"])])).errors)
 
 
 def test_lanes_branching_starts_new_lanes():
@@ -410,6 +438,15 @@ def test_launch_script_implement_keeps_create_and_base():
     assert "wt switch --create br-A2 --base main -x bash --" in bodies["A2"]
 
 
+def test_launch_script_header_comment_states_where_it_lands():
+    # ヘッダコメントの mode 分岐を両側とも断定する。
+    assert "# job-graph launch: A (br-A) base=main" in launch_body([task("A")])["A"]
+    assert (
+        "# job-graph launch: A (br-A) 既存 worktree へ switch"
+        in launch_body([task("A")], mode="maintain")["A"]
+    )
+
+
 def test_render_pane_run_only_references_launch_script():
     # pane run には `bash <launch_<id>.sh>` の短いコマンドだけを流す
     # （長文注入で未実行・切断が起きた実績への対策）。
@@ -494,6 +531,18 @@ def test_render_maintain_omits_pr_and_verify_sections():
     assert "=== MONITOR" in out
 
 
+def test_render_maintain_monitor_section_is_push_approval():
+    # MONITOR 節の maintain 分岐を肯定的に断定する（消失の断定だけだと、
+    # if 側が空文字・誤文言・別セクションへの誤挿入になっても緑のままになる）。
+    monitor = rendered([task("A")], mode="maintain").split("=== MONITOR")[1]
+    assert "# push 承認:" in monitor
+    assert "references/maintain.md" in monitor
+    assert "「push 承認待ち」を報告する" in monitor
+    # maintain に次段起動は無い（全レーン wave 0）ので、その文言も出さない。
+    assert "次段を起動する" not in monitor
+    assert "裏取りしてから承認する" in monitor
+
+
 def test_render_monitor_section_points_to_lane_ops():
     out = rendered([task("B"), task("A")])
     monitor = out.split("=== MONITOR")[1]
@@ -534,6 +583,29 @@ def test_write_prompts_and_main(tmp_path):
     assert "wt switch --create br-A --base main" in la
     assert "wt switch --create br-B --base br-A" in lb
     assert f"$(cat {pdir / 'B.md'})" in lb
+
+
+def test_write_prompts_and_main_maintain(tmp_path):
+    # write_prompts が plan を launch_script へ渡す配線の end-to-end 検証
+    # （launch_body ヘルパは launch_script を直接叩くのでこの経路を守れない）。
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text(json.dumps({
+        "default_base": "main",
+        "mode": "maintain",
+        "tasks": [task("A"), task("B", deps=["A"])],
+    }), encoding="utf-8")
+    pdir = tmp_path / "prompts"
+    rc = po.main([
+        "plan_orchestration.py", str(spec_file),
+        "--prompt-dir", str(pdir), "--parent-name", "orc",
+    ])
+    assert rc == 0
+    for tid, branch in (("A", "br-A"), ("B", "br-B")):
+        body = (pdir / f"launch_{tid}.sh").read_text(encoding="utf-8")
+        assert f"wt switch {branch} -x claude --" in body
+        assert "--create" not in body and "--base" not in body
+    # maintain 規約が連結されていること（implement の規約と取り違えていない）。
+    assert "`/review-converge`・`/pr-create` は実行しない" in (pdir / "A.md").read_text(encoding="utf-8")
 
 
 def test_main_exit_1_on_missing_plan(tmp_path):

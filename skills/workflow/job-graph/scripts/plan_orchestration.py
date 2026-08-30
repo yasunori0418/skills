@@ -74,7 +74,8 @@ spec の形:
 - expected_files / expected_scale は計画に書かれた変更ファイル一覧（glob 不可）と規模目安
   （追加+削除の行数）。check_scope.py の突合基準になり、ワーカー規約（PR 前）と VERIFY 節
   （親が PR に対して行う）の両方に埋め込まれる。expected_files が無い task は WARNING
-  （ファイル照合なしに縮退）。フィールドの詳細は references/spec.md。
+  （ファイル照合なしに縮退）。maintain は計画突合を行わないので、depends_on ともども
+  検証せず WARNING も出さない。フィールドの詳細は references/spec.md。
 
 レーン割当（= workspace 割当。レーン先頭が workspace、後続段はその tab）:
 - 依存が無い、または親に複数の子がいる task は新しいレーンを開始する。
@@ -375,29 +376,34 @@ def analyze(plan: Plan) -> Analysis:
     if dup_br:
         errors.append(f"branch が重複: {dup_br}")
 
+    # maintain は depends_on を無視するので、その検証も掛けない。検証を残すと、
+    # maintain.md が指示する「対応不要な task を spec から削る」操作で残った task の
+    # depends_on が宙に浮き、致命的エラーで COMMANDS が出なくなる。
+    graph_checked = plan.mode != "maintain"
     idset = set(ids)
     for t in plan.tasks:
-        for d in t.depends_on:
-            if d not in idset:
-                errors.append(f"task {t.id} の depends_on '{d}' が未定義")
-        if t.id in t.depends_on:
-            errors.append(f"task {t.id} が自分自身に依存")
-        if len(t.depends_on) > 1:
-            warnings.append(
-                f"task {t.id} は複数親 {list(t.depends_on)} に依存。単純な線形 stack 不可。"
-                "integration ブランチか逐次 rebase を検討（base は先頭親を仮採用）"
-            )
-        # maintain は計画突合を行わない（レビュー対応の差分は元計画に無い）ので
-        # expected_files の不足は警告しない。
+        if graph_checked:
+            for d in t.depends_on:
+                if d not in idset:
+                    errors.append(f"task {t.id} の depends_on '{d}' が未定義")
+            if t.id in t.depends_on:
+                errors.append(f"task {t.id} が自分自身に依存")
+            if len(t.depends_on) > 1:
+                warnings.append(
+                    f"task {t.id} は複数親 {list(t.depends_on)} に依存。単純な線形 stack 不可。"
+                    "integration ブランチか逐次 rebase を検討（base は先頭親を仮採用）"
+                )
+        # maintain は計画突合を行わないので expected_files の不足は警告しない。
         if not t.expected_files and plan.mode != "maintain":
             warnings.append(
                 f"task {t.id} に expected_files が無い。計画突合（check_scope.py）はファイル照合なしに"
                 "縮退する（規模目安のみ、それも無ければ SKIP）。計画の変更ファイル一覧を spec へ落とす"
             )
 
-    cycle = detect_cycle(plan)
-    if cycle is not None:
-        errors.append(f"依存に循環: {' -> '.join(cycle)}")
+    if graph_checked:
+        cycle = detect_cycle(plan)
+        if cycle is not None:
+            errors.append(f"依存に循環: {' -> '.join(cycle)}")
 
     if errors:
         return Analysis(errors=errors, warnings=warnings, levels={}, bases={}, lanes=(), lane_of={})
@@ -864,9 +870,10 @@ def render(
             "# push 承認:    ワーカーは push 前に停止して「push 承認待ち」を報告する。"
             "裏取りしてから承認する（手順は references/maintain.md）"
         )
+        out.append("# ワーカーの報告（[lane-ops:report ...]）は自己申告。必ず裏取りしてから承認する")
     else:
         out.append("# 計画突合:     VERIFY 節の check_scope.py --pr（PR 報告のたびに実行。PASS のときだけ次段へ）")
-    out.append("# ワーカーの報告（[lane-ops:report ...]）は自己申告。必ず裏取りしてから次段を起動する")
+        out.append("# ワーカーの報告（[lane-ops:report ...]）は自己申告。必ず裏取りしてから次段を起動する")
 
     return "\n".join(out)
 

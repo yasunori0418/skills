@@ -34,9 +34,12 @@ issue 番号は実装フェーズと同じものを使い続ける）。
 - top-level に `"mode": "maintain"` を足す
 - 各 task の `prompt` をレビュー指摘の内容へ差し替える
 - 対応不要な task は spec から削る（起動しないレーンを spec に残さない）
-- `expected_files` / `expected_scale` / `plan` は残っていても maintain では無視される
-  （突合を行わないため）。消しても構わない
-- `depends_on` は残っていても無視される（全 task が wave 0 の独立レーンになる）
+- `depends_on` は残っていても無視される（全 task が wave 0 の独立レーンになる）。
+  maintain では `depends_on` の検証も掛からないので、task を削って参照が宙に浮いても
+  エラーにならない（消しても残しても動く）
+- `expected_files` / `expected_scale` は残っていても maintain では使われない（突合を行わないため）
+- **`plan` は消すか、実在するパスにする。** 存在確認だけは mode に依らず走るため、
+  実在しないパスが残っていると ERROR で COMMANDS が出力されない
 
 `plan_orchestration.py` の呼び出しは implement と同じ（`--prompt-dir` は
 `tmp_claude/<job>/job-graph/prompts` を再利用してよい。上書きされる）。
@@ -47,7 +50,8 @@ issue 番号は実装フェーズと同じものを使い続ける）。
 ```sh
 grep -n 'wt switch' tmp_claude/<job>/job-graph/prompts/launch_*.sh
 # => exec env -u ... wt switch <branch> -x claude -- "$(cat .../<id>.md)"
-#    --create / --base が現れないこと
+#    境界宣言のある task は -x claude ではなく -x bash -- の bootstrap 形になる
+#    どちらの形でも `wt switch` の直後に --create / --base が現れないこと
 ```
 
 `--create` が残っていると既存 worktree に対して `Path occupied` で失敗し、レーンが

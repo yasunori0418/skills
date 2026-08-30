@@ -13,7 +13,9 @@ AI の責務はここまで（依存辺・境界・期待ファイルの意味�
 | `tasks` | array | 必須（非空） | 下表の task |
 
 `mode: "maintain"` のときは計画突合を行わないため、`plan` / `expected_files` /
-`expected_scale` は指定されていても無視される（`expected_files` 欠落の WARNING も出ない）。
+`expected_scale` はワーカー規約にも突合にも使われない（`expected_files` 欠落の WARNING も出ない。
+`depends_on` も同様に無視され、検証されない）。ただし **`plan` の存在確認だけは mode に依らず走る**ので、
+書くなら実在するパスにする（実在しないパスを書くと ERROR で COMMANDS が出ない）。省略するのが安全。
 
 ## task
 
