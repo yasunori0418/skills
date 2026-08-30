@@ -9,7 +9,7 @@ AI の責務はここまで（依存辺・境界・期待ファイルの意味�
 | --- | --- | --- | --- |
 | `default_base` | string | `"main"` | 依存の無い task の base ブランチ |
 | `plan` | string | なし | 計画ファイルのパス（相対なら cwd 基準で絶対化。指定されていて存在しなければ ERROR）。ワーカー規約の「計画の参照」条項に載り、`/review-converge` の `DIFF_REVIEW_GROUND_TRUTH` になる。計画ファイル入口なら必ず書く（epic issue 入口で計画ファイルが無いときだけ省略） |
-| `mode` | string | `"implement"` | ジョブ全体の性質。`implement` = 実装 → PR 作成（Phase 0〜4）、`maintain` = PR 作成後のレビュー対応（Phase 4.5）。他の値は ERROR。`maintain` にすると起動が既存 worktree への `wt switch`（`--create` なし）になり、`depends_on` を無視して全 task が独立レーン（wave 0）になり、ワーカー規約が `/review-converge`・`/pr-create` 禁止 + push 親承認へ切り替わる。手順は `maintain.md` |
+| `mode` | string | `"implement"` | ジョブ全体の性質。`implement` = 実装 → PR 作成（Phase 0〜4）、`maintain` = PR 作成後のレビュー対応（Phase 4.5）。他の値は ERROR。`maintain` にすると起動が既存 worktree への `wt switch`（`--create` なし）になり、`depends_on` を無視して全 task が独立レーン（wave 0）になり、出力から `PR` / `VERIFY` 節が消え、ワーカー規約が `/review-converge`・`/pr-create` 禁止 + push 親承認へ切り替わる。手順は `maintain.md` |
 | `tasks` | array | 必須（非空） | 下表の task |
 
 `mode: "maintain"` のときは計画突合を行わないため、`plan` / `expected_files` /
@@ -26,7 +26,7 @@ AI の責務はここまで（依存辺・境界・期待ファイルの意味�
 | フィールド | 型 | 既定 | 意味 |
 | --- | --- | --- | --- |
 | `id` | string | 必須 | 一意な短い id（pane 変数 `PANE_<id>`・プロンプトファイル名になる） |
-| `branch` | string | 必須 | feature ブランチ名（一意。`wt switch --create` に渡る） |
+| `branch` | string | 必須 | feature ブランチ名（一意。`wt switch --create` に渡る。maintain では `--create` なしの `wt switch` に渡り、既存ブランチへ入る） |
 | `depends_on` | string[] | `[]` | 前段 task の id。空 = 独立（並列）、1 つ = その branch を base にした stacked 段、複数 = WARNING（先頭親を仮採用）。判定基準は `dependency-analysis.md` |
 | `prompt` | string | 必須相当 | タスク固有の内容と完了条件だけを書く（運用規約は worker_contract が連結するので書かない） |
 | `issue` | int | `0` | 対応する GitHub issue 番号。規約に issue 参照と PR へのリンク指示が載る |

@@ -83,7 +83,9 @@ spec の形:
 - レーン先頭 task の起動が workspace create、合流 task の起動は同 workspace への tab create。
 - maintain では depends_on を無視し、全 task を独立レーン（wave 0）として扱う。
 
-終了コード: 致命的検証エラー（循環・未定義参照・重複・必須欠落）があれば 1、警告のみなら 0。
+終了コード: 致命的検証エラー（循環・未定義参照・重複・必須欠落・plan の不在）があれば 1、
+警告のみなら 0。maintain では depends_on を検証しないので、循環・未定義参照・自己依存は
+エラーにならない（重複・必須欠落・plan の不在は両モードで見る）。
 
 設計: 純粋関数（parse_spec / analyze / detect_cycle / compute_levels / compute_lanes /
 resolve_base / sanitize / scope_check_command / render）には副作用を持たせない。
@@ -241,7 +243,8 @@ def parse_spec(data: object) -> Plan:
     mode_raw = data.get("mode", "implement") or "implement"
     if not isinstance(mode_raw, str):
         raise SpecError("mode は文字列でない")
-    mode = mode_raw.strip()
+    # 空文字・null・空白のみは既定へ縮退する（兄弟フィールドの plan と同じ扱い）。
+    mode = mode_raw.strip() or "implement"
     if mode not in MODES:
         raise SpecError(f"mode は {' / '.join(MODES)} のいずれかでない: {mode!r}")
     return Plan(default_base=default_base, tasks=tuple(tasks), plan=plan_path, mode=mode)
@@ -719,7 +722,10 @@ def render(
         kind = "独立・並列" if level == 0 else f"stacked {level}段目"
         out.append(f"  wave {level} ({kind}): {', '.join(wave)}")
 
-    out.append("\n=== LANES (レーン = workspace: 先頭 task が workspace create、後続段は同 workspace への tab) ===")
+    if plan.mode == "maintain":
+        out.append("\n=== LANES (レーン = workspace: maintain は全 task が単独レーン。tab 追加は起きない) ===")
+    else:
+        out.append("\n=== LANES (レーン = workspace: 先頭 task が workspace create、後続段は同 workspace への tab) ===")
     for i, lane in enumerate(an.lanes):
         chain = " -> ".join(lane)
         out.append(f"  lane {i}: {chain}")

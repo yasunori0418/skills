@@ -42,7 +42,7 @@ AI の責務は計画ファイル・issue から「タスクと依存辺・境�
 
   spec の形は `scripts/example-spec.json`、フィールドの意味と `expected_files` / `expected_scale` の起草基準は `references/spec.md`。`--prompt-dir` は実質必須（未指定だと COMMANDS を出力しない）。プロンプト `<task-id>.md` と起動スクリプト `launch_<task-id>.sh` がそこへ書き出される。
 
-  出力の `SCHEDULE`・`LANES`・`BOUNDARY`・`PROMPTS`・`COMMANDS`・`PR`・`VERIFY`・`MONITOR` をそのまま plan と実行に使う。スクリプトのロジックを本文で再現しない。
+  出力の `SCHEDULE`・`LANES`・`BOUNDARY`・`PROMPTS`・`COMMANDS`・`PR`・`VERIFY`・`MONITOR` をそのまま plan と実行に使う。スクリプトのロジックを本文で再現しない。`mode: "maintain"` では `PR` と `VERIFY` が出力されない（PR は既にあり、計画突合も行わないため。Phase 4.5 参照）。
 
 - **`scripts/check_scope.py`**（stdlib のみ）: PR（`--pr`）またはローカル diff（`--base`）の変更を計画の期待ファイル一覧・規模目安と突合し `VERDICT: PASS|FAIL|SKIP` を返す。ワーカーは規約で PR 前に、親は Phase 4 で使う（手順は `references/scope-gate.md`）。
 
@@ -80,7 +80,9 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
    - **承認代行の宣言**: 「計画内の push・PR 作成・対話ゲートへの応答は親が判断する」ことを明記（この承認が Phase 3 の代行根拠になる）
    - **計画突合の基準**: `VERIFY` セクション（task ごとの期待ファイル・規模目安）。PR 報告のたびにこれで突合し、FAIL は次段を止めてユーザーへ上げることを明記
 
-承認なしで worktree 生成・エージェント起動に進まない。親自身の permission mode に注意: `auto` では classifier が `send_instruction.sh` 等の指示送信を止めて運用が停滞した実績がある（恒久策は dotfiles#341）。親は `acceptEdits` 等の明示モードで動かす。
+`mode: "maintain"`（Phase 4.5）では `PR` / `VERIFY` が出力されないため、上記のうち **PR 戦略と計画突合の基準は plan に含めない**。代わりに「どのレビュー指摘へ対応するか」と「push は都度親が承認する」ことを明記する（詳細は `references/maintain.md`）。
+
+承認なしで worktree 生成・エージェント起動に進まない（maintain も同じ。plan 承認は取る）。親自身の permission mode に注意: `auto` では classifier が `send_instruction.sh` 等の指示送信を止めて運用が停滞した実績がある（恒久策は dotfiles#341）。親は `acceptEdits` 等の明示モードで動かす。
 
 ### Phase 2: worktree 作成・レーン起動
 

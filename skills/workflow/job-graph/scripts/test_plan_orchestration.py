@@ -50,9 +50,11 @@ def test_parse_spec_rejects_bad_issue():
 
 def test_parse_spec_mode_defaults_to_implement():
     assert spec([task("A")]).mode == "implement"
-    # 空文字・null は拒否ではなく既定へ縮退する。
+    # 空文字・null・空白のみは拒否ではなく既定へ縮退する（plan と同じ扱い）。
     assert spec([task("A")], mode="").mode == "implement"
     assert spec([task("A")], mode=None).mode == "implement"
+    assert spec([task("A")], mode="  ").mode == "implement"
+    assert spec([task("A")], mode=" maintain ").mode == "maintain"
 
 
 def test_parse_spec_accepts_maintain_mode():
@@ -531,12 +533,25 @@ def test_render_verify_section_lists_pr_form_per_task():
 def test_render_maintain_omits_pr_and_verify_sections():
     # maintain のワーカーは /pr-create を実行せず（PR は既にある）、レビュー対応の
     # 差分は元計画に無いので計画突合も成立しない。MONITOR は両モードで出す。
-    out = rendered([task("A", expected_files=["a.py"])], mode="maintain")
-    assert "=== PR (" not in out
-    assert "=== VERIFY" not in out
-    assert "/pr-create" not in out
-    assert "check_scope.py" not in out
-    assert "=== MONITOR" in out
+    # maintain.md は expected_files を消した spec の再利用を案内しているので、
+    # 期待あり・なしの両方で節が出ないことを見る。
+    for tasks in ([task("A", expected_files=["a.py"])], [task("A")]):
+        out = rendered(tasks, mode="maintain")
+        assert "=== PR (" not in out
+        assert "=== VERIFY" not in out
+        assert "/pr-create" not in out
+        assert "=== MONITOR" in out
+        # 突合コマンドは COMMANDS 以降のどこにも出ない（VALIDATION の WARNING 本文は
+        # check_scope.py に言及するので、節の判定に混ぜない）。
+        assert "check_scope.py" not in out.split("=== COMMANDS")[1]
+
+
+def test_render_maintain_without_expected_files_warns_in_validation():
+    # 裁定により WARNING は maintain でも出す。VALIDATION 節に載ることまで見る
+    # （analyze 止まりのテストだと render への配線が切れても気付けない）。
+    validation = rendered([task("A")], mode="maintain").split("=== SCHEDULE")[0]
+    assert "WARNING: task A に expected_files が無い" in validation
+    assert "ok（致命的問題なし）" not in validation
 
 
 def test_render_maintain_monitor_section_is_push_approval():
@@ -619,6 +634,19 @@ def test_write_prompts_and_main_maintain(tmp_path):
 def test_main_exit_1_on_missing_plan(tmp_path):
     spec_file = tmp_path / "spec.json"
     spec_file.write_text(json.dumps({
+        "plan": str(tmp_path / "missing.md"),
+        "tasks": [task("A")],
+    }), encoding="utf-8")
+    rc = po.main(["plan_orchestration.py", str(spec_file), "--prompt-dir", str(tmp_path / "p")])
+    assert rc == 1
+    assert not (tmp_path / "p").exists()
+
+
+def test_main_exit_1_on_missing_plan_in_maintain(tmp_path):
+    # plan の存在確認は mode に依らず走る（spec.md / maintain.md が明文化した挙動）。
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text(json.dumps({
+        "mode": "maintain",
         "plan": str(tmp_path / "missing.md"),
         "tasks": [task("A")],
     }), encoding="utf-8")

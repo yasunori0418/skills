@@ -25,6 +25,19 @@ lane-ops の `worker_contract.py` が決定論的に行う。
    自分で作らない（`scope-gate.md` が「分離・削除の指示を親が自分で出さない」と
    しているのと同じ理由。取捨選択は仕様の解釈変更に届きうる）
 3. 確定した対応対象を task ごとの `prompt` に落として spec を起草する
+4. **plan 承認を取る**（`ExitPlanMode`）。実装フェーズの Phase 1 と同じくレーン起動の前に承認を取るが、
+   maintain では `PR` / `VERIFY` 節が出ないので plan に含めるのは次に置き換わる:
+   - 起動するレーン（どの PR のどの指摘へ、どの task が対応するか）
+   - **push は都度親が承認する**こと（Phase 1 の plan 承認は push の承認を兼ねない）
+   - stacked なら下段・上段の関係と、下段 push 後に restack が要ること（下記 §5）
+
+### 注意: stack 関係は spec の外に控える
+
+maintain の出力は `depends_on` を無視するため、`SCHEDULE` / `LANES` / 起動スクリプトのどこにも
+**下段・上段の関係が現れない**（`PR` 節も出ない）。§5 の restack はこの関係を前提にするので、
+**どの PR がどの PR の上に載っているかを handoff.md に控えてから起動する**（`gh pr view <PR#> --json baseRefName`
+で確認できる）。spec の `depends_on` を残しておくと spec 自体が控えになるので、消さずに残す方が安全
+（maintain では無視されるだけで害は無い）。
 
 ## 2. 起動 — 元 spec を再利用する
 
@@ -34,9 +47,9 @@ issue 番号は実装フェーズと同じものを使い続ける）。
 - top-level に `"mode": "maintain"` を足す
 - 各 task の `prompt` をレビュー指摘の内容へ差し替える
 - 対応不要な task は spec から削る（起動しないレーンを spec に残さない）
-- `depends_on` は残っていても無視される（全 task が wave 0 の独立レーンになる）。
-  maintain では `depends_on` の検証も掛からないので、task を削って参照が宙に浮いても
-  エラーにならない（消しても残しても動く）
+- `depends_on` は**残す**。maintain では無視される（全 task が wave 0 の独立レーンになる）が、
+  出力に stack 関係が出ない以上、spec が唯一の控えになる（§1 の注意参照）。maintain では
+  `depends_on` の検証も掛からないので、task を削って参照が宙に浮いてもエラーにならない
 - `expected_files` / `expected_scale` は残っていても maintain では使われない（突合を行わないため）。
   ただし `expected_files` 欠落の WARNING は maintain でも出る（処理は止まらない。同じ spec を
   implement へ戻して再利用したときに欠落へ気づけるようにするため）
@@ -105,6 +118,9 @@ push 承認を計画承認で代替しないのは、レビュー対応の差分
 stacked 構成では、下段の PR にレビュー対応のコミットが積まれた時点で上段は古い base の
 ままになる（fast-forward の積み増しでも起きる）。下段の push 承認・push 完了を確認したら
 `restack.md` の手順で上段を載せ替える。
+
+**どれが下段でどれが上段かは maintain の出力に出ない**（§1 の注意）。spec の `depends_on`・
+handoff.md の控え・`gh pr view <PR#> --json baseRefName` のいずれかで確認する。
 
 maintain は全レーンを同時に起動するので、**下段と上段のレーンが並行して修正している**
 状態になりうる。載せ替えは上段のワーカーが作業していない時点（push 完了報告の直後など）を
