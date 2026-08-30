@@ -153,7 +153,8 @@ class Mode(Enum):
         """既存 worktree（ブランチ作成済み・PR 済み）へ入るか。
 
         maintain は `wt switch <branch>`（`--create` を付けると Path occupied で失敗）。
-        既存の境界ファイルもこのとき上書きされる。
+        既存の境界ファイルはこのとき上書きせず、allow を和集合にしてマージする
+        （BOUNDARY_BOOTSTRAP 参照）。
         """
         return self is Mode.MAINTAIN
 
@@ -554,10 +555,36 @@ BOUNDARY_FILE = ".claude/task-boundary.json"
 # 方式・選定理由は parallel-worktree と同一（references/orchestration.md 参照）。
 # set -e は意図的（fail-closed）: 境界の無い状態でガードレール無しに claude を
 # 起動するより、起動せず pane に失敗を残す方が安全。
+#
+# 既存の境界ファイルがあれば（maintain が既存 worktree へ入るとき）上書きせず、
+# allow を既存 ∪ 宣言の和集合にしてマージする。既存 allow は親が widen_boundary.sh で
+# 承認済み、宣言 allow は plan 承認済みで、どちらも正当な範囲。無条件上書きだと
+# 実装フェーズ中の widen が無言で巻き戻り、ワーカーが以前は許可された範囲で deny を
+# 食う（親は「最初から足りなかった」と誤読して再 widen する）。task_id / branch は
+# 宣言を正とする（同一 worktree = 同一ブランチなので不一致は spec の誤記側）。
+# 既存ファイルが空・不正 JSON なら起動を止める（widen_boundary.sh の空 stdin 事故の
+# 痕跡を消さない。壊れた境界のまま claude を起動しない）。jq は COMMANDS 側で既に必須。
+# jq の入力は必ずリダイレクトで渡す（positional に混ぜると stdin 読みになる）。
 BOUNDARY_BOOTSTRAP = (
     "set -e; "
     f"mkdir -p {shlex.quote(BOUNDARY_FILE.rsplit('/', 1)[0])}; "
-    f"printf '%s\\n' \"$1\" > {shlex.quote(BOUNDARY_FILE)}; "
+    f"bf={shlex.quote(BOUNDARY_FILE)}; "
+    'if [ -e "$bf" ]; then '
+    '  if ! [ -s "$bf" ] || ! jq -e . "$bf" >/dev/null 2>&1; then '
+    '    echo "ERROR: 既存の境界ファイルが空か不正 JSON。起動を中止する（widen_boundary.sh の事故跡の可能性）: $bf" >&2; '
+    "    exit 1; "
+    "  fi; "
+    '  tmp="$(mktemp)"; '
+    '  jq -c --argjson new "$1" \'$new + {allow: (((.allow // []) + $new.allow) | unique)}\' < "$bf" > "$tmp"; '
+    '  if ! [ -s "$tmp" ] || ! jq -e . "$tmp" >/dev/null 2>&1; then '
+    '    rm -f "$tmp"; '
+    '    echo "ERROR: 境界のマージ結果が空か不正 JSON。既存ファイルは変更せず起動を中止する: $bf" >&2; '
+    "    exit 1; "
+    "  fi; "
+    '  mv "$tmp" "$bf"; '
+    "else "
+    '  printf \'%s\\n\' "$1" > "$bf"; '
+    "fi; "
     'ex="$(git rev-parse --path-format=absolute --git-path info/exclude)"; '
     'mkdir -p "$(dirname "$ex")"; '
     f"pat='/{BOUNDARY_FILE}'; "
@@ -810,11 +837,12 @@ def render(
     declared = [t for t in sorted(plan.tasks, key=lambda x: x.id) if t.boundary]
     if declared:
         if plan.mode.uses_existing_worktree:
-            out.append(f"\n=== BOUNDARY (既存 worktree の {BOUNDARY_FILE} をこの内容で上書きする) ===")
+            out.append(f"\n=== BOUNDARY (既存 worktree の {BOUNDARY_FILE} とこの内容をマージする) ===")
             out.append(
                 "task-boundary hook が境界外の Edit/Write を機械ブロックする。"
-                "実装フェーズ中に widen_boundary.sh で広げた glob はこの上書きで巻き戻るので、"
-                "起動前に既存の境界ファイルと突き合わせる（references/maintain.md）。"
+                "allow は既存ファイルとの和集合になるので、実装フェーズ中に widen_boundary.sh で"
+                "広げた glob は保たれる（下記は spec 側の宣言のみ。実際の範囲は worktree 側の"
+                "ファイルを見る。既存ファイルが空・不正 JSON なら起動が止まる。references/maintain.md）。"
             )
         else:
             out.append(f"\n=== BOUNDARY (各 worktree に生成する {BOUNDARY_FILE}) ===")
