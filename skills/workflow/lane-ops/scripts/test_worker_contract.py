@@ -119,6 +119,7 @@ def test_report_command_embeds_script_path_and_parent():
     s = wc.render(task(parent="orc-repo", task_id="T1"))
     assert "report.sh orc-repo T1" in s
     assert wc.report_script() in s
+    assert wc.MILESTONES in s
     assert "報告は承認の代わりにならない" in s
 
 
