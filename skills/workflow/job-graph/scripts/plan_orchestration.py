@@ -83,9 +83,10 @@ spec の形:
 - レーン先頭 task の起動が workspace create、合流 task の起動は同 workspace への tab create。
 - maintain では depends_on を無視し、全 task を独立レーン（wave 0）として扱う。
 
-終了コード: 致命的検証エラー（循環・未定義参照・重複・必須欠落・plan の不在）があれば 1、
-警告のみなら 0。maintain では depends_on を検証しないので、循環・未定義参照・自己依存は
-エラーにならない（重複・必須欠落・plan の不在は両モードで見る）。
+終了コード: 致命的検証エラー（循環・未定義参照・重複・必須欠落・plan の不在・
+maintain での --parent-name 未指定）があれば 1、警告のみなら 0。maintain では
+depends_on を検証しないので、循環・未定義参照・自己依存はエラーにならない
+（重複・必須欠落・plan の不在は両モードで見る）。
 
 設計: 純粋関数（parse_spec / analyze / validate_launch / detect_cycle / compute_levels /
 compute_lanes / resolve_base / sanitize / scope_check_command / render）には副作用を持たせない。
@@ -829,7 +830,10 @@ def render(
     if an.errors:
         for e in an.errors:
             out.append(f"ERROR: {e}")
-        out.append("\n致命的エラーのため schedule/commands は出力しない。spec を修正して再実行。")
+        out.append(
+            "\n致命的エラーのため schedule/commands は出力しない。"
+            "spec または起動フラグを修正して再実行。"
+        )
         return "\n".join(out)
     if an.warnings:
         for w in an.warnings:
@@ -1122,7 +1126,9 @@ def parse_args(argv: list[str]) -> Options:
             permission_mode=ns.permission_mode or "",
             effort=ns.effort or "",
             remote_control=ns.remote_control,
-            parent_name=ns.parent_name or "",
+            # 空白のみは未指定と同一視する（lane-ops 側の parse_task も strip するので、
+            # ここで畳まないと maintain の必須チェックだけを素通りして子プロセスで落ちる）。
+            parent_name=(ns.parent_name or "").strip(),
         ),
     )
 

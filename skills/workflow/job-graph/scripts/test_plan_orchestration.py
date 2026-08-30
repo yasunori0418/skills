@@ -275,6 +275,14 @@ def test_validate_launch_requires_parent_name_in_maintain():
     assert "--parent-name" in errs[0]
 
 
+def test_parse_args_treats_blank_parent_name_as_unset():
+    # 空白のみの --parent-name は未指定と同じ。畳まないと必須チェックだけ素通りして
+    # lane-ops 側（parse_task が strip する）の ContractError で落ちる。
+    opts = po.parse_args(["plan_orchestration.py", "s.json", "--parent-name", "   "])
+    assert opts.launch.parent_name == ""
+    assert po.validate_launch(spec([task("A")], mode="maintain"), opts.launch) != []
+
+
 def test_validate_launch_allows_empty_parent_name_in_implement():
     assert po.validate_launch(spec([task("A")]), po.Launch()) == []
 
