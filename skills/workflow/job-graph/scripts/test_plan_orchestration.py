@@ -747,6 +747,56 @@ def test_render_maintain_lanes_header_states_no_tab():
     assert "先頭 task が workspace create、後続段は同 workspace への tab" not in out
 
 
+def test_render_maintain_has_stack_section():
+    # maintain はレーンを独立にする分、spec の depends_on 由来の base を STACK 節で見せる
+    # （push 承認の差分確認と restack の下段/上段判定の入力になる）。
+    out = rendered([task("A"), task("B", deps=["A"])], mode="maintain")
+    stack = out.split("=== STACK")[1].split("=== PROMPTS")[0]
+    assert "spec の depends_on から見た PR の base。レーン割当には使わない" in stack
+    assert "  A (br-A) -> base: main" in stack
+    assert "  B (br-B) -> base: br-A (A)" in stack
+    # ヘッダ直下の用途 1 行も断定する（空文字・誤文言でも task 行の assert は緑のまま通る）。
+    assert "push 承認時の `git diff <base>...HEAD --stat` の base と、restack の下段/上段判定に使う。" in stack
+    assert "references/maintain.md §5" in stack
+    # LANES の直後に置く（レーン割当と並べて読む節）。
+    assert out.index("=== LANES") < out.index("=== STACK") < out.index("=== PROMPTS")
+
+
+def test_render_implement_omits_stack_section():
+    # implement では base が wt switch --create --base と PR 節に既に出る。
+    out = rendered([task("A"), task("B", deps=["A"])])
+    assert "=== STACK" not in out
+
+
+def test_stack_lines_dangling_parent_is_a_note_without_error():
+    # maintain.md は「対応不要な task を spec から削る」と指示するので、残った
+    # depends_on が宙に浮くのは正常運用。ERROR / WARNING は出さず注記に留める。
+    # expected_files を付けて欠落 WARNING を消し、警告がゼロであることを直に断定する。
+    plan = spec([task("B", deps=["X"], expected_files=["b.py"])], mode="maintain")
+    an = po.analyze(plan)
+    assert an.errors == []
+    assert an.warnings == []
+    out = po.render(plan, an, po.Launch(), "/tmp/jg-prompts")
+    stack = out.split("=== STACK")[1].split("=== PROMPTS")[0]
+    assert "  B (br-B) -> base: (spec に無い task: X。gh pr view <PR#> --json baseRefName で確認)" in stack
+
+
+def test_stack_lines_multi_parent_uses_first_parent():
+    lines = po.stack_lines(spec([task("A"), task("B"), task("C", deps=["A", "B"])], mode="maintain"))
+    assert lines == [
+        "  A (br-A) -> base: main",
+        "  B (br-B) -> base: main",
+        "  C (br-C) -> base: br-A (A) (複数親: A, B)",
+    ]
+
+
+def test_maintain_bases_stay_default_base_despite_stack_section():
+    # STACK 節は表示だけ。レーン割当・base 解決は従来どおり全 task が default_base。
+    plan = spec([task("A"), task("B", deps=["A"])], mode="maintain")
+    an = po.analyze(plan)
+    assert an.bases == {"A": "main", "B": "main"}
+
+
 def test_render_maintain_boundary_header_says_merge():
     # maintain は既存 worktree へ入るので境界ファイルは「生成」ではなく「マージ」。
     # widen_boundary.sh で広げた分が保たれる旨と、一覧が spec 側の宣言のみである旨を出す。

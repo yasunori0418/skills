@@ -417,6 +417,36 @@ def independent(plan: Plan) -> Plan:
     )
 
 
+def stack_lines(plan: Plan) -> list[str]:
+    """spec の depends_on から見た「PR の base」の一覧（純粋）。
+
+    maintain はレーン割当・base 解決から depends_on を落とすので（independent）、
+    元 plan を読んで stack 関係だけを表示用に復元する。ここでの base は表示専用で、
+    Analysis.bases（実際に渡す base）には影響しない。
+
+    先頭親が spec に無い場合は注記に留めて ERROR / WARNING を出さない
+    （maintain.md は「対応不要な task を spec から削る」と指示しており、残った参照が
+    宙に浮くのは正常運用。理由は Mode.checks_dependency_graph と同じ）。
+    """
+    by_id = {t.id: t for t in plan.tasks}
+    lines: list[str] = []
+    for t in sorted(plan.tasks, key=lambda x: x.id):
+        if not t.depends_on:
+            base = f"base: {plan.default_base}"
+        else:
+            parent = t.depends_on[0]
+            if parent in by_id:
+                base = f"base: {by_id[parent].branch} ({parent})"
+            else:
+                base = (
+                    f"base: (spec に無い task: {parent}。"
+                    "gh pr view <PR#> --json baseRefName で確認)"
+                )
+        multi = f" (複数親: {', '.join(t.depends_on)})" if len(t.depends_on) > 1 else ""
+        lines.append(f"  {t.id} ({t.branch}) -> {base}{multi}")
+    return lines
+
+
 def analyze(plan: Plan) -> Analysis:
     """検証 + レベル/base/レーン算出を 1 つの純粋関数に集約。"""
     errors: list[str] = []
@@ -807,6 +837,8 @@ def render(
     maintain では全 task が独立レーンなので tab 作成も PR 作成ゲートも出さず、流し込みは
     `wt switch ... -x claude`（--create なし）になる。PR / VERIFY 節も出力しない
     （SCHEDULE / LANES / BOUNDARY / MONITOR は mode ごとに文言が変わる）。
+    代わりに LANES の直後へ STACK 節を出し、レーン割当から落ちた spec の stack 関係
+    （どの PR がどの PR の上に載るか）を表示だけする。
     """
     out: list[str] = []
     out.append("=== VALIDATION ===")
@@ -842,6 +874,16 @@ def render(
     for i, lane in enumerate(an.lanes):
         chain = " -> ".join(lane)
         out.append(f"  lane {i}: {chain}")
+
+    # レーンが依存グラフに従わない maintain だけ、spec の stack 関係を別節で見せる
+    # （implement では base が wt switch --create --base と PR 節に既に出る）。
+    if not plan.mode.lanes_follow_dependency_graph:
+        out.append("\n=== STACK (spec の depends_on から見た PR の base。レーン割当には使わない) ===")
+        out.append(
+            "push 承認時の `git diff <base>...HEAD --stat` の base と、restack の下段/上段判定に使う。"
+        )
+        out.extend(stack_lines(plan))
+        out.append("下段 push 後の上段の載せ替えは references/maintain.md §5。")
 
     declared = [t for t in sorted(plan.tasks, key=lambda x: x.id) if t.boundary]
     if declared:
