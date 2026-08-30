@@ -15,7 +15,7 @@ allowed-tools: Bash, Read, AskUserQuestion, ExitPlanMode
 
 1. **herdr 必須。** `<SKILL>/scripts/preflight.sh` を実行し、前提条件（HERDR_ENV・ツール）が揃っているかを確認する。揃っていなければ WARNING を伝えて停止する。
 2. **タスクは直列・並列混在のグラフ。** 無理に並列化しない。依存があるなら stacked（直列）に積み、独立なら並列に走らせる。グラフの形はタスクの内容から決まるのであって、並列度を稼ぐために依存を無視しない。
-3. **worktree・起動コマンドはスクリプトが生成する。** worktree は `wt`（worktrunk）で作られ、常に `--base <解決済み base>` が明示される。手で組み立てない。
+3. **worktree・起動コマンドはスクリプトが生成する。** worktree は `wt`（worktrunk）で作られ、`--base <解決済み base>` が必ず明示される（既存 worktree へ入る `mode: "maintain"` を除く。Phase 4.5 参照）。手で組み立てない。
 4. **stacked の起動ゲートは「前段の PR 作成」。** コミット数到達をゲートにすると前段の収束修正（amend）で下流の base がずれ、PR diff 汚染と restack を誘発する。後段は `gh pr list --head <前段ブランチ>` で PR の存在を確認してから起動する。
 5. **push と PR 作成は計画承認済みの前提。** Phase 1 の plan 承認がそのまま push・`/pr-create` の承認を兼ねる。親は計画の範囲内である限り、各レーンの対話ゲートに自分で応答し、個別にユーザーへ確認しない。ユーザーへ上げるのは**計画の範囲外だけ**（境界の拡大要求・スコープ逸脱・計画の前提と実態の食い違い）。範囲内かどうかの判定は lane-ops の判定基準表に従い、その除外リスト（仕様の解釈変更・検査の緩和・計画に無い型/関数の追加など）に当たる裁定は親が下さない。除外リストに当たる裁定は handoff に「ユーザー確認済み」でしか記録できない。
 6. **レーンの操縦・監視・承認代行は lane-ops スキルに従う。** 指示送信・blocked 検知・報告受信・機械検証・境界拡張はすべて lane-ops の運用ループとスクリプトで行う。job-graph が定めるのはグラフと起動までであり、運用規約を重複して定義しない。
@@ -105,6 +105,12 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 
 各ワーカーは `/review-converge` 収束後・計画突合（`check_scope.py --base`）の PASS 後に自分で `/pr-create [base]` を実行する（規約で指示済み）。PR 報告を受けたら `references/scope-gate.md` の手順で突合し、**PASS のときだけ**凍結確認・次段起動へ進む。FAIL は次段を起動せずユーザーの裁定を待つ（分離・削除の指示を親が自分で出さない）。
 
+### Phase 4.5: レビュー対応
+
+PR に付いたレビュー指摘へレーンで対応するフェーズ。spec の top-level に `"mode": "maintain"` を足して**元の spec を再利用**し、`prompt` を指摘の内容へ差し替えて起動する。maintain では起動が既存 worktree への `wt switch`（`--create` なし）になり、`depends_on` を無視して全 task が独立レーン（wave 0）になり、ワーカー規約が `/review-converge`・`/pr-create` 禁止 + **push 都度の親承認**へ切り替わる。手順・注意（既存 worktree では `pre-start` / `post-start` が走らない等）は `references/maintain.md`。
+
+対応する指摘の取捨選択はユーザーが決める（親が判断基準を自分で作らない）。push 承認は計画承認で代替せず、`verify_lane.sh` と差分の目視で裏取りしてから出す。
+
 ### Phase 5: 後始末
 
 - 進捗確認: `wt list`
@@ -117,4 +123,4 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 
 - `lane-ops`（Phase 3〜4 の実体）/ `commit-plan`（Phase 1）/ `review-converge`・`pr-create`（各ワーカーが実行）/ `post-merge-cleanup`（Phase 5）
 - `herdr` / `worktrunk`: herdr CLI・`wt` の一般規約が要るとき
-- `references/`: `spec.md`（spec のフィールド表と `expected_*` の起草基準）/ `dependency-analysis.md`（依存辺・境界の判定基準）/ `launch.md`（COMMANDS の解説）/ `boundary.md`（境界ファイルと deny 後のフロー）/ `scope-gate.md`（Phase 4 の計画突合と FAIL 時の処置）/ `restack.md`（下段変更時の載せ替え）/ `handoff.md`（セッション跨ぎ引き継ぎ書の様式と生成規約）
+- `references/`: `spec.md`（spec のフィールド表と `expected_*` の起草基準）/ `dependency-analysis.md`（依存辺・境界の判定基準）/ `launch.md`（COMMANDS の解説）/ `boundary.md`（境界ファイルと deny 後のフロー）/ `scope-gate.md`（Phase 4 の計画突合と FAIL 時の処置）/ `maintain.md`（Phase 4.5 のレビュー対応）/ `restack.md`（下段変更時の載せ替え）/ `handoff.md`（セッション跨ぎ引き継ぎ書の様式と生成規約）
