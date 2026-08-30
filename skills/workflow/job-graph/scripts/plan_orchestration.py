@@ -382,6 +382,8 @@ def analyze(plan: Plan) -> Analysis:
     # maintain は depends_on を無視するので、その検証も掛けない。検証を残すと、
     # maintain.md が指示する「対応不要な task を spec から削る」操作で残った task の
     # depends_on が宙に浮き、致命的エラーで COMMANDS が出なくなる。
+    # この名前は依存グラフ検証の on/off 専用。他の mode 分岐へ使い回さない
+    # （expected_files の WARNING のように、依存グラフと無関係な分岐は mode を直接見る）。
     graph_checked = plan.mode != "maintain"
     idset = set(ids)
     for t in plan.tasks:
@@ -895,7 +897,8 @@ def render(
     if plan.mode == "maintain":
         out.append(
             "# push 承認:    ワーカーは push 前に停止して「push 承認待ち」を報告する。"
-            "裏取りしてから承認する（手順は references/maintain.md）"
+            "裏取りしてから承認する（手順は references/maintain.md）。"
+            "stacked なら下段から先に捌く（上段を先に通すと restack が二度手間になる）"
         )
         out.append("# ワーカーの報告（[lane-ops:report ...]）は自己申告。必ず裏取りしてから承認する")
     else:

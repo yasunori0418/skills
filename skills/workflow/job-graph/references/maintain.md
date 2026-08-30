@@ -3,9 +3,9 @@
 PR 作成後、レビュー指摘への対応をレーンに担わせる手順。実装フェーズ（Phase 0〜4）で
 使った worktree・ブランチ・PR がそのまま残っている状態を入口にする。
 
-implement との違いは spec の top-level に `"mode": "maintain"` を足すことだけで、
-以降の起動コマンド・レーン割当・ワーカー規約の切り替えは `plan_orchestration.py` と
-lane-ops の `worker_contract.py` が決定論的に行う。
+spec の top-level に `"mode": "maintain"` を足せば、起動コマンド・レーン割当・ワーカー規約の
+切り替えは `plan_orchestration.py` と lane-ops の `worker_contract.py` が決定論的に行う
+（spec 側で他に要る調整は §2。特に `plan` は消すか実在パスにしないと起動できない）。
 
 | | implement | maintain |
 | --- | --- | --- |
@@ -76,6 +76,24 @@ grep -n 'wt switch' tmp_claude/<job>/job-graph/prompts/launch_*.sh
 `--create` が残っていると既存 worktree に対して `Path occupied` で失敗し、レーンが
 起動しない（起動失敗は pane に残るので、実行後に `herdr agent read <pane>` で確認する）。
 
+### 起動前に閉じる: 実装フェーズのレーン
+
+**実装フェーズの pane / workspace が生きたまま maintain を起動しない。** maintain は既存
+worktree へ入るので、implement 期のレーンが残っていると**同じ worktree・同じブランチで
+claude が 2 つ動く**。未コミット変更の巻き込みコミット・git の index lock 競合・
+`verify_lane.sh` の裏取り汚染が起きる。`wt switch`（`--create` なし）はこの状況でも
+エラーにならず素通りするので、機械的な歯止めが無い。
+
+さらに workspace のラベルは implement 期と同じブランチ名になるため、旧 workspace が
+残っていると**同じラベルが 2 つ並ぶ**。lane-ops はラベル引き（`workspace list | select(.label == ...) | head -n1`）で
+workspace を解決するので、親の指示送信・push 承認が旧 pane へ届く経路が残る。
+
+```sh
+wt list                                                   # worktree の所在を確認
+herdr --session "$HSESSION" agent list                    # 生きている claude を確認
+herdr --session "$HSESSION" workspace close <旧 workspace>  # 実装フェーズのレーンを閉じる
+```
+
 ### 注意: 境界ファイルは上書きされる（widen した分が巻き戻る）
 
 境界宣言のある task の起動は、implement と同じ bootstrap（`-x bash --`）を通り、
@@ -84,7 +102,7 @@ grep -n 'wt switch' tmp_claude/<job>/job-graph/prompts/launch_*.sh
 この上書きで**無言で巻き戻る**。task-boundary hook は呼び出しのたびにファイルを読み直すため
 狭まりは即座に効き、広げてもらったはずの範囲でワーカーが deny を食って停止する。
 
-起動前に、既存の境界ファイルと spec を突き合わせる:
+起動前に、既存の境界ファイルと出力の `BOUNDARY` 節を突き合わせる:
 
 ```sh
 # 実装フェーズで実際に許可されていた範囲
@@ -108,7 +126,7 @@ hook も沈黙する）。
 環境は実装フェーズで整った状態のまま引き継がれる前提で起動する。環境変数や
 `.envrc` の再設定が要るなら、起動後に `send_instruction.sh` でワーカーへ指示する。
 
-### 注意: worktree が消えている場合
+### 注意: worktree が消えている・使えない場合
 
 worktree だけ削除されていてブランチが残っている場合、`wt switch <branch>` は
 worktree を**新規作成する**（ブランチが既存なので成功する）。このとき:
@@ -116,6 +134,15 @@ worktree を**新規作成する**（ブランチが既存なので成功する�
 - `pre-start` / `post-start` は走る（新規作成のため）
 - **未コミットの変更は復元されない**。実装フェーズで push していなかった作業は
   失われている。起動前に `wt list` で worktree の有無を確認する
+
+対象ブランチが別の worktree で checkout 済みのときは `wt switch` 自体が失敗する。
+maintain は全レーンを同時に起動するため、**複数の起動失敗が同時に埋もれる**。
+起動直後は watch を張る前に、全 pane を直接見て生存を確かめる:
+
+```sh
+herdr --session "$HSESSION" agent list                    # 起動した全 pane が並ぶか
+herdr --session "$HSESSION" pane read <pane> --lines 40   # 並ばない pane は shell エラーを読む
+```
 
 ## 3. 監視 — Phase 3 と同じ運用ループ
 
@@ -154,9 +181,17 @@ stacked 構成では、下段の PR にレビュー対応のコミットが積�
 handoff.md の控え・`gh pr view <PR#> --json baseRefName` のいずれかで確認する。
 
 maintain は全レーンを同時に起動するので、**下段と上段のレーンが並行して修正している**
-状態になりうる。載せ替えは上段のワーカーが作業していない時点（push 完了報告の直後など）を
-選び、載せ替え後は「base を変えたので該当ファイルを読み直せ」と `send_instruction.sh` で
-伝える（`restack.md` の役割分担どおり、`rebase` はワーカー・`reset` は親）。
+状態になりうる。次段ゲートが無い以上「上段が今は止まっている」という観測は次の瞬間に
+崩れるため、載せ替えの前に**上段へ明示的に停止を指示する**:
+
+1. `send_instruction.sh` で上段へ「restack するので手を止めて待て」と伝える
+2. `verify_lane.sh` で上段が停止し未コミット変更が無いことを確かめる
+3. `restack.md` の手順で載せ替える（`rebase` はワーカー・`reset` は親）
+4. 載せ替え後に「base を変えたので `git log --oneline -5` で確認し、該当ファイルを
+   読み直してから再開」と伝える
+
+複数レーンの push 承認待ちが同時に届いたときは、**stacked の下段から先に捌く**
+（上段を先に通すと下段 push のたびに restack が二度手間になる）。
 
 ## 6. 完了条件
 

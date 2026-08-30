@@ -431,10 +431,13 @@ def test_launch_script_uses_wt_and_prompt_file():
 def test_launch_script_maintain_switches_into_existing_worktree():
     # maintain は既存 worktree（ブランチ作成済み・PR 済み）へ入る。--create を付けると
     # Path occupied で失敗するため、--create も --base も外した素の switch にする。
-    body = launch_body([task("A")], mode="maintain")["A"]
+    # default_base を既定から変えて、base の値そのものが漏れないことまで見る
+    # （既定の "main" のままだと「落ちている」のか「たまたま一致」なのか区別できない）。
+    body = launch_body([task("A")], default_base="develop", mode="maintain")["A"]
     assert "wt switch br-A -x claude --" in body
     assert "--create" not in body
     assert "--base" not in body
+    assert "develop" not in body
 
 
 def test_launch_script_maintain_keeps_boundary_bootstrap():
@@ -455,12 +458,13 @@ def test_launch_script_implement_keeps_create_and_base():
 
 
 def test_launch_script_header_comment_states_where_it_lands():
-    # ヘッダコメントの mode 分岐を両側とも断定する。
+    # ヘッダコメントの mode 分岐を両側とも断定する。maintain 側は base を隠すのが
+    # 目的の分岐なので、base= が漏れていないことまで見る。
     assert "# job-graph launch: A (br-A) base=main" in launch_body([task("A")])["A"]
-    assert (
-        "# job-graph launch: A (br-A) 既存 worktree へ switch"
-        in launch_body([task("A")], mode="maintain")["A"]
-    )
+    maintain = launch_body([task("A")], default_base="develop", mode="maintain")["A"]
+    header = maintain.splitlines()[1]
+    assert header == "# job-graph launch: A (br-A) 既存 worktree へ switch"
+    assert "base=" not in header
 
 
 def test_render_pane_run_only_references_launch_script():
