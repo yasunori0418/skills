@@ -222,6 +222,8 @@ def test_parse_task_rejects_unknown_mode():
     with pytest.raises(wc.ContractError):
         wc.parse_task({"mode": "maintainance"})
     with pytest.raises(wc.ContractError):
+        wc.parse_task({"mode": "MAINTAIN"})
+    with pytest.raises(wc.ContractError):
         wc.parse_task({"mode": 1})
 
 
@@ -262,7 +264,7 @@ def test_maintain_push_requires_parent_approval():
     s = wc.render(task(mode="maintain"))
     assert "push・force-push は親の承認を得てから実行する" in s
     assert "計画承認済み扱いにしない" in s
-    assert "push 承認待ち" in s
+    assert "push 前に報告コマンドで「push 承認待ち」を報告し、親の応答を待ってから実行する" in s
     assert "個別の確認へ回さず実行する" not in s
 
 
@@ -288,11 +290,9 @@ def test_maintain_structural_escalation_scoped_to_findings():
 
 def test_maintain_milestones_replace_converge_and_pr():
     s = wc.render(task(mode="maintain"))
-    assert "push 承認待ち" in s
+    assert wc.MILESTONES_MAINTAIN in s
     assert "review-converge 収束" not in s
     assert "PR 作成（番号付き）" not in s
-    assert "最初のコミット完了" in s
-    assert "push 完了" in s
 
 
 def test_maintain_scope_clause_drops_review_converge_precedence():
