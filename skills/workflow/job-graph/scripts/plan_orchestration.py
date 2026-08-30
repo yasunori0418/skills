@@ -47,6 +47,7 @@ spec の形:
 {
   "default_base": "main",
   "plan": "tmp_claude/<job>/plan.md",
+  "mode": "implement",
   "tasks": [
     {"id": "A",  "branch": "refactor-logger",  "depends_on": [],     "prompt": "...",
      "boundary": ["pkg/logger/**"], "issue": 123,
@@ -66,6 +67,8 @@ spec の形:
 - model / permission_mode / effort / boundary の意味は parallel-worktree と同じ。
 - plan は計画ファイルのパス（相対なら cwd 基準で絶対化。指定されていて存在しなければ ERROR）。
   ワーカー規約の「計画の参照」条項に載り、review-converge のグラウンドトゥルースになる。
+- mode はジョブ全体の性質（implement = 実装〜PR 作成 / maintain = PR 作成後のレビュー対応）。
+  省略時 implement。maintain の運用は references/maintain.md。
 - expected_files / expected_scale は計画に書かれた変更ファイル一覧（glob 不可）と規模目安
   （追加+削除の行数）。check_scope.py の突合基準になり、ワーカー規約（PR 前）と VERIFY 節
   （親が PR に対して行う）の両方に埋め込まれる。expected_files が無い task は WARNING
@@ -101,6 +104,10 @@ from pathlib import Path
 PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
+# ジョブ全体の性質。lane-ops worker_contract.py の MODES と同じ語彙。
+# implement = 実装 → PR 作成 / maintain = PR 作成後のレビュー対応（Phase 4.5）。
+MODES = ("implement", "maintain")
+
 
 class SpecError(Exception):
     """spec の構造そのものが壊れていて解析不能な場合。"""
@@ -132,6 +139,8 @@ class Plan:
     tasks: tuple[Task, ...]
     # 計画ファイルの絶対パス。空 = 未指定（ワーカー規約に計画参照を載せない）。
     plan: str = ""
+    # ジョブ全体のモード（MODES のいずれか）。task ごとの混在は想定しない。
+    mode: str = "implement"
 
 
 @dataclass(frozen=True)
@@ -224,7 +233,13 @@ def parse_spec(data: object) -> Plan:
     if not isinstance(plan_raw, str):
         raise SpecError("plan は文字列でない")
     plan_path = os.path.abspath(plan_raw.strip()) if plan_raw.strip() else ""
-    return Plan(default_base=default_base, tasks=tuple(tasks), plan=plan_path)
+    mode_raw = data.get("mode", "implement") or "implement"
+    if not isinstance(mode_raw, str):
+        raise SpecError("mode は文字列でない")
+    mode = mode_raw.strip()
+    if mode not in MODES:
+        raise SpecError(f"mode は {' / '.join(MODES)} のいずれかでない: {mode!r}")
+    return Plan(default_base=default_base, tasks=tuple(tasks), plan=plan_path, mode=mode)
 
 
 # 境界宣言に必ず含める glob。PR 本文ドラフト等の一時出力先（tmp_claude/）が
@@ -510,6 +525,7 @@ class ContractPayload:
     parent: str
     plan: str
     scope_check: str
+    mode: str = "implement"
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
@@ -527,6 +543,7 @@ def contract_payload(task: Task, base: str, plan: Plan, launch: Launch) -> Contr
         parent=launch.parent_name,
         plan=plan.plan,
         scope_check=scope_check_command(task, base),
+        mode=plan.mode,
     )
 
 

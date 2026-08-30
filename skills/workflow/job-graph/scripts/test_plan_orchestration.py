@@ -14,8 +14,8 @@ import pytest
 import plan_orchestration as po
 
 
-def spec(tasks, default_base="main"):
-    return po.parse_spec({"default_base": default_base, "tasks": tasks})
+def spec(tasks, default_base="main", **kw):
+    return po.parse_spec({"default_base": default_base, "tasks": tasks, **kw})
 
 
 def task(id, branch=None, deps=(), **kw):
@@ -46,6 +46,21 @@ def test_parse_spec_rejects_bad_issue():
         spec([task("A", issue="123")])
     with pytest.raises(po.SpecError):
         spec([task("A", issue=-1)])
+
+
+def test_parse_spec_mode_defaults_to_implement():
+    assert spec([task("A")]).mode == "implement"
+
+
+def test_parse_spec_accepts_maintain_mode():
+    assert spec([task("A")], mode="maintain").mode == "maintain"
+
+
+def test_parse_spec_rejects_unknown_mode():
+    with pytest.raises(po.SpecError):
+        spec([task("A")], mode="mantain")
+    with pytest.raises(po.SpecError):
+        spec([task("A")], mode=1)
 
 
 def test_parse_spec_rejects_empty_tasks():
@@ -225,6 +240,26 @@ def test_contract_payload_to_json_carries_plan_and_scope_check():
     assert data["plan"] == "/abs/plan.md"
     assert data["scope_check"].endswith("--expected-file a.py")
     assert data["boundary"] == ["src/**", "tmp_claude/**"]
+    assert data["mode"] == "implement"
+
+
+def test_contract_payload_carries_plan_mode():
+    # mode は top-level（ジョブ全体の性質）なので plan から流す。
+    t = spec([task("A")]).tasks[0]
+    maintain = po.Plan(default_base="main", tasks=(), mode="maintain")
+    assert po.contract_payload(t, "main", maintain, po.Launch()).mode == "maintain"
+    assert json.loads(
+        po.contract_payload(t, "main", maintain, po.Launch()).to_json()
+    )["mode"] == "maintain"
+
+
+def test_full_prompt_maintain_uses_maintain_contract():
+    # lane-ops 側の maintain 規約（push 親承認・pr-create 禁止）が連結されること。
+    plan = spec([task("A")], mode="maintain")
+    out = po.full_prompt(plan.tasks[0], "main", plan, po.Launch(parent_name="orc"))
+    assert "`/review-converge`・`/pr-create` は実行しない" in out
+    assert "push 前に報告コマンドで「push 承認待ち」を報告し" in out
+    assert "PR 作成後の凍結" not in out
 
 
 def test_full_prompt_embeds_scope_check_and_plan():
