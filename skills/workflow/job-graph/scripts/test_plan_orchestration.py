@@ -182,6 +182,17 @@ def test_lanes_serial_chain_shares_lane():
     assert lanes == (("A", "B", "C"),)
 
 
+def test_lanes_maintain_ignores_depends_on():
+    # maintain では全 task を独立レーン扱いにする（起動順序は指摘の内容次第で
+    # 決まり、前段の PR 作成というゲートは空回りする）。
+    plan = spec([task("A"), task("B", deps=["A"]), task("C", deps=["B"])], mode="maintain")
+    an = po.analyze(plan)
+    assert an.errors == []
+    assert an.levels == {"A": 0, "B": 0, "C": 0}
+    assert an.lanes == (("A",), ("B",), ("C",))
+    assert an.bases == {"A": "main", "B": "main", "C": "main"}
+
+
 def test_lanes_branching_starts_new_lanes():
     lanes, lane_of = lanes_of([task("A"), task("B", deps=["A"]), task("C", deps=["A"])])
     assert lanes == (("A",), ("B",), ("C",))
@@ -275,8 +286,8 @@ def test_full_prompt_embeds_scope_check_and_plan():
 # ------------------------------------------------------------
 
 
-def rendered(tasks, launch=None, prompt_dir="/tmp/jg-prompts", default_base="main"):
-    plan = spec(tasks, default_base=default_base)
+def rendered(tasks, launch=None, prompt_dir="/tmp/jg-prompts", default_base="main", **kw):
+    plan = spec(tasks, default_base=default_base, **kw)
     an = po.analyze(plan)
     assert an.errors == []
     return po.render(plan, an, launch or po.Launch(), prompt_dir)
@@ -341,24 +352,62 @@ def test_render_stacked_gate_is_pr_creation():
     assert "gh pr list --head br-A" in out
 
 
-def launch_body(tasks, launch=None, prompt_dir="/tmp/jg-prompts", default_base="main"):
+def test_render_maintain_has_no_stacked_gate():
+    # maintain は wave 0 のみ・全レーン同時起動。前段の PR 作成ゲートは出さない。
+    out = rendered([task("A"), task("B", deps=["A"])], mode="maintain")
+    assert "PR 作成を確認してから起動" not in out
+    assert "後続ウェーブは依存親の『PR 作成』を確認してから起動する" not in out
+    assert "maintain は depends_on を無視して全 task を wave 0 に置く" in out
+    assert "wave 1" not in out
+    assert out.count('herdr --session "$HSESSION" workspace create') == 2
+    assert "tab create" not in out
+
+
+def launch_body(tasks, launch=None, prompt_dir="/tmp/jg-prompts", default_base="main", **kw):
     """各 task の起動スクリプト本文（task id -> body）。"""
-    plan = spec(tasks, default_base=default_base)
+    plan = spec(tasks, default_base=default_base, **kw)
     an = po.analyze(plan)
     assert an.errors == []
     return {
-        t.id: po.launch_script(t, an.bases[t.id], launch or po.Launch(), prompt_dir).body
+        t.id: po.launch_script(t, an.bases[t.id], plan, launch or po.Launch(), prompt_dir).body
         for t in plan.tasks
     }
 
 
 def test_launch_script_uses_wt_and_prompt_file():
-    script = po.launch_script(spec([task("A")]).tasks[0], "main", po.Launch(), "/tmp/jg-prompts")
+    plan = spec([task("A")])
+    script = po.launch_script(plan.tasks[0], "main", plan, po.Launch(), "/tmp/jg-prompts")
     assert script.path == "/tmp/jg-prompts/launch_A.sh"
     assert script.body.startswith("#!/usr/bin/env bash\n")
     assert "wt switch --create br-A --base main -x claude --" in script.body
     assert "$(cat /tmp/jg-prompts/A.md)" in script.body
     assert "\nexec env -u" in script.body
+
+
+def test_launch_script_maintain_switches_into_existing_worktree():
+    # maintain は既存 worktree（ブランチ作成済み・PR 済み）へ入る。--create を付けると
+    # Path occupied で失敗するため、--create も --base も外した素の switch にする。
+    body = launch_body([task("A")], mode="maintain")["A"]
+    assert "wt switch br-A -x claude --" in body
+    assert "--create" not in body
+    assert "--base" not in body
+
+
+def test_launch_script_maintain_keeps_boundary_bootstrap():
+    # 境界宣言ありの経路（-x bash bootstrap）でも --create / --base だけが外れる。
+    body = launch_body([task("A", boundary=["src/**"])], mode="maintain")["A"]
+    assert "wt switch br-A -x bash --" in body
+    assert "--create" not in body
+    assert "--base" not in body
+    assert "wt-boundary-A" in body
+    assert "task-boundary.json" in body
+
+
+def test_launch_script_implement_keeps_create_and_base():
+    # implement 側は従来どおり --create と解決済み base を明示する（退行検知）。
+    bodies = launch_body([task("A"), task("A2", boundary=["src/**"])])
+    assert "wt switch --create br-A --base main -x claude --" in bodies["A"]
+    assert "wt switch --create br-A2 --base main -x bash --" in bodies["A2"]
 
 
 def test_render_pane_run_only_references_launch_script():
@@ -432,6 +481,17 @@ def test_render_verify_section_lists_pr_form_per_task():
     assert f"python3 {po.CHECK_SCOPE} --pr <A の PR 番号> --expected-file a.py --expected-scale 5" in verify
     assert f"python3 {po.CHECK_SCOPE} --pr <B の PR 番号>" in verify
     assert out.index("=== PR") < out.index("=== VERIFY") < out.index("=== MONITOR")
+
+
+def test_render_maintain_omits_pr_and_verify_sections():
+    # maintain のワーカーは /pr-create を実行せず（PR は既にある）、レビュー対応の
+    # 差分は元計画に無いので計画突合も成立しない。MONITOR は両モードで出す。
+    out = rendered([task("A", expected_files=["a.py"])], mode="maintain")
+    assert "=== PR (" not in out
+    assert "=== VERIFY" not in out
+    assert "/pr-create" not in out
+    assert "check_scope.py" not in out
+    assert "=== MONITOR" in out
 
 
 def test_render_monitor_section_points_to_lane_ops():

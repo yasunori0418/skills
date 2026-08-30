@@ -19,8 +19,10 @@ AI の責務は spec（特に depends_on の意味的判定と boundary の範�
 - 各レーンの claude は独立したセッションなので、起動コマンドの先頭に `env -u` を置いて
   親（オーケストレータ）セッション固有のマーカーを断ち切る（ENV_STRIP_PREFIX）。
   放置するとレーンが親の子プロセスと誤認され、transcript 保存が切られる等の不整合が起きる
-- stacked の起動ゲートは「前段の PR 作成」
-- worktree 生成は常に `wt switch --create --base <解決済み base>`（base は必ず明示する）
+- stacked の起動ゲートは「前段の PR 作成」（implement のみ。maintain は全レーン同時起動）
+- worktree 生成（implement）は `wt switch --create --base <解決済み base>`（base は必ず明示する）。
+  maintain は既存 worktree（ブランチ作成済み・PR 済み）へ入るので `wt switch <branch>`
+  （`--create` を付けると Path occupied で失敗する）
 - ワーカープロンプトは herdr pane へ流し込める長さに限界があるためファイル渡し
   （--prompt-dir 配下に <task-id>.md を書き出し、起動コマンドは "$(cat <path>)" で読む）
 - 起動コマンド自体（env -u ... wt switch ... -x claude ...）も 1 行で数百文字になり、
@@ -78,6 +80,7 @@ spec の形:
 - 依存が無い、または親に複数の子がいる task は新しいレーンを開始する。
 - 親の唯一の子である task は親のレーンに合流する（直列チェーン）。
 - レーン先頭 task の起動が workspace create、合流 task の起動は同 workspace への tab create。
+- maintain では depends_on を無視し、全 task を独立レーン（wave 0）として扱う。
 
 終了コード: 致命的検証エラー（循環・未定義参照・重複・必須欠落）があれば 1、警告のみなら 0。
 
@@ -90,6 +93,7 @@ write_prompts / check_plan_file / main にまとめる。
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import re
@@ -335,6 +339,13 @@ def resolve_base(task: Task, by_id: dict[str, Task], default_base: str) -> str:
     return by_id[task.depends_on[0]].branch
 
 
+def independent(plan: Plan) -> Plan:
+    """全 task の depends_on を落とした Plan（純粋）。maintain のレーン算出に使う。"""
+    return dataclasses.replace(
+        plan, tasks=tuple(dataclasses.replace(t, depends_on=()) for t in plan.tasks)
+    )
+
+
 def analyze(plan: Plan) -> Analysis:
     """検証 + レベル/base/レーン算出を 1 つの純粋関数に集約。"""
     errors: list[str] = []
@@ -376,7 +387,9 @@ def analyze(plan: Plan) -> Analysis:
                 f"task {t.id} は複数親 {list(t.depends_on)} に依存。単純な線形 stack 不可。"
                 "integration ブランチか逐次 rebase を検討（base は先頭親を仮採用）"
             )
-        if not t.expected_files:
+        # maintain は計画突合を行わない（レビュー対応の差分は元計画に無い）ので
+        # expected_files の不足は警告しない。
+        if not t.expected_files and plan.mode != "maintain":
             warnings.append(
                 f"task {t.id} に expected_files が無い。計画突合（check_scope.py）はファイル照合なしに"
                 "縮退する（規模目安のみ、それも無ければ SKIP）。計画の変更ファイル一覧を spec へ落とす"
@@ -389,10 +402,15 @@ def analyze(plan: Plan) -> Analysis:
     if errors:
         return Analysis(errors=errors, warnings=warnings, levels={}, bases={}, lanes=(), lane_of={})
 
-    by_id = {t.id: t for t in plan.tasks}
-    levels = compute_levels(plan)
-    bases = {t.id: resolve_base(t, by_id, plan.default_base) for t in plan.tasks}
-    lanes, lane_of = compute_lanes(plan, levels)
+    # maintain は全 task を独立レーンとして扱う（depends_on を無視する）。レビュー対応の
+    # 起動順序は指摘の内容次第で決まり、「前段の PR 作成」というゲートは空回りする。
+    # 下段 PR に追加コミットが入ったときの上段の載せ替えは references/restack.md の手順として
+    # 親が制御する。
+    graph = independent(plan) if plan.mode == "maintain" else plan
+    by_id = {t.id: t for t in graph.tasks}
+    levels = compute_levels(graph)
+    bases = {t.id: resolve_base(t, by_id, graph.default_base) for t in graph.tasks}
+    lanes, lane_of = compute_lanes(graph, levels)
     return Analysis(
         errors=[], warnings=warnings, levels=levels, bases=bases, lanes=lanes, lane_of=lane_of
     )
@@ -585,8 +603,23 @@ class LaunchScript:
     body: str
 
 
-def launch_script(task: Task, base: str, launch: Launch, prompt_dir: str) -> LaunchScript:
-    """task の起動コマンド（env -u ... wt switch --create ... -x claude|bash ...）を
+def wt_switch(task: Task, base: str, mode: str) -> str:
+    """worktree へ入る `wt switch` 部分（純粋）。mode で --create / --base の有無が変わる。
+
+    implement は worktree を新規生成するので `--create <branch> --base <解決済み base>`。
+    maintain は既存 worktree（ブランチ作成済み・PR 済み）へ入るので素の
+    `wt switch <branch>` にする（既存 worktree に --create を付けると Path occupied で
+    失敗する。--create なしの switch は既存 worktree があればそこへ入り冪等）。
+    """
+    if mode == "maintain":
+        return f"wt switch {shlex.quote(task.branch)}"
+    return f"wt switch --create {shlex.quote(task.branch)} --base {shlex.quote(base)}"
+
+
+def launch_script(
+    task: Task, base: str, plan: Plan, launch: Launch, prompt_dir: str
+) -> LaunchScript:
+    """task の起動コマンド（env -u ... wt switch ... -x claude|bash ...）を
     スクリプト本文として組む（純粋）。
 
     claude 引数列: 起動フラグ -> --remote-control（オプトイン）-> プロンプト（ファイルから
@@ -598,26 +631,26 @@ def launch_script(task: Task, base: str, launch: Launch, prompt_dir: str) -> Lau
     rc_args = f" --remote-control {shlex.quote(sanitize(task.branch))}" if launch.remote_control else ""
     flags_str = "".join(f" {shlex.quote(a)}" for a in launch_flags(task, launch))
     prompt_ref = f'"$(cat {shlex.quote(ppath)})"'
+    switch = wt_switch(task, base, plan.mode)
     if task.boundary:
         # 境界宣言ありは -x bash の bootstrap 経由（worktree 生成後・claude 起動前に
         # 境界ファイルを置く）。境界 JSON は 1 行なので positional で渡す。
         cmd = (
-            f"{ENV_STRIP_PREFIX}"
-            f" wt switch --create {shlex.quote(task.branch)} --base {shlex.quote(base)}"
+            f"{ENV_STRIP_PREFIX} {switch}"
             f" -x bash -- -c {shlex.quote(BOUNDARY_BOOTSTRAP)}"
             f" {shlex.quote('wt-boundary-' + task.id)} {shlex.quote(boundary_json(task))}"
             f"{flags_str}{rc_args} {prompt_ref}"
         )
     else:
         cmd = (
-            f"{ENV_STRIP_PREFIX}"
-            f" wt switch --create {shlex.quote(task.branch)} --base {shlex.quote(base)}"
+            f"{ENV_STRIP_PREFIX} {switch}"
             f" -x claude --{flags_str}{rc_args} {prompt_ref}"
         )
+    where = "既存 worktree へ switch" if plan.mode == "maintain" else f"base={base}"
     body = "\n".join(
         [
             "#!/usr/bin/env bash",
-            f"# job-graph launch: {task.id} ({task.branch}) base={base}",
+            f"# job-graph launch: {task.id} ({task.branch}) {where}",
             "# pane run へ長文を注入せず、このファイルを `bash <path>` で実行する",
             "set -e",
             f"exec {cmd}",
@@ -669,7 +702,10 @@ def render(
     max_level = max(an.levels.values())
 
     out.append("\n=== SCHEDULE (起動ウェーブ) ===")
-    out.append("同一ウェーブ内は並列起動可。後続ウェーブは依存親の『PR 作成』を確認してから起動する。")
+    if plan.mode == "maintain":
+        out.append("maintain は depends_on を無視して全 task を wave 0 に置く（全レーン同時起動）。")
+    else:
+        out.append("同一ウェーブ内は並列起動可。後続ウェーブは依存親の『PR 作成』を確認してから起動する。")
     for level in range(max_level + 1):
         wave = sorted(t.id for t in plan.tasks if an.levels[t.id] == level)
         kind = "独立・並列" if level == 0 else f"stacked {level}段目"
@@ -778,24 +814,27 @@ def render(
                 )
             # 起動コマンド本体は launch_<id>.sh（write_prompts が書き出す）にあり、pane には
             # `bash <path>` だけを流す（長文注入で未実行・切断が起きた実績への対策）。
-            script = launch_script(t, base, launch, prompt_dir)
+            script = launch_script(t, base, plan, launch, prompt_dir)
             out.append(
                 f"herdr --session \"$HSESSION\" pane run \"${pane_var}\""
                 f" {shlex.quote('bash ' + shlex.quote(script.path))}"
             )
 
-    out.append("\n=== PR (各ワーカーが実装・コミット後、/review-converge 収束後に自分で実行) ===")
-    for t in sorted(plan.tasks, key=lambda x: (an.levels[x.id], x.id)):
-        base = an.bases[t.id]
-        arg = "" if base == plan.default_base else f" {base}"
-        note = "（base 省略=デフォルト）" if base == plan.default_base else "（stacked: base=前段）"
-        out.append(f"# {t.id} ({t.branch}): /pr-create{arg}   {note}")
+    # maintain のワーカーは /pr-create を実行せず（PR は既にある）、レビュー対応の差分は
+    # 元計画に無いので計画突合も成立しない。両節を出すと規約が禁じた操作を親へ指示することになる。
+    if plan.mode != "maintain":
+        out.append("\n=== PR (各ワーカーが実装・コミット後、/review-converge 収束後に自分で実行) ===")
+        for t in sorted(plan.tasks, key=lambda x: (an.levels[x.id], x.id)):
+            base = an.bases[t.id]
+            arg = "" if base == plan.default_base else f" {base}"
+            note = "（base 省略=デフォルト）" if base == plan.default_base else "（stacked: base=前段）"
+            out.append(f"# {t.id} ({t.branch}): /pr-create{arg}   {note}")
 
-    out.append("\n=== VERIFY (PR 報告を受けたら親が実行する計画突合。手順は references/scope-gate.md) ===")
-    out.append("# VERDICT: PASS のときだけ凍結確認・次段起動へ進む。FAIL なら次段を起動せずユーザーへ報告する")
-    for t in sorted(plan.tasks, key=lambda x: (an.levels[x.id], x.id)):
-        out.append(f"# {t.id} ({t.branch}):")
-        out.append(f"#   {verify_command(t)}")
+        out.append("\n=== VERIFY (PR 報告を受けたら親が実行する計画突合。手順は references/scope-gate.md) ===")
+        out.append("# VERDICT: PASS のときだけ凍結確認・次段起動へ進む。FAIL なら次段を起動せずユーザーへ報告する")
+        for t in sorted(plan.tasks, key=lambda x: (an.levels[x.id], x.id)):
+            out.append(f"# {t.id} ({t.branch}):")
+            out.append(f"#   {verify_command(t)}")
 
     out.append("\n=== MONITOR (親のゲート監視。lane-ops スキルの運用ループに従う) ===")
     pane_args = "".join(
@@ -820,7 +859,13 @@ def render(
     out.append(
         f"# 報告の裏取り: bash {shlex.quote(str(LANE_OPS_SCRIPTS / 'verify_lane.sh'))} <branch> <worktree>"
     )
-    out.append("# 計画突合:     VERIFY 節の check_scope.py --pr（PR 報告のたびに実行。PASS のときだけ次段へ）")
+    if plan.mode == "maintain":
+        out.append(
+            "# push 承認:    ワーカーは push 前に停止して「push 承認待ち」を報告する。"
+            "裏取りしてから承認する（手順は references/maintain.md）"
+        )
+    else:
+        out.append("# 計画突合:     VERIFY 節の check_scope.py --pr（PR 報告のたびに実行。PASS のときだけ次段へ）")
     out.append("# ワーカーの報告（[lane-ops:report ...]）は自己申告。必ず裏取りしてから次段を起動する")
 
     return "\n".join(out)
@@ -854,7 +899,7 @@ def write_prompts(plan: Plan, an: Analysis, launch: Launch, prompt_dir: str) -> 
         Path(prompt_path(prompt_dir, t)).write_text(
             full_prompt(t, an.bases[t.id], plan, launch), encoding="utf-8"
         )
-        script = launch_script(t, an.bases[t.id], launch, prompt_dir)
+        script = launch_script(t, an.bases[t.id], plan, launch, prompt_dir)
         Path(script.path).write_text(script.body, encoding="utf-8")
 
 
