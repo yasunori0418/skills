@@ -576,6 +576,12 @@ BOUNDARY_BOOTSTRAP = (
     f"mkdir -p {shlex.quote(BOUNDARY_FILE.rsplit('/', 1)[0])}; "
     f"bf={shlex.quote(BOUNDARY_FILE)}; "
     'if [ -e "$bf" ]; then '
+    # jq 不在を書式検査の失敗（2>/dev/null が command not found を飲む）と誤診させない。
+    # 誤診すると操作者が正常な境界ファイルを「壊れている」と読んで消し、widen 分を失う。
+    '  if ! command -v jq >/dev/null 2>&1; then '
+    '    echo "ERROR: jq が無いため既存の境界ファイルとマージできない。起動を中止する: $bf" >&2; '
+    "    exit 1; "
+    "  fi; "
     '  if ! [ -s "$bf" ] || ! jq -e \'type == "object" and ((.allow // []) | type == "array")\' "$bf" >/dev/null 2>&1; then '
     '    echo "ERROR: 既存の境界ファイルが空・不正 JSON・境界の書式でない。起動を中止する（widen_boundary.sh の事故跡の可能性）: $bf" >&2; '
     "    exit 1; "

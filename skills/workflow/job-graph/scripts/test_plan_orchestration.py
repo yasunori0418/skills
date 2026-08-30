@@ -607,6 +607,12 @@ def test_bootstrap_fresh_worktree_writes_declaration(tmp_path):
         ["git", "-C", str(repo), "status", "--porcelain"], capture_output=True, text=True, check=True
     )
     assert status.stdout.strip() == ""
+    # 無視の由来が info/exclude であること（.gitignore 等の偶然の一致ではない）
+    ignored = subprocess.run(
+        ["git", "-C", str(repo), "check-ignore", "-v", po.BOUNDARY_FILE],
+        capture_output=True, text=True, check=True,
+    )
+    assert "info/exclude" in ignored.stdout
 
 
 def test_bootstrap_merges_existing_allow_and_keeps_widened_globs(tmp_path):
@@ -692,9 +698,38 @@ def test_bootstrap_fails_closed_on_broken_existing_file(tmp_path, broken):
     t = spec([task("A", boundary=["src/**"])]).tasks[0]
     proc = run_bootstrap(repo, po.boundary_json(t))
     assert proc.returncode != 0
-    assert "起動を中止する" in proc.stderr
+    # 中止の由来を固定する: 書式検査で止まったのであって、jq 不在の誤診ではない
+    assert "境界の書式でない" in proc.stderr
+    assert "jq が無い" not in proc.stderr
     assert "ARGC=" not in proc.stdout
     assert boundary_file(repo).read_text() == broken
+
+
+def test_bootstrap_fails_closed_without_jq_and_names_the_cause(tmp_path):
+    # jq が無い環境で既存ファイルがあるとき: 書式検査の 2>/dev/null が command not found を
+    # 飲んで「壊れている」と誤診しないよう、jq 不在を名指しして止める（既存ファイルは不変）。
+    import shutil
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("bash", "git", "mkdir", "mktemp", "mv", "rm", "grep", "dirname"):
+        real = shutil.which(tool)
+        assert real, tool
+        (bin_dir / tool).symlink_to(real)
+    repo = git_repo(tmp_path)
+    boundary_file(repo).parent.mkdir()
+    good = json.dumps({"task_id": "A", "branch": "br-A", "allow": ["src/**", "docs/**"]})
+    boundary_file(repo).write_text(good)
+    t = spec([task("A", boundary=["src/**"])]).tasks[0]
+    proc = subprocess.run(
+        ["bash", "-c", BOOTSTRAP_PROBE, "argv0", po.boundary_json(t)],
+        cwd=repo, capture_output=True, text=True, env={"PATH": str(bin_dir)},
+    )
+    assert proc.returncode != 0
+    assert "jq が無い" in proc.stderr
+    assert "境界の書式でない" not in proc.stderr
+    assert "ARGC=" not in proc.stdout
+    assert boundary_file(repo).read_text() == good
 
 
 def test_render_lanes_section():
