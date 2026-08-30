@@ -8,6 +8,7 @@ herdr/wt の実行はしない。
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 
@@ -555,6 +556,182 @@ def test_launch_script_boundary_uses_bootstrap():
     assert "task-boundary.json" in body
 
 
+# ------------------------------------------------------------
+# BOUNDARY_BOOTSTRAP（統合: 実 git repo で bash 実行）
+# ------------------------------------------------------------
+#
+# plan_orchestration.py が生成するのはコマンド文字列だけなので、既存境界ファイルとの
+# マージ・fail-closed が実際に起きるかはここで実行して確認する（parallel-worktree 側の
+# 統合テストと同じく exec claude "$@" だけを引数エコーへ差し替える）。
+
+
+def git_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git = ["git", "-C", str(repo)]
+    subprocess.run(git + ["init", "-q"], check=True)
+    subprocess.run(git + ["config", "user.email", "t@example.com"], check=True)
+    subprocess.run(git + ["config", "user.name", "t"], check=True)
+    subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    return repo
+
+
+BOOTSTRAP_PROBE = po.BOUNDARY_BOOTSTRAP.replace(
+    'exec claude "$@"', 'printf "ARGC=%s\\n" "$#"; printf "ARG=%s\\n" "$@"'
+)
+
+
+def run_bootstrap(repo, decl, *claude_args):
+    return subprocess.run(
+        ["bash", "-c", BOOTSTRAP_PROBE, "argv0", decl, *claude_args],
+        cwd=repo, capture_output=True, text=True,
+    )
+
+
+def boundary_file(repo):
+    return repo / po.BOUNDARY_FILE
+
+
+def test_bootstrap_fresh_worktree_writes_declaration(tmp_path):
+    # 既存ファイルなし（implement / worktree 再作成）: 宣言をそのまま置き、exclude 登録し、
+    # claude 引数を素通しする。
+    repo = git_repo(tmp_path)
+    t = spec([task("A", boundary=["src/**"])]).tasks[0]
+    proc = run_bootstrap(repo, po.boundary_json(t), "--model", "opus", "the prompt")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(boundary_file(repo).read_text()) == {
+        "task_id": "A", "branch": "br-A", "allow": ["src/**", "tmp_claude/**"],
+    }
+    assert "ARGC=3" in proc.stdout and "ARG=the prompt" in proc.stdout
+    status = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain"], capture_output=True, text=True, check=True
+    )
+    assert status.stdout.strip() == ""
+    # 無視の由来が info/exclude であること（.gitignore 等の偶然の一致ではない）
+    ignored = subprocess.run(
+        ["git", "-C", str(repo), "check-ignore", "-v", po.BOUNDARY_FILE],
+        capture_output=True, text=True, check=True,
+    )
+    assert "info/exclude" in ignored.stdout
+
+
+def test_bootstrap_merges_existing_allow_and_keeps_widened_globs(tmp_path):
+    # 既存ファイルあり（maintain が既存 worktree へ入る）: 実装フェーズ中に widen した
+    # docs/** が保たれ、宣言側の新 glob も入る。task_id / branch は宣言が正。
+    repo = git_repo(tmp_path)
+    boundary_file(repo).parent.mkdir()
+    boundary_file(repo).write_text(json.dumps(
+        {"task_id": "old-id", "branch": "br-A", "allow": ["src/**", "tmp_claude/**", "docs/**"]}
+    ))
+    t = spec([task("A", boundary=["src/**", "tests/**"])]).tasks[0]
+    proc = run_bootstrap(repo, po.boundary_json(t))
+    assert proc.returncode == 0, proc.stderr
+    written = json.loads(boundary_file(repo).read_text())
+    assert written["task_id"] == "A" and written["branch"] == "br-A"
+    assert set(written["allow"]) == {"src/**", "tmp_claude/**", "docs/**", "tests/**"}
+    assert len(written["allow"]) == 4  # 重複なし
+    # mv で書き直しても exclude 登録済み ＝ git status に現れない
+    status = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain"], capture_output=True, text=True, check=True
+    )
+    assert status.stdout.strip() == ""
+
+
+def test_bootstrap_merge_keeps_unknown_top_level_keys(tmp_path):
+    # 契約外の top-level キーは既存ファイル側を保持する（widen_boundary.sh が .allow だけを
+    # 書き換えるのと同じ扱い。将来 hook の契約にキーが増えても bootstrap が消さない）。
+    repo = git_repo(tmp_path)
+    boundary_file(repo).parent.mkdir()
+    boundary_file(repo).write_text(json.dumps(
+        {"task_id": "A", "branch": "br-A", "allow": ["src/**"], "note": "kept"}
+    ))
+    t = spec([task("A", boundary=["src/**"])]).tasks[0]
+    proc = run_bootstrap(repo, po.boundary_json(t))
+    assert proc.returncode == 0, proc.stderr
+    written = json.loads(boundary_file(repo).read_text())
+    assert written["note"] == "kept"
+    assert sorted(written["allow"]) == ["src/**", "tmp_claude/**"]
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [{"task_id": "A", "branch": "br-A"}, {"task_id": "A", "branch": "br-A", "allow": None}],
+    ids=["allow-missing", "allow-null"],
+)
+def test_bootstrap_merge_tolerates_missing_allow(tmp_path, existing):
+    # 既存ファイルに allow が無い・null でも (.allow // []) で空扱いにして宣言をそのまま入れる。
+    repo = git_repo(tmp_path)
+    boundary_file(repo).parent.mkdir()
+    boundary_file(repo).write_text(json.dumps(existing))
+    t = spec([task("A", boundary=["src/**"])]).tasks[0]
+    proc = run_bootstrap(repo, po.boundary_json(t))
+    assert proc.returncode == 0, proc.stderr
+    written = json.loads(boundary_file(repo).read_text())
+    assert sorted(written["allow"]) == ["src/**", "tmp_claude/**"]
+
+
+def test_bootstrap_merge_is_idempotent(tmp_path):
+    # 同じ宣言で再起動しても allow は増えず、exclude の行も重複しない。
+    repo = git_repo(tmp_path)
+    t = spec([task("A", boundary=["src/**"])]).tasks[0]
+    for _ in range(3):
+        proc = run_bootstrap(repo, po.boundary_json(t))
+        assert proc.returncode == 0, proc.stderr
+    written = json.loads(boundary_file(repo).read_text())
+    assert sorted(written["allow"]) == ["src/**", "tmp_claude/**"]
+    exclude = repo / ".git" / "info" / "exclude"
+    hits = [ln for ln in exclude.read_text().splitlines() if "task-boundary" in ln]
+    assert hits == [f"/{po.BOUNDARY_FILE}"]
+
+
+@pytest.mark.parametrize(
+    "broken",
+    ["", "{nope", "[1, 2]", '{"task_id": "A", "allow": "src/**"}'],
+    ids=["empty", "invalid-json", "not-an-object", "allow-not-array"],
+)
+def test_bootstrap_fails_closed_on_broken_existing_file(tmp_path, broken):
+    # 既存ファイルが空・不正 JSON（widen_boundary.sh の空 stdin 事故跡など）・妥当な JSON
+    # だが境界の書式でない: 上書きせず exit≠0 で claude を起動しない（事故の痕跡を消さない）。
+    repo = git_repo(tmp_path)
+    boundary_file(repo).parent.mkdir()
+    boundary_file(repo).write_text(broken)
+    t = spec([task("A", boundary=["src/**"])]).tasks[0]
+    proc = run_bootstrap(repo, po.boundary_json(t))
+    assert proc.returncode != 0
+    # 中止の由来を固定する: 書式検査で止まったのであって、jq 不在の誤診ではない
+    assert "境界の書式でない" in proc.stderr
+    assert "jq が無い" not in proc.stderr
+    assert "ARGC=" not in proc.stdout
+    assert boundary_file(repo).read_text() == broken
+
+
+def test_bootstrap_fails_closed_without_jq_and_names_the_cause(tmp_path):
+    # jq が無い環境で既存ファイルがあるとき: 書式検査の 2>/dev/null が command not found を
+    # 飲んで「壊れている」と誤診しないよう、jq 不在を名指しして止める（既存ファイルは不変）。
+    import shutil
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("bash", "git", "mkdir", "mktemp", "mv", "rm", "grep", "dirname"):
+        real = shutil.which(tool)
+        assert real, tool
+        (bin_dir / tool).symlink_to(real)
+    repo = git_repo(tmp_path)
+    boundary_file(repo).parent.mkdir()
+    good = json.dumps({"task_id": "A", "branch": "br-A", "allow": ["src/**", "docs/**"]})
+    boundary_file(repo).write_text(good)
+    t = spec([task("A", boundary=["src/**"])]).tasks[0]
+    proc = subprocess.run(
+        ["bash", "-c", BOOTSTRAP_PROBE, "argv0", po.boundary_json(t)],
+        cwd=repo, capture_output=True, text=True, env={"PATH": str(bin_dir)},
+    )
+    assert proc.returncode != 0
+    assert "jq が無い" in proc.stderr
+    assert "境界の書式でない" not in proc.stderr
+    assert "ARGC=" not in proc.stdout
+    assert boundary_file(repo).read_text() == good
+
+
 def test_render_lanes_section():
     out = rendered([task("A"), task("B", deps=["A"]), task("C")])
     assert "=== LANES" in out
@@ -570,19 +747,19 @@ def test_render_maintain_lanes_header_states_no_tab():
     assert "先頭 task が workspace create、後続段は同 workspace への tab" not in out
 
 
-def test_render_maintain_boundary_header_says_overwrite():
-    # maintain は既存 worktree へ入るので境界ファイルは「生成」ではなく「上書き」。
-    # widen_boundary.sh で広げた分が巻き戻る旨まで出す。
+def test_render_maintain_boundary_header_says_merge():
+    # maintain は既存 worktree へ入るので境界ファイルは「生成」ではなく「マージ」。
+    # widen_boundary.sh で広げた分が保たれる旨と、一覧が spec 側の宣言のみである旨を出す。
     out = rendered([task("A", boundary=["src/**"])], mode="maintain")
-    assert f"既存 worktree の {po.BOUNDARY_FILE} をこの内容で上書きする" in out
-    assert "widen_boundary.sh で広げた glob はこの上書きで巻き戻る" in out
+    assert f"既存 worktree の {po.BOUNDARY_FILE} とこの内容をマージする" in out
+    assert "widen_boundary.sh で広げた glob は保たれる" in out
+    assert "上書き" not in out.split("=== BOUNDARY")[1].split("=== PROMPTS")[0]
     assert "各 worktree に生成する" not in out
-    # implement 側は従来の文言のまま（退行検知）。判定は BOUNDARY 節に限定する
-    # （「上書き」は他の文脈でも使う語なので、出力全体への否定断定にしない）。
+    # implement 側は従来の文言のまま（退行検知）。判定は BOUNDARY 節に限定する。
     impl = rendered([task("A", boundary=["src/**"])])
     impl_boundary = impl.split("=== BOUNDARY")[1].split("=== PROMPTS")[0]
     assert f"各 worktree に生成する {po.BOUNDARY_FILE}" in impl
-    assert "上書きする" not in impl_boundary
+    assert "マージする" not in impl_boundary
 
 
 def test_render_verify_section_lists_pr_form_per_task():

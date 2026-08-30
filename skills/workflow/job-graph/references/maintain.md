@@ -58,7 +58,7 @@ issue 番号は実装フェーズと同じものを使い続ける）。
   implement へ戻して再利用したときに欠落へ気づけるようにするため）
 - **`plan` は消すか、実在するパスにする。** 存在確認だけは mode に依らず走るため、
   実在しないパスが残っていると ERROR で COMMANDS が出力されない
-- **`boundary` は実装フェーズ中に広げた分を反映してから起動する**（下記の注意）
+- `boundary` は実装フェーズと同じ宣言のままでよい。widen した分は起動時のマージで保たれる（下記の注意）
 
 `plan_orchestration.py` の呼び出しは implement と同じ（`--prompt-dir` は
 `tmp_claude/<job>/job-graph/prompts` を再利用してよい。上書きされる）。
@@ -94,30 +94,28 @@ herdr --session "$HSESSION" agent list                    # 生きている clau
 herdr --session "$HSESSION" workspace close <旧 workspace>  # 実装フェーズのレーンを閉じる
 ```
 
-### 注意: 境界ファイルは上書きされる（widen した分が巻き戻る）
+### 注意: 境界ファイルは既存とマージされる（spec の `boundary` は実態より狭くなりうる）
 
-境界宣言のある task の起動は、implement と同じ bootstrap（`-x bash --`）を通り、
-**`.claude/task-boundary.json` を spec の `boundary` で無条件に上書きする**。maintain は
-既存 worktree へ入るので、実装フェーズ中に `widen_boundary.sh`（親専用）で広げた glob は
-この上書きで**無言で巻き戻る**。task-boundary hook は呼び出しのたびにファイルを読み直すため
-狭まりは即座に効き、広げてもらったはずの範囲でワーカーが deny を食って停止する。
+境界宣言のある task の起動は、implement と同じ bootstrap（`-x bash --`）を通る。既存 worktree に
+`.claude/task-boundary.json` があれば上書きせず、**`allow` を既存 ∪ 宣言の和集合**にして書く
+（`task_id` / `branch` は宣言が正）。実装フェーズ中に `widen_boundary.sh`（親専用）で広げた glob は
+このマージで保たれるので、起動前の突き合わせや spec への写しは要らない。
 
-起動前に、既存の境界ファイルと出力の `BOUNDARY` 節を突き合わせる:
+その代わり、**spec の `boundary`（出力の `BOUNDARY` 節）は実際に許可されている範囲より狭いことがある**。
+ワーカーが今どこまで触れるかは worktree 側のファイルを見る:
 
 ```sh
-# 実装フェーズで実際に許可されていた範囲
 cat <worktree>/.claude/task-boundary.json
-# これから書き込まれる範囲（plan_orchestration.py 出力の BOUNDARY 節）
 ```
 
-比較は **`plan_orchestration.py` 出力の `BOUNDARY` 節**と行う（spec の `boundary` 宣言と直接
-比べない。`tmp_claude/**` はスクリプトが自動で足すため、spec 側には無くても worktree 側には
-必ず入っており、widen が無くても差分が出る）。
-
-`BOUNDARY` 節に無い glob が worktree 側にあれば、それが実装フェーズ中に widen された分。
-**spec の `boundary` へ写してから起動する**（起動後に widen し直すより、最初から正しい境界で
-入る方が確実）。境界を宣言していない task はこの問題を持たない（境界ファイルを生成せず、
-hook も沈黙する）。
+既存ファイルが空・不正 JSON・境界の書式でない（object でない / `allow` が配列でない）とき
+（`widen_boundary.sh` の空 stdin 事故跡など）は bootstrap が**起動を中止する**（上書きせず exit≠0。
+pane に `ERROR: 既存の境界ファイルが空・不正 JSON・境界の書式でない` が残る）。
+**消す前に `cat` で中身を見る**: widen 分の glob が入っていれば控えてから直す（消して起動し直すと
+widen 分は宣言側にしか残らない）。pane のエラーが `ERROR: jq が無いため既存の境界ファイルと
+マージできない` なら境界ファイルは壊れていない — jq を入れて起動し直す。起動失敗は「worktree が
+消えている・使えない場合」と同じく全 pane を直接見て拾う。境界を宣言していない task はこの問題を持たない（境界ファイルを
+生成せず、hook も沈黙する）。
 
 ### 注意: 既存 worktree への switch では hook が走らない
 

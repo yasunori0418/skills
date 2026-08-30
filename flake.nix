@@ -105,8 +105,10 @@
               {
                 nativeBuildInputs = [
                   (pkgs.python3.withPackages (ps: [ ps.pytest ]))
-                  # parallel-worktree の boundary bootstrap 統合テストが git を実行する。
+                  # parallel-worktree / job-graph の boundary bootstrap 統合テストが git を実行する。
                   pkgs.git
+                  # job-graph の boundary bootstrap が既存境界ファイルとのマージに jq を使う。
+                  pkgs.jq
                 ];
                 env = {
                   # session-insights のテストが Path.home() を踏む。
