@@ -13,7 +13,7 @@
 
 ## 起動スクリプト方式（pane run には `bash <path>` だけを流す）
 
-起動コマンド本体（`env -u … wt switch --create … -x claude|bash …`）は `plan_orchestration.py` が `<prompt-dir>/launch_<task-id>.sh` へ書き出し、pane には `bash <path>` の短い 1 行だけを流す。
+起動コマンド本体（`env -u … wt switch … -x claude|bash …`）は `plan_orchestration.py` が `<prompt-dir>/launch_<task-id>.sh` へ書き出し、pane には `bash <path>` の短い 1 行だけを流す。
 
 起動コマンドは 1 行で数百文字（境界 bootstrap を含むと 1000 文字超）になり、`pane run` への長文注入で **pane に入力されたまま実行されない**・**途中で切れて壊れたコマンドが走る** 事故が実運用で起きた。スクリプト化すれば pane へ渡す文字列は短く一定になり、起動コマンドの完全形がファイルとして残る（handoff からの再投入も `bash <path>` で済む）。スクリプトの中身は下記の解説どおりで、**手で書き換えない**（spec を直して再生成する）。
 
@@ -34,7 +34,7 @@ herdr --session "$HSESSION" pane run "$PANE_A" 'bash <prompt-dir>/launch_A.sh'
 - workspace のラベルはレーン先頭のブランチ名。並列レーンは workspace が並ぶ
 - `--no-focus` でユーザーの現在フォーカスを奪わない。ID は JSON 応答から jq で掴む（予測しない）
 - `wt switch --create` が worktree を作り、`-x claude` で wt プロセスが claude に置き換わる。herdr は pane 内の claude をエージェントとして自動認識する（スクリプトは `exec` で wt に置き換わるので bash は残らない）
-- **`--base` は常に明示**される。省略すると wt はリポジトリの default branch から切るため、spec の意図と食い違う事故が起きる
+- **`--base` は常に明示**される。省略すると wt はリポジトリの default branch から切るため、spec の意図と食い違う事故が起きる（**`mode: "maintain"` を除く**。下記「maintain の起動」参照）
 - プロンプトは複数行のためファイル渡し。`"$(cat <path>)"` はスクリプトを実行する bash が展開し、wt が EXECUTE_ARGS として shell-escape して claude に 1 引数で渡す
 
 ## 直列の次段（同 workspace への tab 追加）
@@ -47,7 +47,21 @@ resp=$(herdr --session "$HSESSION" tab create --workspace "$WS_LANE_0" --cwd "$P
 PANE_B=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
 ```
 
-起動コマンドの形はレーン先頭と同じ（`--base` が前段ブランチになるだけ）。起動ゲートは SKILL.md の制約 4 に従う。
+起動コマンドの形はレーン先頭と同じ（`--base` が前段ブランチになるだけ）。起動ゲートは SKILL.md の制約 4 に従う。**`mode: "maintain"` では tab 追加も起動ゲートも起きない**（全 task が独立レーン = workspace になり、wave 0 でまとめて起動する）。
+
+## maintain の起動（既存 worktree へ入る）
+
+`mode: "maintain"`（Phase 4.5 のレビュー対応。手順は `maintain.md`）では、対象のブランチと worktree が実装フェーズで既に作られている。そのため起動コマンドから `--create` と `--base` が外れ、素の `wt switch <branch>` になる。
+
+```bash
+# launch_A.sh の中身（maintain）
+exec env -u CLAUDE_CODE_CHILD_SESSION -u … wt switch feat-a -x claude -- "$(cat <prompt-dir>/A.md)"
+```
+
+- **`--create` を既存 worktree に付けると `Path occupied` で失敗する**。`--create` なしの `wt switch` は既存 worktree があればそこへ入るだけで冪等
+- base の指定は無い。既存ブランチへ入るだけなので base は関与しない（worktree が消えていた場合だけ `wt switch` が新規作成し、そのときは既存ブランチの tip から復元される）
+- `-x claude` / `-x bash --`（境界宣言あり）の使い分けは implement と同じ
+- 既存 worktree への switch では `pre-start` / `post-start` フックが**走らない**（`direnv allow`・`.env` コピー等は worktree 作成時のみ）。環境が整っている前提で起動する
 
 ## 起動オプション
 

@@ -15,9 +15,9 @@ allowed-tools: Bash, Read, AskUserQuestion, ExitPlanMode
 
 1. **herdr 必須。** `<SKILL>/scripts/preflight.sh` を実行し、前提条件（HERDR_ENV・ツール）が揃っているかを確認する。揃っていなければ WARNING を伝えて停止する。
 2. **タスクは直列・並列混在のグラフ。** 無理に並列化しない。依存があるなら stacked（直列）に積み、独立なら並列に走らせる。グラフの形はタスクの内容から決まるのであって、並列度を稼ぐために依存を無視しない。
-3. **worktree・起動コマンドはスクリプトが生成する。** worktree は `wt`（worktrunk）で作られ、常に `--base <解決済み base>` が明示される。手で組み立てない。
-4. **stacked の起動ゲートは「前段の PR 作成」。** コミット数到達をゲートにすると前段の収束修正（amend）で下流の base がずれ、PR diff 汚染と restack を誘発する。後段は `gh pr list --head <前段ブランチ>` で PR の存在を確認してから起動する。
-5. **push と PR 作成は計画承認済みの前提。** Phase 1 の plan 承認がそのまま push・`/pr-create` の承認を兼ねる。親は計画の範囲内である限り、各レーンの対話ゲートに自分で応答し、個別にユーザーへ確認しない。ユーザーへ上げるのは**計画の範囲外だけ**（境界の拡大要求・スコープ逸脱・計画の前提と実態の食い違い）。範囲内かどうかの判定は lane-ops の判定基準表に従い、その除外リスト（仕様の解釈変更・検査の緩和・計画に無い型/関数の追加など）に当たる裁定は親が下さない。除外リストに当たる裁定は handoff に「ユーザー確認済み」でしか記録できない。
+3. **worktree・起動コマンドはスクリプトが生成する。** worktree は `wt`（worktrunk）で作られ、`--base <解決済み base>` が必ず明示される（既存 worktree へ入る `mode: "maintain"` を除く。Phase 4.5 参照）。手で組み立てない。
+4. **stacked の起動ゲートは「前段の PR 作成」。** コミット数到達をゲートにすると前段の収束修正（amend）で下流の base がずれ、PR diff 汚染と restack を誘発する。後段は `gh pr list --head <前段ブランチ>` で PR の存在を確認してから起動する（`mode: "maintain"` は全レーンを同時起動するためゲート自体が無い。Phase 4.5 参照）。
+5. **push と PR 作成は計画承認済みの前提。** Phase 1 の plan 承認がそのまま push・`/pr-create` の承認を兼ねる（`mode: "maintain"` を除く。レビュー対応の差分は元計画に無く機械的な突合ゲートが効かないため、push は都度親が承認する。Phase 4.5 参照）。親は計画の範囲内である限り、各レーンの対話ゲートに自分で応答し、個別にユーザーへ確認しない。ユーザーへ上げるのは**計画の範囲外だけ**（境界の拡大要求・スコープ逸脱・計画の前提と実態の食い違い）。範囲内かどうかの判定は lane-ops の判定基準表に従い、その除外リスト（仕様の解釈変更・検査の緩和・計画に無い型/関数の追加など）に当たる裁定は親が下さない。除外リストに当たる裁定は handoff に「ユーザー確認済み」でしか記録できない。
 6. **レーンの操縦・監視・承認代行は lane-ops スキルに従う。** 指示送信・blocked 検知・報告受信・機械検証・境界拡張はすべて lane-ops の運用ループとスクリプトで行う。job-graph が定めるのはグラフと起動までであり、運用規約を重複して定義しない。
 
 herdr 上では**レーン（直列チェーン）ごとに workspace を立てる**。レーン先頭の task は `herdr workspace create` の root pane で起動し、stacked の後続段は同じレーンの workspace へ `herdr tab create` で tab を足して起動する（並列レーン = workspace の並び。レーンを別 session へ分けることはしない。session はランタイム名前空間が分かれて親の socket からレーンへ到達できなくなるため）。レーン割当と各 ID の取り回しはスクリプトが `LANES` / `COMMANDS` として決定論的に算出する。手で決めない。
@@ -42,7 +42,7 @@ AI の責務は計画ファイル・issue から「タスクと依存辺・境�
 
   spec の形は `scripts/example-spec.json`、フィールドの意味と `expected_files` / `expected_scale` の起草基準は `references/spec.md`。`--prompt-dir` は実質必須（未指定だと COMMANDS を出力しない）。プロンプト `<task-id>.md` と起動スクリプト `launch_<task-id>.sh` がそこへ書き出される。
 
-  出力の `SCHEDULE`・`LANES`・`BOUNDARY`・`PROMPTS`・`COMMANDS`・`PR`・`VERIFY`・`MONITOR` をそのまま plan と実行に使う。スクリプトのロジックを本文で再現しない。
+  出力の `SCHEDULE`・`LANES`・`BOUNDARY`・`PROMPTS`・`COMMANDS`・`PR`・`VERIFY`・`MONITOR` をそのまま plan と実行に使う。スクリプトのロジックを本文で再現しない。`mode: "maintain"` では `PR` と `VERIFY` が出力されない（PR は既にあり、計画突合も行わないため。Phase 4.5 参照）。
 
 - **`scripts/check_scope.py`**（stdlib のみ）: PR（`--pr`）またはローカル diff（`--base`）の変更を計画の期待ファイル一覧・規模目安と突合し `VERDICT: PASS|FAIL|SKIP` を返す。ワーカーは規約で PR 前に、親は Phase 4 で使う（手順は `references/scope-gate.md`）。
 
@@ -80,14 +80,16 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
    - **承認代行の宣言**: 「計画内の push・PR 作成・対話ゲートへの応答は親が判断する」ことを明記（この承認が Phase 3 の代行根拠になる）
    - **計画突合の基準**: `VERIFY` セクション（task ごとの期待ファイル・規模目安）。PR 報告のたびにこれで突合し、FAIL は次段を止めてユーザーへ上げることを明記
 
-承認なしで worktree 生成・エージェント起動に進まない。親自身の permission mode に注意: `auto` では classifier が `send_instruction.sh` 等の指示送信を止めて運用が停滞した実績がある（恒久策は dotfiles#341）。親は `acceptEdits` 等の明示モードで動かす。
+`mode: "maintain"`（Phase 4.5）では `PR` / `VERIFY` が出力されないため、上記のうち **PR 戦略と計画突合の基準だけを差し替える**（起動ウェーブとレーン割当・コミット計画・承認代行の宣言はそのまま含める。ただし承認代行の宣言は maintain では**対話ゲートへの応答だけ**に掛かる — push は都度親が承認し、PR 作成はワーカー規約が禁じているので対象が無い）。差し替え先は「どのレビュー指摘へ対応するか」と「push は都度親が承認する」ことの明記（詳細は `references/maintain.md`）。
+
+承認なしで worktree 生成・エージェント起動に進まない（maintain も同じ。plan 承認は取る）。親自身の permission mode に注意: `auto` では classifier が `send_instruction.sh` 等の指示送信を止めて運用が停滞した実績がある（恒久策は dotfiles#341）。親は `acceptEdits` 等の明示モードで動かす。
 
 ### Phase 2: worktree 作成・レーン起動
 
 承認後、`COMMANDS` をウェーブ順に実行する。
 
 - **wave 0**: 独立レーン。まとめて起動してよい
-- **後続 wave**: 制約 4 のゲート（`gh pr list --head <前段ブランチ>` が非空）を確認してから起動
+- **後続 wave**: 制約 4 のゲート（`gh pr list --head <前段ブランチ>` が非空）を確認してから起動（`mode: "maintain"` では後続 wave が生成されないので、この確認は起きない）
 - pane ID（`PANE_<task-id>` 変数）は監視・承認で使うので控えておく
 
 起動コマンドの中身の解説は `references/launch.md`。
@@ -105,6 +107,12 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 
 各ワーカーは `/review-converge` 収束後・計画突合（`check_scope.py --base`）の PASS 後に自分で `/pr-create [base]` を実行する（規約で指示済み）。PR 報告を受けたら `references/scope-gate.md` の手順で突合し、**PASS のときだけ**凍結確認・次段起動へ進む。FAIL は次段を起動せずユーザーの裁定を待つ（分離・削除の指示を親が自分で出さない）。
 
+### Phase 4.5: レビュー対応
+
+PR に付いたレビュー指摘へレーンで対応するフェーズ。spec の top-level に `"mode": "maintain"` を足して**元の spec を再利用**し、`prompt` を指摘の内容へ差し替えて起動する。maintain では起動が既存 worktree への `wt switch`（`--create` なし）になり、`depends_on` を無視して全 task が独立レーン（wave 0）になり、ワーカー規約が `/review-converge`・`/pr-create` 禁止 + **push 都度の親承認**へ切り替わる。手順・注意（既存 worktree では `pre-start` / `post-start` が走らない等）は `references/maintain.md`。
+
+対応する指摘の取捨選択はユーザーが決める（親が判断基準を自分で作らない）。push 承認は計画承認で代替せず、`verify_lane.sh` と差分の目視で裏取りしてから出す。
+
 ### Phase 5: 後始末
 
 - 進捗確認: `wt list`
@@ -117,4 +125,4 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 
 - `lane-ops`（Phase 3〜4 の実体）/ `commit-plan`（Phase 1）/ `review-converge`・`pr-create`（各ワーカーが実行）/ `post-merge-cleanup`（Phase 5）
 - `herdr` / `worktrunk`: herdr CLI・`wt` の一般規約が要るとき
-- `references/`: `spec.md`（spec のフィールド表と `expected_*` の起草基準）/ `dependency-analysis.md`（依存辺・境界の判定基準）/ `launch.md`（COMMANDS の解説）/ `boundary.md`（境界ファイルと deny 後のフロー）/ `scope-gate.md`（Phase 4 の計画突合と FAIL 時の処置）/ `restack.md`（下段変更時の載せ替え）/ `handoff.md`（セッション跨ぎ引き継ぎ書の様式と生成規約）
+- `references/`: `spec.md`（spec のフィールド表と `expected_*` の起草基準）/ `dependency-analysis.md`（依存辺・境界の判定基準）/ `launch.md`（COMMANDS の解説）/ `boundary.md`（境界ファイルと deny 後のフロー）/ `scope-gate.md`（Phase 4 の計画突合と FAIL 時の処置）/ `maintain.md`（Phase 4.5 のレビュー対応）/ `restack.md`（下段変更時の載せ替え）/ `handoff.md`（セッション跨ぎ引き継ぎ書の様式と生成規約）

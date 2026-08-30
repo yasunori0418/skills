@@ -9,18 +9,29 @@ AI の責務はここまで（依存辺・境界・期待ファイルの意味�
 | --- | --- | --- | --- |
 | `default_base` | string | `"main"` | 依存の無い task の base ブランチ |
 | `plan` | string | なし | 計画ファイルのパス（相対なら cwd 基準で絶対化。指定されていて存在しなければ ERROR）。ワーカー規約の「計画の参照」条項に載り、`/review-converge` の `DIFF_REVIEW_GROUND_TRUTH` になる。計画ファイル入口なら必ず書く（epic issue 入口で計画ファイルが無いときだけ省略） |
+| `mode` | string | `"implement"` | ジョブ全体の性質。`implement` = 実装 → PR 作成（Phase 0〜4）、`maintain` = PR 作成後のレビュー対応（Phase 4.5）。他の値は ERROR。`maintain` にすると起動が既存 worktree への `wt switch`（`--create` なし）になり、`depends_on` を無視して全 task が独立レーン（wave 0）になり、出力から `PR` / `VERIFY` 節が消え、ワーカー規約が `/review-converge`・`/pr-create` 禁止 + push 親承認へ切り替わる。手順は `maintain.md` |
 | `tasks` | array | 必須（非空） | 下表の task |
+
+`mode: "maintain"` のときは計画突合を行わないため、`plan` / `expected_files` /
+`expected_scale` はワーカー規約にも突合にも使われない（`depends_on` も同様に無視され、検証されない）。
+ただし次の 2 つは mode に依らず走る:
+
+- **`expected_files` 欠落の WARNING**。同じ spec を implement へ戻して再利用したときに、
+  maintain 時に無警告で通った欠落へ気づけるようにするため（処理は止まらない）
+- **`plan` の存在確認**。maintain では **消すか、実在するパスにする**（実在しないパスが
+  残っていると ERROR で COMMANDS が出ない）。元 spec を再利用する運用では計画ファイルの
+  パスが残ったまま maintain に入るのが既定経路なので、起動前に確認する
 
 ## task
 
 | フィールド | 型 | 既定 | 意味 |
 | --- | --- | --- | --- |
 | `id` | string | 必須 | 一意な短い id（pane 変数 `PANE_<id>`・プロンプトファイル名になる） |
-| `branch` | string | 必須 | feature ブランチ名（一意。`wt switch --create` に渡る） |
+| `branch` | string | 必須 | feature ブランチ名（一意。`wt switch --create` に渡る。maintain では `--create` なしの `wt switch` に渡り、既存ブランチへ入る） |
 | `depends_on` | string[] | `[]` | 前段 task の id。空 = 独立（並列）、1 つ = その branch を base にした stacked 段、複数 = WARNING（先頭親を仮採用）。判定基準は `dependency-analysis.md` |
 | `prompt` | string | 必須相当 | タスク固有の内容と完了条件だけを書く（運用規約は worker_contract が連結するので書かない） |
 | `issue` | int | `0` | 対応する GitHub issue 番号。規約に issue 参照と PR へのリンク指示が載る |
-| `boundary` | string[] | `[]` | 編集を許す glob。宣言すると境界ファイルを生成し task-boundary hook が境界外 Edit/Write を deny する。`tmp_claude/**` は自動追加。決め方は `dependency-analysis.md`、仕組みは `boundary.md` |
+| `boundary` | string[] | `[]` | 編集を許す glob。宣言すると境界ファイルを生成し task-boundary hook が境界外 Edit/Write を deny する。`tmp_claude/**` は自動追加。決め方は `dependency-analysis.md`、仕組みは `boundary.md`。maintain では既存 worktree の境界ファイルを**上書き**するため、実装フェーズ中に widen した分が巻き戻る（起動前の突き合わせ手順は `maintain.md`） |
 | `model` / `permission_mode` / `effort` | string | 未指定 | claude 起動の task 個別上書き（CLI フラグのグローバル既定より優先）。`permission_mode` は `acceptEdits` / `auto` / `bypassPermissions` / `manual` / `dontAsk` / `plan`、`effort` は `low` / `medium` / `high` / `xhigh` / `max` |
 | `expected_files` | string[] | `[]` | 計画に書かれた変更ファイル一覧（下記の起草基準）。`check_scope.py` の照合対象。無い task は WARNING（ファイル照合なしに縮退） |
 | `expected_scale` | int | `0` | 計画の規模目安（追加 + 削除の行数）。実測が `expected_scale × 2` を超えると FAIL。`0` = 規模照合なし |

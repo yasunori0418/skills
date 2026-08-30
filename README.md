@@ -50,6 +50,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
             ├── agents/<name>.md        # 任意: Claude Code ワーカーサブエージェント
             ├── references/             # 任意: 必要時に読む詳細資料
             ├── scripts/                # 任意: 実行可能スクリプト
+            │                           #       pyproject.toml があれば checks.pytest が実行
             └── assets/                 # 任意: テンプレ・画像など
 ```
 
@@ -182,6 +183,7 @@ devShell には Nix 系(statix / nixd / formatter)、スキル検証系
 | agents/openai.yaml(JSON Schema)| `nix flake check`                   |
 | 上記を手動実行                 | `bash scripts/validate-skills.sh .` |
 | hook スクリプトのテスト        | `nix flake check`(checks.hooks)     |
+| スキルの python テスト         | `nix flake check`(checks.pytest)    |
 | treefmt 整形チェック           | `nix flake check`(同時に実行)       |
 | plugin.json / marketplace.json | `claude plugin validate . --strict` |
 

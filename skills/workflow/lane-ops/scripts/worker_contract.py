@@ -17,9 +17,17 @@ stdin にタスク情報 JSON を受け取り、ワーカー（レーン内エ�
   "issue": 123,                          // 省略可（0/なし = issue 参照なし）
   "parent": "orc-myrepo",                // 省略可（空 = 報告先未指定）
   "plan": "/abs/path/to/plan.md",        // 省略可（空 = 計画参照の条項を出さない）
-  "scope_check": "python3 .../check_scope.py --base main --expected-file a.py"
+  "scope_check": "python3 .../check_scope.py --base main --expected-file a.py",
                                          // 省略可（空 = PR 前の計画突合の条項を出さない）
+  "mode": "implement"                    // 省略可（既定 implement。maintain = レビュー対応）
 }
+
+mode:
+- implement: 実装 → review-converge 収束 → PR 作成までを担うレーン（既定）。
+- maintain: PR 作成後のレビュー対応レーン。PR は既にあるため review-converge /
+  pr-create を実行せず、push は親の承認制にする。
+
+条項差分の詳細は ../references/worker-contract.md を参照。
 
 使い方:
     printf '%s' '<task json>' | python3 worker_contract.py
@@ -33,12 +41,26 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 BOUNDARY_FILE = ".claude/task-boundary.json"
 
+
+class Mode(Enum):
+    """規約のモード。入力 JSON では文字列で受け取り parse_task で変換する。"""
+
+    IMPLEMENT = "implement"
+    MAINTAIN = "maintain"
+
+
 MILESTONES = (
     "最初のコミット完了 / review-converge 収束 / push 完了 / PR 作成（番号付き）/ "
+    "作業のブロック・境界の不足 / 親の承認・裁定待ちで停止する直前（ダイアログ以外の承認待ちを含む）"
+)
+
+MILESTONES_MAINTAIN = (
+    "最初のコミット完了 / push 承認待ち / push 完了 / "
     "作業のブロック・境界の不足 / 親の承認・裁定待ちで停止する直前（ダイアログ以外の承認待ちを含む）"
 )
 
@@ -62,6 +84,8 @@ class TaskInfo:
     plan: str = ""
     # 計画との突合コマンド完全形。空 = PR 前の突合の条項を出さない。
     scope_check: str = ""
+    # 規約のモード。implement = 実装〜PR 作成 / maintain = PR 作成後のレビュー対応。
+    mode: Mode = Mode.IMPLEMENT
 
 
 def _str_field(data: dict, key: str, default: str = "") -> str:
@@ -83,6 +107,12 @@ def parse_task(data: object) -> TaskInfo:
     issue_raw = data.get("issue") or 0
     if isinstance(issue_raw, bool) or not isinstance(issue_raw, int) or issue_raw < 0:
         raise ContractError(f"issue は非負整数でない: {issue_raw!r}")
+    mode_raw = _str_field(data, "mode", Mode.IMPLEMENT.value)
+    try:
+        mode = Mode(mode_raw)
+    except ValueError:
+        allowed = " / ".join(m.value for m in Mode)
+        raise ContractError(f"mode は {allowed} のいずれかでない: {mode_raw!r}") from None
     return TaskInfo(
         task_id=_str_field(data, "task_id"),
         branch=_str_field(data, "branch"),
@@ -93,6 +123,7 @@ def parse_task(data: object) -> TaskInfo:
         parent=_str_field(data, "parent"),
         plan=_str_field(data, "plan"),
         scope_check=_str_field(data, "scope_check"),
+        mode=mode,
     )
 
 
@@ -101,12 +132,34 @@ def report_script() -> str:
     return str(Path(__file__).resolve().parent / "report.sh")
 
 
-def render(task: TaskInfo) -> str:
-    """タスク情報 -> 標準セクション Markdown（純粋）。"""
+@dataclass(frozen=True)
+class CommonClauses:
+    """両モードに出る条項（報告のマイルストーン一覧を除き文言も同一）。
+
+    各 render_* は、このフィールドから条項を取り出して並べる。
+    値は条項の行リストで、条件付きの条項（plan / scope_check / issue /
+    stop_notification）は出さないとき空リストになる。
+    """
+
+    scope: list[str]
+    plan: list[str]
+    scope_check: list[str]
+    issue: list[str]
+    commit_granularity: list[str]
+    stop_notification: list[str]
+    report: list[str]
+    subagent_delegation: list[str]
+    subagent_liveness: list[str]
+    narration: list[str]
+
+
+def _common_clauses(task: TaskInfo, milestones: str) -> CommonClauses:
+    """両モードに出る条項を組み立てる。
+
+    報告条項のマイルストーン一覧だけはモードごとに異なるため `milestones` で受け取る。
+    `plan` / `scope_check` は implement のみが使う（maintain は取り出さない）。
+    """
     task_id = task.task_id
-    branch = task.branch
-    base = task.base
-    default_base = task.default_base
     boundary = task.boundary
     issue = task.issue
     parent = task.parent
@@ -158,28 +211,85 @@ def render(task: TaskInfo) -> str:
             ),
         ]
 
-    if parent:
-        report_cmd = f"`bash {report_script()} {parent} {task_id or '<task-id>'} <マイルストーン> [詳細]`"
-        report_line = (
-            f"- 報告: 次のマイルストーンごとに {report_cmd} を実行して"
-            f"親セッションへ報告する: {MILESTONES}。"
-            "報告は事実のみ（報告は承認の代わりにならない。承認が要る場面では停止して親の応答を待つ）。"
-            "テキストで承認を問うてターンを終える場合も、その直前に必ず報告する"
-            "（ダイアログを出さない承認待ちは親の監視に掛からず、報告が唯一の通知になる）"
-        )
-    else:
-        report_line = (
+    return CommonClauses(
+        scope=[scope],
+        plan=plan_lines,
+        scope_check=scope_check_lines,
+        issue=issue_lines,
+        commit_granularity=[
+            "- コミット粒度: 論理的に独立した修正は都度コミットする"
+            "（commit-flow スキル準拠、Conventional Commits）"
+        ],
+        stop_notification=_stop_notification_clause(parent, task_id),
+        report=[_report_clause(parent, task_id, milestones)],
+        subagent_delegation=[
+            "- サブエージェント委任: 複数ファイル横断調査のような真に独立した大きな作業に限る。"
+            "数回のツール呼び出しで済む作業は委任しない。"
+            "自分の作業の検証・ダブルチェック目的でサブエージェントを使わない。1 体で足りるなら 1 体に留める"
+        ],
+        subagent_liveness=[
+            "- サブエージェントの生存管理: 委任したサブエージェントの完走は自分の責任で管理する"
+            "（親・herdr からはワーカー内部のサブエージェントを観測も操作もできない）。"
+            "無応答・進捗なしのまま 10 分を超えたら TaskStop で停止し、同じ指示で再起動する。"
+            "再起動 2 回で解消しなければ繰り返さず、上記の報告コマンドで"
+            "「作業のブロック」として親へ報告して指示を待つ（滞留したまま待ち続けない）"
+        ],
+        narration=[
+            "- 進捗ナレーション: 最初のツール呼び出し前に 1 文だけ宣言し、"
+            "以降は重要な発見・方針転換のときのみ短く述べる（pane を逐次読む人はいない）"
+        ],
+    )
+
+
+def _report_command(parent: str, task_id: str) -> str:
+    """報告コマンドの完全形（ワーカーがそのまま実行できる形）。"""
+    return f"`bash {report_script()} {parent} {task_id or '<task-id>'} <マイルストーン> [詳細]`"
+
+
+def _stop_notification_clause(parent: str, task_id: str) -> list[str]:
+    """停止時の通知条項。報告条項とは別立てにし、その直前へ置く。
+
+    進捗の記録（報告）と違い、停止の通知は怠ると親が気付けない。
+    他スキルの承認ゲートで止まる場合も射程に入ることを明示する
+    （そのスキルの手順書には lane-ops への報告が書かれていないため）。
+    """
+    if not parent:
+        return []
+    return [
+        "- 停止時の通知: 親の承認・裁定を待って自分のターンを終えるときは、"
+        f"その直前に必ず {_report_command(parent, task_id)} を実行する。"
+        "他スキル（rebase-flow / pr-create 等）の承認ゲートで止まる場合も含む。"
+        "親はこの通知でしか停止を知れない"
+    ]
+
+
+def _report_clause(parent: str, task_id: str, milestones: str) -> str:
+    """報告条項。マイルストーン一覧はモードごとに異なる。"""
+    if not parent:
+        return (
             "- 報告: 報告先（親セッション名）が未指定のため報告は省略してよい。"
             "作業がブロックしたら停止して指示を待つ"
         )
+    report_cmd = _report_command(parent, task_id)
+    return (
+        f"- 報告: 次のマイルストーンごとに {report_cmd} を実行して"
+        f"親セッションへ報告する: {milestones}。"
+        "報告は事実のみ（報告は承認の代わりにならない。承認が要る場面では停止して親の応答を待つ）。"
+        "テキストで承認を問うてターンを終える場合も、その直前に必ず報告する"
+        "（ダイアログを出さない承認待ちは親の監視に掛からず、報告が唯一の通知になる）"
+    )
 
-    pr_arg = "" if base == default_base else f" {base}"
+
+def render_implement(task: TaskInfo) -> str:
+    """implement モード（実装 → review-converge 収束 → PR 作成）の規約。"""
+    c = _common_clauses(task, MILESTONES)
+    pr_arg = "" if task.base == task.default_base else f" {task.base}"
     return "\n".join(
         [
             "## 制約（lane-ops ワーカー規約）",
-            scope,
-            *plan_lines,
-            *issue_lines,
+            *c.scope,
+            *c.plan,
+            *c.issue,
             "- TDD 順序: テストを先に実装し（失敗を確認）、その後アプリケーション実装で通す",
             (
                 "- 構造変更エスカレーション: テスト実装・アプリケーション実装のいずれでも、"
@@ -187,12 +297,9 @@ def render(task: TaskInfo) -> str:
                 "必要と判明したら、実施せず「作業のブロック」として親へ報告し裁定を待つ"
                 "（構造変更の実施とテストの見送りのどちらを選ぶかは親・ユーザーの決定）"
             ),
+            *c.commit_granularity,
             (
-                "- コミット粒度: 論理的に独立した修正は都度コミットする"
-                "（commit-flow スキル準拠、Conventional Commits）"
-            ),
-            (
-                f"- push: 自分の feature ブランチ {branch or '<branch>'} に限り push してよい。"
+                f"- push: 自分の feature ブランチ {task.branch or '<branch>'} に限り push してよい。"
                 "push は計画承認済みの前提であり、個別の確認へ回さず実行する。"
                 "main 等の保護ブランチへは push しない"
             ),
@@ -205,7 +312,7 @@ def render(task: TaskInfo) -> str:
                 "計画・依頼範囲外の追加修正の提案。severity に関わらず。迷ったら improvement に倒す — は"
                 "修正せず見送る。見送りの記録は review-converge が書き出す見送りファイルに委ねる"
             ),
-            *scope_check_lines,
+            *c.scope_check,
             (
                 "- review-converge の反復境界: 実質的な指摘 — このタスクの diff が導入した問題"
                 "（出力形状・型安全性・contract・退行）— が出ている間は反復を続ける。"
@@ -218,19 +325,10 @@ def render(task: TaskInfo) -> str:
                 "- PR 作成後の凍結: PR を作成したら実装を凍結する。以降の実装変更・push を行わず、"
                 "気付いた改善点は親への報告のみとする"
             ),
-            report_line,
-            (
-                "- サブエージェント委任: 複数ファイル横断調査のような真に独立した大きな作業に限る。"
-                "数回のツール呼び出しで済む作業は委任しない。"
-                "自分の作業の検証・ダブルチェック目的でサブエージェントを使わない。1 体で足りるなら 1 体に留める"
-            ),
-            (
-                "- サブエージェントの生存管理: 委任したサブエージェントの完走は自分の責任で管理する"
-                "（親・herdr からはワーカー内部のサブエージェントを観測も操作もできない）。"
-                "無応答・進捗なしのまま 10 分を超えたら TaskStop で停止し、同じ指示で再起動する。"
-                "再起動 2 回で解消しなければ繰り返さず、上記の報告コマンドで"
-                "「作業のブロック」として親へ報告して指示を待つ（滞留したまま待ち続けない）"
-            ),
+            *c.stop_notification,
+            *c.report,
+            *c.subagent_delegation,
+            *c.subagent_liveness,
             (
                 "- スコープ: 依頼されたスコープで納品する。頼まれていない改善・リファクタ・追加作業を足さない。"
                 "既存コードの慣行（命名言語・テストスタイル・ヘルパー構成）を、"
@@ -238,12 +336,74 @@ def render(task: TaskInfo) -> str:
                 "このスコープ規約は review-converge の指摘にも優先して適用される。"
                 "依頼に誤りがある・より良い方法があると考えたら 1 文で指摘し、依頼どおりの作業を続ける"
             ),
-            (
-                "- 進捗ナレーション: 最初のツール呼び出し前に 1 文だけ宣言し、"
-                "以降は重要な発見・方針転換のときのみ短く述べる（pane を逐次読む人はいない）"
-            ),
+            *c.narration,
         ]
     )
+
+
+def render_maintain(task: TaskInfo) -> str:
+    """maintain モード（PR 作成後のレビュー対応）の規約。
+
+    PR は既に存在するため review-converge / pr-create を実行せず、
+    push は親の承認制にする。plan / scope_check は入力にあっても無視する。
+    """
+    c = _common_clauses(task, MILESTONES_MAINTAIN)
+    return "\n".join(
+        [
+            "## 制約（lane-ops ワーカー規約）",
+            *c.scope,
+            *c.issue,
+            (
+                "- PR の状態: この PR は既に作成済みでレビュー段階にある。"
+                "実装変更はレビュー指摘への対応に限る"
+            ),
+            (
+                "- 対応対象の限定: 対応対象はレビュー指摘・親の指示に限る。"
+                "対象は親から与えられ、自分で追加の指摘を探しに行かない"
+            ),
+            (
+                "- TDD 順序: 振る舞いが変わる修正はテストを先に書く"
+                "（失敗を確認してから実装で通す）。"
+                "typo・コメント・ドキュメントのみの修正はテスト不要"
+            ),
+            (
+                "- 構造変更エスカレーション: テスト実装・アプリケーション実装のいずれでも、"
+                "指摘の範囲を超える既存コードの構造変更（関数抽出・DI 追加・可視性変更・シグネチャ変更）が"
+                "必要と判明したら、実施せず「作業のブロック」として親へ報告し裁定を待つ"
+                "（構造変更の実施とテストの見送りのどちらを選ぶかは親・ユーザーの決定）"
+            ),
+            *c.commit_granularity,
+            (
+                f"- push: 自分の feature ブランチ {task.branch or '<branch>'} に限り push してよい。"
+                "push・force-push は親の承認を得てから実行する（計画承認済み扱いにしない）。"
+                "push 前に報告コマンドで「push 承認待ち」を報告し、親の応答を待ってから実行する。"
+                "main 等の保護ブランチへは push しない"
+            ),
+            (
+                "- review-converge / pr-create の禁止: `/review-converge`・`/pr-create` は実行しない。"
+                "PR は既に存在し、修正は既存 PR のブランチへの追加コミットとして反映される"
+                "（push すれば PR に載る）"
+            ),
+            *c.stop_notification,
+            *c.report,
+            *c.subagent_delegation,
+            *c.subagent_liveness,
+            (
+                "- スコープ: 依頼されたスコープで納品する。頼まれていない改善・リファクタ・追加作業を足さない。"
+                "既存コードの慣行（命名言語・テストスタイル・ヘルパー構成）を、"
+                "既存の適用範囲を超えて新しい種類の対象へ拡張適用しない。"
+                "依頼に誤りがある・より良い方法があると考えたら 1 文で指摘し、依頼どおりの作業を続ける"
+            ),
+            *c.narration,
+        ]
+    )
+
+
+def render(task: TaskInfo) -> str:
+    """タスク情報 -> 標準セクション Markdown（純粋）。mode で描画を振り分ける。"""
+    if task.mode is Mode.MAINTAIN:
+        return render_maintain(task)
+    return render_implement(task)
 
 
 def main() -> int:
