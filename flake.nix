@@ -122,7 +122,14 @@
                 while IFS= read -r -d "" p; do
                   found=$((found + 1))
                   d=$(dirname "$p")
-                  (cd "$d" && pytest -q -p no:cacheprovider) || fail=1
+                  rc=0
+                  (cd "$d" && pytest -q -p no:cacheprovider) || rc=$?
+                  # pytest の exit code 5 は「テストを 1 件も収集できなかった」。
+                  # 他の失敗と紛れると原因が読み取れないので明示する。
+                  if [ "$rc" -eq 5 ]; then
+                    echo "no tests collected in $d" >&2
+                  fi
+                  [ "$rc" -eq 0 ] || fail=1
                 done < <(find skills -type f -name pyproject.toml -print0)
                 # 探索が 0 件なら「テストが無い」のではなく探索の破綻とみなす
                 # (silent pass で緑になるのを防ぐ)。
