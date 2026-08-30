@@ -94,6 +94,37 @@
                 [ "$fail" -eq 0 ]
                 touch "$out"
               '';
+
+          # skills/ 配下の pytest を走らせる。対象は pyproject.toml を持つスキル
+          # (lane-ops / job-graph / parallel-worktree / dev-pipeline / session-insights) を
+          # 自動探索する。job-graph の plan_orchestration.py が lane-ops を兄弟パスで参照する
+          # ため、skills ツリー全体をコピーする必要がある。
+          checks.pytest =
+            pkgs.runCommand "check-pytest"
+              {
+                nativeBuildInputs = [
+                  (pkgs.python3.withPackages (ps: [ ps.pytest ]))
+                  # parallel-worktree の boundary bootstrap 統合テストが git / bash を実行する。
+                  pkgs.git
+                  pkgs.bash
+                ];
+                env = {
+                  # session-insights の 2 テストが Path.home() を踏む。
+                  HOME = "/tmp/home";
+                  PYTHONDONTWRITEBYTECODE = "1";
+                };
+              }
+              ''
+                cp -r ${./skills} skills
+                chmod -R +w skills
+                fail=0
+                while IFS= read -r -d "" p; do
+                  d=$(dirname "$p")
+                  (cd "$d" && pytest -q -p no:cacheprovider) || fail=1
+                done < <(find skills -type f -name pyproject.toml -print0)
+                [ "$fail" -eq 0 ]
+                touch "$out"
+              '';
         };
     };
 }
