@@ -123,9 +123,10 @@ def report_script() -> str:
 
 
 def _common_clauses(task: TaskInfo, milestones: str) -> dict[str, list[str]]:
-    """両モード共通の条項（モードで文言が変わらないもの）を名前付きで返す。
+    """両モードに出る条項（報告のマイルストーン一覧を除き文言も同一）を名前付きで返す。
 
     各モードの render_* は、この辞書から条項を取り出して並べる。
+    報告条項のマイルストーン一覧だけはモードごとに異なるため `milestones` で受け取る。
     `plan` / `scope_check` は implement のみが使う（maintain は取り出さない）。
     """
     task_id = task.task_id
