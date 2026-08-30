@@ -552,36 +552,39 @@ BOUNDARY_FILE = ".claude/task-boundary.json"
 
 # 境界ファイルを worktree ローカルかつ gitignored に置くための bootstrap。
 # 引数は $1=境界 JSON 本文（1 行）。cwd は wt switch 後の worktree ルート。
-# 方式・選定理由は parallel-worktree と同一（references/orchestration.md 参照）。
+# 新規生成と info/exclude 登録の方式・選定理由は parallel-worktree と同一
+# （references/boundary.md 参照）。下記の「既存ファイルとのマージ」は job-graph 固有
+# （maintain が既存 worktree へ入るため。parallel-worktree は常に新規 worktree）。
 # set -e は意図的（fail-closed）: 境界の無い状態でガードレール無しに claude を
 # 起動するより、起動せず pane に失敗を残す方が安全。
 #
-# 既存の境界ファイルがあれば（maintain が既存 worktree へ入るとき）上書きせず、
-# allow を既存 ∪ 宣言の和集合にしてマージする。既存 allow は親が widen_boundary.sh で
-# 承認済み、宣言 allow は plan 承認済みで、どちらも正当な範囲。無条件上書きだと
-# 実装フェーズ中の widen が無言で巻き戻り、ワーカーが以前は許可された範囲で deny を
-# 食う（親は「最初から足りなかった」と誤読して再 widen する）。task_id / branch は
-# 宣言を正とする（同一 worktree = 同一ブランチなので不一致は spec の誤記側）。
-# 既存ファイルが空・不正 JSON なら起動を止める（widen_boundary.sh の空 stdin 事故の
-# 痕跡を消さない。壊れた境界のまま claude を起動しない）。jq は COMMANDS 側で既に必須。
-# jq の入力は必ずリダイレクトで渡す（positional に混ぜると stdin 読みになる）。
+# 既存の境界ファイルがあれば上書きせず、allow を既存 ∪ 宣言の和集合にしてマージする。
+# 既存 allow は親が widen_boundary.sh で承認済み、宣言 allow は plan 承認済みで、
+# どちらも正当な範囲。無条件上書きだと実装フェーズ中の widen が無言で巻き戻り、
+# ワーカーが以前は許可された範囲で deny を食う（親は「最初から足りなかった」と誤読して
+# 再 widen する）。task_id / branch は宣言を正とする（同一 worktree = 同一ブランチなので
+# 不一致は spec の誤記側）。契約外の top-level キーは既存ファイル側を保持する
+# （widen_boundary.sh が `.allow` だけを書き換えるのと同じ扱い）。
+# 既存ファイルが空・不正 JSON・境界の書式でない（object でない / allow が配列でない）
+# なら起動を止める（widen_boundary.sh の空 stdin 事故の痕跡を消さない。壊れた境界の
+# まま claude を起動しない）。widen_boundary.sh 側は入力検査を持たないが、不正 JSON は
+# jq が失敗して set -e で止まり、空出力は結果検査で止まるので、fail-closed の性質は同じ。
+# jq は COMMANDS 側で既に必須。jq の入力は必ずリダイレクトで渡す（positional に混ぜると
+# stdin 読みになる）。jq が失敗すれば set -e で止まり、一時ファイルは trap で消す。
 BOUNDARY_BOOTSTRAP = (
     "set -e; "
     f"mkdir -p {shlex.quote(BOUNDARY_FILE.rsplit('/', 1)[0])}; "
     f"bf={shlex.quote(BOUNDARY_FILE)}; "
     'if [ -e "$bf" ]; then '
-    '  if ! [ -s "$bf" ] || ! jq -e . "$bf" >/dev/null 2>&1; then '
-    '    echo "ERROR: 既存の境界ファイルが空か不正 JSON。起動を中止する（widen_boundary.sh の事故跡の可能性）: $bf" >&2; '
+    '  if ! [ -s "$bf" ] || ! jq -e \'type == "object" and ((.allow // []) | type == "array")\' "$bf" >/dev/null 2>&1; then '
+    '    echo "ERROR: 既存の境界ファイルが空・不正 JSON・境界の書式でない。起動を中止する（widen_boundary.sh の事故跡の可能性）: $bf" >&2; '
     "    exit 1; "
     "  fi; "
     '  tmp="$(mktemp)"; '
-    '  jq -c --argjson new "$1" \'$new + {allow: (((.allow // []) + $new.allow) | unique)}\' < "$bf" > "$tmp"; '
-    '  if ! [ -s "$tmp" ] || ! jq -e . "$tmp" >/dev/null 2>&1; then '
-    '    rm -f "$tmp"; '
-    '    echo "ERROR: 境界のマージ結果が空か不正 JSON。既存ファイルは変更せず起動を中止する: $bf" >&2; '
-    "    exit 1; "
-    "  fi; "
+    "  trap 'rm -f \"$tmp\"' EXIT; "
+    '  jq -c --argjson new "$1" \'. + $new + {allow: (((.allow // []) + $new.allow) | unique)}\' < "$bf" > "$tmp"; '
     '  mv "$tmp" "$bf"; '
+    "  trap - EXIT; "
     "else "
     '  printf \'%s\\n\' "$1" > "$bf"; '
     "fi; "
@@ -842,7 +845,8 @@ def render(
                 "task-boundary hook が境界外の Edit/Write を機械ブロックする。"
                 "allow は既存ファイルとの和集合になるので、実装フェーズ中に widen_boundary.sh で"
                 "広げた glob は保たれる（下記は spec 側の宣言のみ。実際の範囲は worktree 側の"
-                "ファイルを見る。既存ファイルが空・不正 JSON なら起動が止まる。references/maintain.md）。"
+                "ファイルを見る。既存ファイルが空・不正 JSON・境界の書式でないなら起動が止まる。"
+                "references/maintain.md）。"
             )
         else:
             out.append(f"\n=== BOUNDARY (各 worktree に生成する {BOUNDARY_FILE}) ===")

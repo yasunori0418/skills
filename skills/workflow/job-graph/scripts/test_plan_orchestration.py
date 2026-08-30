@@ -624,6 +624,44 @@ def test_bootstrap_merges_existing_allow_and_keeps_widened_globs(tmp_path):
     assert written["task_id"] == "A" and written["branch"] == "br-A"
     assert set(written["allow"]) == {"src/**", "tmp_claude/**", "docs/**", "tests/**"}
     assert len(written["allow"]) == 4  # 重複なし
+    # mv で書き直しても exclude 登録済み ＝ git status に現れない
+    status = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain"], capture_output=True, text=True, check=True
+    )
+    assert status.stdout.strip() == ""
+
+
+def test_bootstrap_merge_keeps_unknown_top_level_keys(tmp_path):
+    # 契約外の top-level キーは既存ファイル側を保持する（widen_boundary.sh が .allow だけを
+    # 書き換えるのと同じ扱い。将来 hook の契約にキーが増えても bootstrap が消さない）。
+    repo = git_repo(tmp_path)
+    boundary_file(repo).parent.mkdir()
+    boundary_file(repo).write_text(json.dumps(
+        {"task_id": "A", "branch": "br-A", "allow": ["src/**"], "note": "kept"}
+    ))
+    t = spec([task("A", boundary=["src/**"])]).tasks[0]
+    proc = run_bootstrap(repo, po.boundary_json(t))
+    assert proc.returncode == 0, proc.stderr
+    written = json.loads(boundary_file(repo).read_text())
+    assert written["note"] == "kept"
+    assert sorted(written["allow"]) == ["src/**", "tmp_claude/**"]
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [{"task_id": "A", "branch": "br-A"}, {"task_id": "A", "branch": "br-A", "allow": None}],
+    ids=["allow-missing", "allow-null"],
+)
+def test_bootstrap_merge_tolerates_missing_allow(tmp_path, existing):
+    # 既存ファイルに allow が無い・null でも (.allow // []) で空扱いにして宣言をそのまま入れる。
+    repo = git_repo(tmp_path)
+    boundary_file(repo).parent.mkdir()
+    boundary_file(repo).write_text(json.dumps(existing))
+    t = spec([task("A", boundary=["src/**"])]).tasks[0]
+    proc = run_bootstrap(repo, po.boundary_json(t))
+    assert proc.returncode == 0, proc.stderr
+    written = json.loads(boundary_file(repo).read_text())
+    assert sorted(written["allow"]) == ["src/**", "tmp_claude/**"]
 
 
 def test_bootstrap_merge_is_idempotent(tmp_path):
@@ -640,10 +678,14 @@ def test_bootstrap_merge_is_idempotent(tmp_path):
     assert hits == [f"/{po.BOUNDARY_FILE}"]
 
 
-@pytest.mark.parametrize("broken", ["", "{nope"], ids=["empty", "invalid-json"])
+@pytest.mark.parametrize(
+    "broken",
+    ["", "{nope", "[1, 2]", '{"task_id": "A", "allow": "src/**"}'],
+    ids=["empty", "invalid-json", "not-an-object", "allow-not-array"],
+)
 def test_bootstrap_fails_closed_on_broken_existing_file(tmp_path, broken):
-    # 既存ファイルが空・不正 JSON（widen_boundary.sh の空 stdin 事故跡など）:
-    # 上書きせず exit≠0 で claude を起動しない（事故の痕跡を消さない）。
+    # 既存ファイルが空・不正 JSON（widen_boundary.sh の空 stdin 事故跡など）・妥当な JSON
+    # だが境界の書式でない: 上書きせず exit≠0 で claude を起動しない（事故の痕跡を消さない）。
     repo = git_repo(tmp_path)
     boundary_file(repo).parent.mkdir()
     boundary_file(repo).write_text(broken)
