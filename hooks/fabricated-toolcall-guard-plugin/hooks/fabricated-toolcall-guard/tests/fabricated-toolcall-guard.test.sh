@@ -111,6 +111,16 @@ check "detect-multi-count" "以下 2 件のツール呼び出しが text とし�
 check "detect-multi-bg" "  - Bash: nix環境でスナップショットテストを実行 (run_in_background)" "$(run posmulti | sed -n '2p')"
 check "detect-multi-path" "  - Edit: /src/PLReportTableDetailSnapshotTestDataCreator.kt" "$(run posmulti | sed -n '3p')"
 
+# 開始タグの "<" が残った形。本マシンの実セッション（22fa08dc / 10e744bd）で
+# 実際に観測された形で、剥落形と両方に対応する必要がある。
+write_transcript posangle "$(user_text '直して')" \
+    "$(assistant_text 'テストを直します。
+
+<invoke name="Edit">
+<parameter name="file_path">/home/yasunori/dotfiles/scripts/test_plan.py</parameter>
+</invoke>')"
+check "detect-angle-form" "  - Edit: /home/yasunori/dotfiles/scripts/test_plan.py" "$(run posangle | sed -n '2p')"
+
 # 開始タグが無く結果タグだけでも捏造と見なす
 write_transcript resultonly "$(user_text 'やって')" \
     "$(assistant_text '確認した。
@@ -187,6 +197,91 @@ write_transcript escother "$(user_text '依頼')" "$(assistant_text "$FAB_359")"
     "$(assistant_text "$FAB_359")"
 check "escalate-foreign-block" "以下 1 件のツール呼び出しが text として出力され、実行されていません:" \
     "$(first_line escother '{"stop_hook_active":true}')"
+
+# --- 未実行完了主張型（XML の痕跡を残さない捏造） ----------------------------
+# 資料の追補 record 435 相当。Write の tool_use が無いまま作成を報告し、
+# 主張されたパスが実在しない。
+CLAIM_435='引き継ぎ書を再作成しました。
+
+**ファイル**: `~/src/github.com/yasunori0418/skills/tmp_claude/DOES_NOT_EXIST_plan.md`
+
+内容は削除前と同一です。私のコンテキストに全文が残っていたため、欠落なく復元できています。'
+
+write_transcript claimpos "$(user_text '元に戻して')" "$(assistant_text '確認する。')" \
+    "$(tool_result_user)" "$(assistant_text "$CLAIM_435")"
+check "claim-detect" "このターンでファイル作成/更新を報告していますが、Write/Edit の実行がありません:" "$(first_line claimpos)"
+check "claim-detect-path" "  - ~/src/github.com/yasunori0418/skills/tmp_claude/DOES_NOT_EXIST_plan.md （存在しません）" \
+    "$(run claimpos | sed -n '2p')"
+
+# 同一ターンに Write があれば対象外（実行の痕跡が構造として残っている）
+write_transcript claimwrite "$(user_text '作って')" \
+    "$(jq -cn --arg t '作成しました。
+
+**ファイル**: `~/DOES_NOT_EXIST_b.md`' \
+        '{type:"assistant", message:{role:"assistant", content:[{type:"text", text:$t},{type:"tool_use", id:"t1", name:"Write", input:{}}]}}')"
+check "claim-has-write" "" "$(run claimwrite)"
+
+# 引用行（事象を報告するための正当な引用）は主張と見なさない
+write_transcript claimquote "$(user_text '報告して')" \
+    "$(assistant_text 'モデルは次のように出力していた:
+
+> 引き継ぎ書を再作成しました。
+> **ファイル**: `~/DOES_NOT_EXIST_c.md`
+
+これは虚偽だった。')"
+check "claim-quoted" "" "$(run claimquote)"
+
+# 実在するファイルへの言及は、別ターンで作成済みの可能性があるので検出しない
+write_transcript claimexists "$(user_text 'やって')" \
+    "$(assistant_text "レポートを保存しました。
+
+**ファイル**: \`$SCRIPT_DIR/../main.sh\`")"
+check "claim-file-exists" "" "$(run claimexists)"
+
+# 主張行から 4 行を超えて離れたパス言及は拾わない
+write_transcript claimfar "$(user_text 'やって')" \
+    "$(assistant_text '作成しました。
+
+あ
+い
+う
+え
+お
+
+参考: `~/DOES_NOT_EXIST_d.md`')"
+check "claim-far-path" "" "$(run claimfar)"
+
+# 完了主張だけでパス言及が無ければ検証点が無いので検出しない
+write_transcript claimnopath "$(user_text 'やって')" "$(assistant_text '作成しました。問題ありません。')"
+check "claim-no-path" "" "$(run claimnopath)"
+
+# 2 つのチェックは独立しており、両方該当すれば両方が reason に出る
+write_transcript claimboth "$(user_text 'やって')" \
+    "$(assistant_text 'antml:invoke name="Bash">
+<parameter name="description">ビルド実行</parameter>
+</invoke>
+<function_results>ok</function_results>
+
+レポートを作成しました。
+
+**ファイル**: `~/DOES_NOT_EXIST_both.md`')"
+check "both-checks-xml" "以下 1 件のツール呼び出しが text として出力され、実行されていません:" "$(first_line claimboth)"
+check "both-checks-claim" "1" "$(run claimboth | grep -c 'Write/Edit の実行がありません')"
+
+# 完了主張型の block が直前にあっても D4 のエスカレーションへ入る
+CLAIM_FEEDBACK='Stop hook feedback:
+このターンでファイル作成/更新を報告していますが、Write/Edit の実行がありません:
+  - ~/DOES_NOT_EXIST_e.md （存在しません）'
+write_transcript claimesc "$(user_text 'やって')" \
+    "$(assistant_text '作成しました。
+
+`~/DOES_NOT_EXIST_e.md`')" \
+    "$(jq -cn --arg t "$CLAIM_FEEDBACK" '{type:"user", isMeta:true, message:{role:"user", content:$t}}')" \
+    "$(assistant_text '作成しました。
+
+`~/DOES_NOT_EXIST_e.md`')"
+check "claim-escalates" "実行されていないツール呼び出しが text として出力され、2 ターン連続で検出されました。" \
+    "$(first_line claimesc '{"stop_hook_active":true}')"
 
 # --- fail-open --------------------------------------------------------------
 check "missing-transcript-path" "" \
