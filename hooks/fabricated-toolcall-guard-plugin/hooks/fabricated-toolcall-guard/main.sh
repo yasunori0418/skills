@@ -1,22 +1,47 @@
 #!/usr/bin/env bash
 # fabricated-toolcall-guard/main.sh — Stop hook。
-# 「ツール呼び出しの XML が assistant の text ブロックに平文として書かれ、
-# その実行結果まで捏造される」現象（self-rollout）を検出し、decision: "block" で
-# 未検証の記述を洗い直させる。
+# ツールを実行していないのに実行したかのように応答する現象を検出し、
+# decision: "block" で未検証の記述を洗い直させる。
+#
+# 独立した 2 つのチェックを持ち、どちらか一方でも該当すれば block する。
+# 両者はカバー範囲が異なるため両方要る。
+#
+#   1. XML 混入型（check_xml_injection）
+#      ツール呼び出しの XML が assistant の text ブロックへ平文として書かれ、
+#      その実行結果まで捏造される（self-rollout）。あらゆるツールが対象になる。
+#      痕跡（文字列）を探す方式。
+#
+#   2. 未実行完了主張型（check_unbacked_claim）
+#      XML の痕跡を一切残さず「ファイルを作成しました」とだけ報告し、
+#      そのターンに Write/Edit の tool_use が無い。主張と実行の不一致（構造）を
+#      見る方式で、ファイル作成/更新の主張のみが対象。
 #
 # 【検出範囲の限界 — 必読】
-#   本 hook が捕捉できるのは「XML 混入型」だけである。捏造にはツール呼び出しの
-#   痕跡が一切残らない型（「ファイルを作成しました」等の主張のみで tool_use が無い）
-#   も実在し、そちらは文字列マッチでは原理的に検出できない。全体を捕捉するには
-#   「完了を主張するテキスト」と「そのターンの実 tool_use」を突き合わせる別ロジックが
-#   要るが、本 hook はその設計を含まない部分対策である。
-#   沈黙は「捏造が無かった」ことの保証にはならない。
+#   上記 2 つを足しても捏造全体の一部しか捕捉しない。特に、XML を伴わない
+#   コマンド実行の捏造（「ビルドを開始しました」等）と調査結果の捏造
+#   （「確認したところ〜だった」）は、検証点が本文に無いため検出できない。
+#   本 hook は部分対策であり、沈黙は「捏造が無かった」ことの保証にはならない。
+#   hook を入れたことで安全になったと解釈しないこと。
 #
-# 検出ロジック（実データ 25 件で正例 25/25 検出・偽陽性 3/3 除外を確認した方式）:
+# 検出ロジック 1（XML 混入型）:
 #   コードフェンス（```...```）とインラインコード（`...`）を除去してから、
 #   行頭の invoke 開始タグと結果タグをマッチする。この現象を説明・引用しただけの
 #   正当なテキストは、ほぼ必ずコード表記の中にあるため除去段階で落ちる。
 #   開始タグは先頭の "<" が剥落した形でも格納されうるため、両形に対応する。
+#   別マシンの実データで正例 25/25 検出・偽陽性 3/3 除外。加えて本マシンの
+#   全 561 セッション走査で 4 セッション 10 件の実発生を検出しており、
+#   そのいずれも捏造ターンを末尾に置いた再現で正しく block される。
+#
+# 検出ロジック 2（未実行完了主張型）:
+#   そのターンに Write/Edit/NotebookEdit の tool_use があれば対象外。
+#   無い場合、コードフェンスを除去し、引用（>）・リスト（-）・表（|）の行を
+#   飛ばしたうえで完了主張の表現を探し、その行から 4 行以内にファイルパスが
+#   あれば候補とする。さらに候補パスへ実在確認を行い、実在しないものだけを
+#   block する（別ターンで作成済みのファイルに言及しただけのケースを除くため）。
+#   別マシンの全 174 セッション走査で該当 1 件・偽陽性 0。
+#   本マシンの全 561 セッション走査では該当 0 件（＝未発生）。
+#   完了主張の表現は日本語の定型（〜しました）に依存する。英語応答のセッションでは
+#   取りこぼす。
 #
 # 走査範囲:
 #   transcript を末尾から遡り、type=user かつ content が tool_result 以外の record
@@ -47,8 +72,10 @@ transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/nul
 active=$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null || echo false)
 
 # 前ターンの本 hook 由来 block を見分けるための安定マーカー。
-# reason の 1 行目に必ず現れる（検出対象の文字列は含まない）。
-MARKER="ツール呼び出しが text として出力され"
+# 2 つのチェックそれぞれの reason 見出しに現れる（検出対象の文字列は含まない）。
+# 他 hook の block（teammate-leak-guard 等）と取り違えないよう、本 hook 固有の
+# 言い回しに限定する。
+MARKER="ツール呼び出しが text として出力され|報告していますが、Write/Edit の実行がありません"
 
 # transcript を 1 度だけ読む。捏造ツールの一覧は行として、
 # 付随情報（2 連続判定・表示用コンテキスト）は先頭のヘッダ 1 行として受け取る。
@@ -88,7 +115,7 @@ result=$(jq -rs --arg marker "$MARKER" '
     | (if $boundary == null then false
        else ( ($records[$boundary].message.content // "")
               | if type == "string" then . else ([ .[]? | .text? // "" ] | join("\n")) end
-              | contains($marker) )
+              | test($marker) )
        end) as $prev_was_ours
 
     # --- 検出 -----------------------------------------------------------
@@ -148,20 +175,76 @@ result=$(jq -rs --arg marker "$MARKER" '
         elif ($lines | length) == 0 then ["  - (ツール名不明)"]
         else $lines end ) as $out
 
-    | [ ((if $prev_was_ours then "yes" else "no" end) + "\t" + $ctx) ] + $out
+    # --- 検出 2: 未実行完了主張型 ---------------------------------------
+    # そのターンで実際に呼ばれたツール名。Write 系があれば本チェックの対象外。
+    | ( [ $turn[]
+          | select(.type == "assistant")
+          | .message.content[]?
+          | select(.type == "tool_use")
+          | .name // ""
+        ] ) as $used_tools
+
+    | ( ($used_tools | any(. == "Write" or . == "Edit" or . == "NotebookEdit" or . == "MultiEdit")) ) as $has_writer
+
+    # フェンスのみ除去する（インラインコードはパスの抽出に使うので残す）。
+    | ( $texts | map(gsub("```[\\s\\S]*?```"; "")) | join("\n") | split("\n") ) as $blines
+
+    | ( if $has_writer then []
+        else
+          [ range(0; ($blines | length)) as $i
+            | ($blines[$i] | sub("^[ \\t]+"; "")) as $s
+            # 引用・リスト・表の行は、事象の報告や一覧の一部なので主張と見なさない。
+            | select(($s | startswith(">")) | not)
+            | select(($s | startswith("- ")) | not)
+            | select(($s | startswith("| ")) | not)
+            | select($s | test("(作成しました|再作成しました|書き出しました|保存しました)"))
+            # 主張行から 4 行以内のパス言及だけを候補にする。
+            | ($blines[$i:($i + 4)] | join("\n")) as $win
+            | [ $win | match("`([~/][^`\\s]*/[^`\\s]+\\.(?:md|py|sh|nix|ya?ml|json|ts|kt|txt))`"; "g")
+                | .captures[0].string ]
+            | .[]
+          ] | unique
+        end ) as $claimed
+
+    | [ ((if $prev_was_ours then "yes" else "no" end) + "\t" + $ctx),
+        (($out | length) | tostring) ]
+      + $out + $claimed
     | join("\n")
 ' "$transcript" 2>/dev/null || true)
 
 [ -n "$result" ] || exit 0
 
-header=$(printf '%s\n' "$result" | head -1)
-detected=$(printf '%s\n' "$result" | tail -n +2)
-prev_was_ours=$(printf '%s' "$header" | cut -f1)
-ctx=$(printf '%s' "$header" | cut -f2)
+prev_was_ours=$(printf '%s\n' "$result" | sed -n '1p' | cut -f1)
+ctx=$(printf '%s\n' "$result" | sed -n '1p' | cut -f2)
+xml_count=$(printf '%s\n' "$result" | sed -n '2p')
+[ -n "$xml_count" ] || exit 0
 
-[ -n "$detected" ] || exit 0
+# 3 行目以降を XML 混入型の一覧と、完了主張型の候補パスへ分ける。
+detected=""
+[ "$xml_count" -gt 0 ] 2>/dev/null && detected=$(printf '%s\n' "$result" | sed -n "3,$((2 + xml_count))p")
+claimed=$(printf '%s\n' "$result" | tail -n +"$((3 + xml_count))")
 
-count=$(printf '%s\n' "$detected" | grep -c '^' || true)
+# 完了主張型は、主張されたパスが実在しないものだけを採る。
+# 別ターンで作成済みのファイルに言及しただけのケースを構造的に除くため。
+missing=""
+if [ -n "$claimed" ]; then
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        # 先頭の ~ はホームへ展開する（パラメータ展開のみ。eval はしない）。
+        case "$p" in
+            "~/"*) resolved="$HOME/${p#\~/}" ;;
+            *) resolved="$p" ;;
+        esac
+        [ -e "$resolved" ] && continue
+        missing="${missing}  - ${p} （存在しません）
+"
+    done <<EOF
+$claimed
+EOF
+fi
+missing=${missing%$'\n'}
+
+[ -n "$detected" ] || [ -n "$missing" ] || exit 0
 
 # D4: 前ターンも本 hook で block していた場合は、再検証を促さずエスカレーションする。
 # 同一コンテキストでの retry は解決にならない（retry 後に 4 回再発した実績がある）。
@@ -170,11 +253,24 @@ if [ "$prev_was_ours" = "yes" ] && [ "$active" = "true" ]; then
 再試行では解決しません（同一コンテキストでの retry 後に 4 回再発した実績があります）。
 これ以上の検証を試みず、コンテキストを切る必要がある旨をユーザーへ報告して応答を終えてください。"
 else
-    reason="以下 ${count} 件のツール呼び出しが text として出力され、実行されていません:
+    reason=""
+    if [ -n "$detected" ]; then
+        count=$(printf '%s\n' "$detected" | grep -c '^' || true)
+        reason="以下 ${count} 件のツール呼び出しが text として出力され、実行されていません:
 ${detected}
 この応答でこれらの結果に依拠した記述は全て未検証です。各項目について実際に再実行するか、
 効果を確認できる手段で実状態を確かめてください（背景タスクなら出力ファイルの存在、
 ファイル編集なら git diff、ビルド開始ならプロセスや生成物の確認 — 手段は対象に応じて選ぶこと）。"
+    fi
+    if [ -n "$missing" ]; then
+        [ -n "$reason" ] && reason="${reason}
+
+"
+        reason="${reason}このターンでファイル作成/更新を報告していますが、Write/Edit の実行がありません:
+${missing}
+報告した内容は実行されていません。実際にファイルを作成してから応答し直してください。
+既に別のターンで作成済みの場合は、その旨が分かる表現に直してください。"
+    fi
     if [ -n "$ctx" ]; then
         reason="${reason}
 現在のコンテキスト: 約 ${ctx}k トークン"
