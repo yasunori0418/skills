@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "yasunori0418-fabricated-toolcall-guard-hooks",
+  "description": "Stop 時に、実行されずに text へ書かれた捏造ツール呼び出しを検出して差し戻す hook。hooks/hooks.json を規約検出する。",
+  "version": "0.1.0",
+  "author": {
+    "name": "yasunori0418"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "hooks", "stop", "hallucination", "tool-use"]
+}
