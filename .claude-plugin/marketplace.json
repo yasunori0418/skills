@@ -176,6 +176,16 @@
       },
       "category": "hooks",
       "tags": ["claude-code", "hooks", "stop", "subagent", "teammate"]
+    },
+    {
+      "name": "yasunori0418-fabricated-toolcall-guard-hooks",
+      "source": "./hooks/fabricated-toolcall-guard-plugin",
+      "description": "Stop 時に、実行されずに text へ書かれた捏造ツール呼び出しを検出して差し戻す hook。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "hooks",
+      "tags": ["claude-code", "hooks", "stop", "hallucination", "tool-use"]
     }
   ]
 }

@@ -1,0 +1,15 @@
+{
+  "description": "Stop 時に、実行されずに text へ書かれた捏造ツール呼び出しを検出して差し戻す hook。",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/fabricated-toolcall-guard/main.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
