@@ -134,7 +134,7 @@ not_merged=$(jq -c '[.[] | select(.state != "MERGED")
     | {number, state, headRefName, title}]' <<<"$all_prs")
 
 # --- tmux セッション ---------------------------------------------------------
-# セッション名は parallel-worktree が sanitize 済みブランチ名で揃えている。
+# セッション名は sanitize 済みブランチ名で揃っている前提（規則は下記 sanitize）。
 # 対応付けは完全一致のみ（部分一致で無関係なセッションを巻き込まない）。
 tmux_sessions='[]'
 if [ "$have_tmux" = true ]; then

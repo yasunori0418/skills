@@ -10,7 +10,7 @@
     {
       "name": "git-skills",
       "source": "./skills/git",
-      "description": "git 運用スキル群（commit-flow / commit-plan / diff-review / rebase-flow / reset-flow / parallel-worktree / review-converge）と git-guard hook。",
+      "description": "git 運用スキル群（commit-flow / commit-plan / diff-review / rebase-flow / reset-flow / review-converge）と git-guard hook。",
       "author": {
         "name": "yasunori0418"
       },

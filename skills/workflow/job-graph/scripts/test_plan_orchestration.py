@@ -585,8 +585,8 @@ def test_launch_script_boundary_uses_bootstrap():
 # ------------------------------------------------------------
 #
 # plan_orchestration.py が生成するのはコマンド文字列だけなので、既存境界ファイルとの
-# マージ・fail-closed が実際に起きるかはここで実行して確認する（parallel-worktree 側の
-# 統合テストと同じく exec claude "$@" だけを引数エコーへ差し替える）。
+# マージ・fail-closed が実際に起きるかはここで実行して確認する
+# （exec claude "$@" だけを引数エコーへ差し替える）。
 
 
 def git_repo(tmp_path):
