@@ -50,7 +50,7 @@
     {
       "name": "workflow-skills",
       "source": "./skills/workflow",
-      "description": "エージェント非依存の作業運用スキル群（dev-pipeline / external-writes / job-graph / lane-ops / test-targeted）。",
+      "description": "エージェント非依存の作業運用スキル群（external-writes / job-graph / lane-ops / test-targeted）。",
       "author": {
         "name": "yasunori0418"
       },
