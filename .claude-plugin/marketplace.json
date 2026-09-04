@@ -10,7 +10,7 @@
     {
       "name": "git-skills",
       "source": "./skills/git",
-      "description": "git 運用スキル群（commit-flow / commit-plan / diff-review / rebase-flow / reset-flow / parallel-worktree / review-converge）と git-guard hook。",
+      "description": "git 運用スキル群（commit-flow / commit-plan / diff-review / rebase-flow / reset-flow / review-converge）と git-guard hook。",
       "author": {
         "name": "yasunori0418"
       },
@@ -50,7 +50,7 @@
     {
       "name": "workflow-skills",
       "source": "./skills/workflow",
-      "description": "エージェント非依存の作業運用スキル群（dev-pipeline / external-writes / job-graph / lane-ops / test-targeted）。",
+      "description": "エージェント非依存の作業運用スキル群（external-writes / job-graph / lane-ops / test-targeted）。",
       "author": {
         "name": "yasunori0418"
       },
@@ -60,7 +60,7 @@
     {
       "name": "product-skills",
       "source": "./skills/product",
-      "description": "プロダクト業務スキル群（basic-design / biz-translate / def-done / doc-integrate / feature-spec / product-spec）。",
+      "description": "プロダクト業務スキル群（basic-design / biz-translate / def-done / feature-spec / product-spec）。",
       "author": {
         "name": "yasunori0418"
       },
@@ -86,16 +86,6 @@
       },
       "category": "skills",
       "tags": ["claude-code", "agentskills", "learning"]
-    },
-    {
-      "name": "shift-left-process",
-      "source": "./bundles/shift-left-process",
-      "description": "シフトレフト開発プロセスの 6 スキルバンドル（def-done / feature-spec / basic-design / dev-pipeline / review-converge / doc-integrate）。testing-skills / task-boundary hook の併用推奨。同名スキルの重複挙動が公式未定義のため product-skills / workflow-skills / git-skills 単体プラグインとの併用不可（フルプロセス運用はカテゴリプラグインの個別 install を使う）。",
-      "author": {
-        "name": "yasunori0418"
-      },
-      "category": "skills",
-      "tags": ["claude-code", "agentskills", "shift-left", "bundle"]
     },
     {
       "name": "yasunori0418-askuserquestion-hooks",

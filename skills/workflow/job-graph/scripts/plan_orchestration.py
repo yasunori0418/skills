@@ -66,7 +66,6 @@ spec の形:
 - 親 1 つ = その親ブランチを base にした stacked 段。
 - 親 複数 = 単純な線形 stack 不可。WARNING（base は先頭親を仮採用）。
 - issue は任意の GitHub issue 番号。ワーカー指示に issue 参照と PR へのリンク指示が載る。
-- model / permission_mode / effort / boundary の意味は parallel-worktree と同じ。
 - plan は計画ファイルのパス（相対なら cwd 基準で絶対化。指定されていて存在しなければ ERROR）。
   ワーカー規約の「計画の参照」条項に載り、review-converge のグラウンドトゥルースになる。
 - mode はジョブ全体の性質（implement = 実装〜PR 作成 / maintain = PR 作成後のレビュー対応）。
@@ -598,9 +597,9 @@ BOUNDARY_FILE = ".claude/task-boundary.json"
 
 # 境界ファイルを worktree ローカルかつ gitignored に置くための bootstrap。
 # 引数は $1=境界 JSON 本文（1 行）。cwd は wt switch 後の worktree ルート。
-# 新規生成と info/exclude 登録の方式・選定理由は parallel-worktree と同一
-# （references/boundary.md 参照）。下記の「既存ファイルとのマージ」は job-graph 固有
-# （maintain が既存 worktree へ入るため。parallel-worktree は常に新規 worktree）。
+# 新規生成と info/exclude 登録の方式・選定理由は references/boundary.md 参照。
+# 下記の「既存ファイルとのマージ」は maintain が既存 worktree へ入るために必要
+# （implement は常に新規 worktree なのでマージ対象が無い）。
 # set -e は意図的（fail-closed）: 境界の無い状態でガードレール無しに claude を
 # 起動するより、起動せず pane に失敗を残す方が安全。
 #

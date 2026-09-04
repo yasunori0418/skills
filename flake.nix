@@ -97,15 +97,15 @@
 
           # skills/ 配下の pytest を走らせる。pyproject.toml を持つスキルだけを自動探索
           # するため、Python テストを CI に載せる条件は pyproject.toml を置くこと
-          # (現時点の対象は lane-ops / job-graph / parallel-worktree / dev-pipeline /
-          # session-insights の 5 件)。job-graph の plan_orchestration.py が lane-ops を
-          # 兄弟パスで参照するため、skills ツリー全体をコピーする必要がある。
+          # (現時点の対象は lane-ops / job-graph / session-insights の 3 件)。job-graph の
+          # plan_orchestration.py が lane-ops を兄弟パスで参照するため、skills ツリー
+          # 全体をコピーする必要がある。
           checks.pytest =
             pkgs.runCommand "check-pytest"
               {
                 nativeBuildInputs = [
                   (pkgs.python3.withPackages (ps: [ ps.pytest ]))
-                  # parallel-worktree / job-graph の boundary bootstrap 統合テストが git を実行する。
+                  # job-graph の boundary bootstrap 統合テストが git を実行する。
                   pkgs.git
                   # job-graph の boundary bootstrap が既存境界ファイルとのマージに jq を使う。
                   pkgs.jq

@@ -22,8 +22,8 @@ node_modules/
 # .gitignore edit.
 /.claude/skills/
 
-# Python runtime artifacts inside skills (parallel-worktree / session-insights
-# are uv projects; their venvs and caches are recreated by `uv run`)
+# Python runtime artifacts inside skills (uv projects; their venvs and caches
+# are recreated by `uv run`)
 .venv/
 __pycache__/
 .pytest_cache/

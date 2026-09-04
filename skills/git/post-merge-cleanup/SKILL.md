@@ -161,4 +161,4 @@ response-format 準拠で報告する: 削除した対象 / 残した対象と�
 - `scripts/verify-cleanup.sh` — 実行後の残存確認。単独で再実行できる
 - 関連スキル: gh-fetch（非対話 SSH が通らないときの fetch 委譲）/ rebase-flow（stacked
   子ブランチの main 追従）/ external-writes（tracking issue の更新ゲート）/
-  parallel-worktree（全レーンのマージ完了後の終端処理として本スキルを案内する）
+  job-graph（全レーンのマージ完了後の終端処理として本スキルを案内する）

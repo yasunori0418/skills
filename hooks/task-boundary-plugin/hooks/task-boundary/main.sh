@@ -7,7 +7,7 @@
 #   境界ファイルが見つからなければ即 exit 0。プロセスに則らない通常セッションでは
 #   一切発火しない（成果物が無いリポジトリでの誤作動ゼロ）。
 #
-# 境界ファイル書式（公開契約。生成者は parallel-worktree に限定されない）:
+# 境界ファイル書式（公開契約。生成者は job-graph に限定されない）:
 #   {"task_id":"B2","branch":"feat-client-retry","allow":["src/client/**","tests/client/**"]}
 #
 # 既知の抜け穴: Bash 経由の書き込み（`sh -c 'echo x > file'` 等）は matcher の

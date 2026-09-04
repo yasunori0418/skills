@@ -12,16 +12,15 @@ AI エージェント向けスキルを管理するリポジトリ。スキル�
 | レイヤー | 担当 | 実体 |
 | --- | --- | --- |
 | スキルの中身 | [agentskills.io](https://agentskills.io/specification) 標準 | `skills/<category>/<skill-name>/SKILL.md` |
-| 配布・パッケージング | Claude Code plugin | per-category `skills/<category>/.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`（18 プラグイン） |
+| 配布・パッケージング | Claude Code plugin | per-category `skills/<category>/.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`（17 プラグイン） |
 | Codex 連携 | 本リポジトリの慣習 | per-skill `agents/openai.yaml` |
 | claude-code サブエージェント（任意） | Claude Code plugin | per-skill `agents/<name>.md` |
 | 運用 hook | Claude Code plugin | skill 非依存: hook 単位プラグイン `hooks/<plugin>/hooks/hooks.json` / skill 連動: `skills/<category>/hooks/hooks.json` |
 
 ## プラグイン構成（カテゴリ別 N plugins）
 
-1 マーケットプレイス（`.claude-plugin/marketplace.json`）に 18 プラグイン
-（カテゴリ 8 + hook 9 + バンドル 1）を列挙し、利用者はカテゴリ単位・hook 単位・
-バンドル単位で install できる。
+1 マーケットプレイス（`.claude-plugin/marketplace.json`）に 17 プラグイン
+（カテゴリ 8 + hook 9）を列挙し、利用者はカテゴリ単位・hook 単位で install できる。
 
 - **カテゴリプラグイン**（8 個）: `skills/<category>/` が各プラグイン root。
   `skills/<category>/.claude-plugin/plugin.json`（`name: "<category>-skills"`）を置き、
@@ -37,11 +36,6 @@ AI エージェント向けスキルを管理するリポジトリ。スキル�
   `yasunori0418-fabricated-toolcall-guard-hooks`）。root 直下に
   `.claude-plugin/plugin.json` と `hooks/hooks.json` を置き、実体は `hooks/<name>/main.sh`。
   marketplace の `source` は `./hooks/<plugin>`。skill は含まない。
-- **バンドルプラグイン**（1 個）: 用途別にスキルを束ねる `bundles/<bundle>/` root の
-  プラグイン（`shift-left-process`）。中身は各カテゴリ配下のスキル実体への
-  **symlink 集約**で、二重管理しない（marketplace 内 symlink の実体解決は公式サポート機構）。
-  同名スキルが複数 install 済みプラグインに含まれた場合の挙動は公式未定義のため、
-  バンドルと重複するカテゴリプラグインの併用不可を説明文に明記する。
 - **hook の所属**: skill に依存しない guard/通知 hook は上記の hook 単位プラグインへ置く
   （関心事ごとに分離し、まとめて有効化しない）。skill とペアで機能する hook
   （例 `git-guard` は rebase-flow/reset-flow の arm marker とペア）は、その skill の
@@ -55,7 +49,7 @@ AI エージェント向けスキルを管理するリポジトリ。スキル�
   `agents/` は「そのスキルのエージェント連携置き場」で、Codex 用 `openai.yaml` と
   Claude 用 `*.md` が同居する。`.md` の frontmatter `name` はファイル名 stem と一致させる。
 - 公開スキルは `skills/` 配下に隔離する。インフラ（`flake.nix` / `dev/` / `pkgs/` /
-  `schema/` / `scripts/` / `hooks/` / `bundles/` / `.github/` / `.claude-plugin/`）は
+  `schema/` / `scripts/` / `hooks/` / `.github/` / `.claude-plugin/`）は
   リポジトリ直下。
 - plugin hooks は `hooks.json` に定義し、実体は `<name>/main.sh`
   （テストは `<name>/tests/*.test.sh`、`checks.hooks` が実行）。skill 非依存 hook は

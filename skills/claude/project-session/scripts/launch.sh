@@ -185,7 +185,7 @@ subtract_ids() {
 
 # sanitize <name>
 # セッション名・ラベル向けに [^A-Za-z0-9_-]+ を - に置換し前後の - を除去する。
-# 空になったら session を返す（parallel-worktree の sanitize と同じ規則）。
+# 空になったら session を返す。
 sanitize() {
     local name="$1" out
     out=$(printf '%s' "$name" | sed -E 's/[^A-Za-z0-9_-]+/-/g; s/^-+//; s/-+$//')

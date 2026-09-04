@@ -21,7 +21,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 ```
 .
 ├── .claude-plugin/
-│   └── marketplace.json              # マーケットプレイス定義(16 プラグインを列挙)
+│   └── marketplace.json              # マーケットプレイス定義(17 プラグインを列挙)
 ├── flake.nix                         # 成果物 + treefmt(formatter) + checks(検証)
 ├── dev/flake.nix                     # 開発用 devShell (default / ci)
 ├── pkgs/
@@ -35,8 +35,6 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 │       ├── .claude-plugin/plugin.json  # プラグイン定義(name: yasunori0418-<hook名>-hooks)
 │       ├── hooks/hooks.json          # plugin hooks 定義(PreToolUse guard・通知等)
 │       └── hooks/<name>/main.sh + tests/  # hook の実体 (checks.hooks で実行)
-├── bundles/
-│   └── shift-left-process/           # 用途別バンドルプラグイン(スキル実体への symlink 集約)
 └── skills/
     └── <category>/                   # 各カテゴリ = 独立プラグイン (source: "./skills/<category>")
         ├── .claude-plugin/plugin.json  # プラグイン定義(name: <category>-skills / skills 配列)
@@ -59,17 +57,17 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 
 ## Claude Code プラグインとして使う
 
-1 マーケットプレイス(`marketplace.json`)に **16 のプラグイン**(カテゴリ 8 + hook 7 +
-バンドル 1)を列挙している。利用者は必要なカテゴリ・hook だけを選んで install できる。
+1 マーケットプレイス(`marketplace.json`)に **17 のプラグイン**(カテゴリ 8 + hook 9)を
+列挙している。利用者は必要なカテゴリ・hook だけを選んで install できる。
 
 | プラグイン                                   | source                                | 内容                                                         |
 | -------------------------------------------- | ------------------------------------- | ------------------------------------------------------------ |
-| `git-skills`                                 | `./skills/git`                        | commit-flow / commit-plan / diff-review / rebase-flow / reset-flow / parallel-worktree / review-converge + git-guard hook |
+| `git-skills`                                 | `./skills/git`                        | commit-flow / commit-plan / diff-review / rebase-flow / reset-flow / review-converge + git-guard hook |
 | `github-skills`                              | `./skills/github`                     | gh-ci-investigate / gh-fetch / gh-push / pr-create           |
 | `nix-skills`                                 | `./skills/nix`                        | nix-cache-check / nix-devenv / nix-store-lookup              |
 | `claude-skills`                              | `./skills/claude`                     | Claude Code 固有: response-format / session-insights / tmp-output / project-session |
-| `workflow-skills`                            | `./skills/workflow`                   | エージェント非依存: dev-pipeline / external-writes / job-graph / lane-ops / test-targeted |
-| `product-skills`                             | `./skills/product`                    | basic-design / biz-translate / def-done / doc-integrate / feature-spec / product-spec |
+| `workflow-skills`                            | `./skills/workflow`                   | エージェント非依存: external-writes / job-graph / lane-ops / test-targeted |
+| `product-skills`                             | `./skills/product`                    | basic-design / biz-translate / def-done / feature-spec / product-spec |
 | `testing-skills`                             | `./skills/testing`                    | ISTQB/JSTQB テストプロセス: test-plan / test-monitor / test-analyze / test-design / test-implement / test-execute / test-report / test-review |
 | `learning-skills`                            | `./skills/learning`                   | 学習・理解支援: quizzing / tutoring / navigating(AI 利用で生じた理解負債の返済) |
 | `yasunori0418-askuserquestion-hooks`         | `./hooks/askuserquestion`             | AskUserQuestion のセッション単位無効化(#aq-off/#aq-on)と発火時のデスクトップ通知 |
@@ -80,29 +78,12 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 | `yasunori0418-notify-stop-hooks`             | `./hooks/notify-stop-plugin`          | Stop 時のデスクトップ通知                                     |
 | `yasunori0418-task-boundary-hooks`           | `./hooks/task-boundary-plugin`        | 境界ファイル `.claude/task-boundary.json` の外への Edit/Write/NotebookEdit を deny(境界ファイルが無ければ沈黙) |
 | `yasunori0418-teammate-leak-guard-hooks`     | `./hooks/teammate-leak-guard-plugin`  | Stop 時に稼働中のサブエージェント/チームメイトが残っていれば TaskStop を促す(idle は終了ではないため放置すると滞留する) |
-| `shift-left-process`                         | `./bundles/shift-left-process`        | シフトレフト開発プロセスの 6 スキルバンドル(下記)             |
+| `yasunori0418-fabricated-toolcall-guard-hooks` | `./hooks/fabricated-toolcall-guard-plugin` | Stop 時に、実行されずに text へ書かれた捏造ツール呼び出しを検出して差し戻す |
 
 > **hook の分離方針**: git rebase/reset をスキル経由へ強制する `git-guard` は、
 > rebase-flow/reset-flow スキルとペアで機能するため `git-skills` プラグインに同梱する。
 > それ以外の skill 非依存 hook は **hook 単位で独立プラグイン化**し(まとめて有効化しない)、
 > 利用者が関心事ごとに個別 install / on-off できる。
-
-### shift-left-process バンドル
-
-シフトレフト開発プロセス([docs/dev/shift-left-process/spec.md](docs/dev/shift-left-process/spec.md))の
-新設 6 スキル(def-done / feature-spec / basic-design / dev-pipeline / review-converge /
-doc-integrate)を 1 プラグインで install できるミニマルバンドル。実体は各カテゴリ配下の
-スキルへの symlink 集約(`bundles/shift-left-process/`)で、二重管理はしない。
-
-- **併用推奨**(同梱しない): `testing-skills`(工程ゲート test-review と testing 8 スキル)・
-  `yasunori0418-task-boundary-hooks`(タスク境界の機械ブロック)。
-  無くてもバンドル各スキルは単体で動く(graceful degradation)
-- **併用不可**: `product-skills` / `workflow-skills` / `git-skills` の単体プラグインと
-  本バンドルを同時に install しない。同名スキルが複数プラグインに含まれた場合の挙動が
-  Claude Code 公式で未定義のため(バンドルの 6 スキルがこれら 3 プラグインと重複する)
-- **フルプロセス運用**(diff-review / parallel-worktree も使う)の場合は、バンドルではなく
-  カテゴリプラグイン(`product-skills` / `workflow-skills` / `git-skills` / `testing-skills`)を
-  個別 install する。バンドルは「シフトレフトの新設スキルだけを最小で試す」用途
 
 **ローカルパス運用(推奨)**: 手元の checkout を marketplace として登録すると、
 push せずにローカル編集を配信できる。marketplace add は 1 回、install は欲しい
