@@ -38,13 +38,22 @@ record-ready JSON と統合報告ファイルだけを返すのが存在理由�
 3. **統合報告を指定ファイルへ書き出す**。形式は diff-review の統合報告(severity 順・
    同一 `ファイルパス:行番号` の統合・レンズタグ・スコープ分類)をそのまま使う
 4. **record-ready JSON を組み立てる**。各指摘に `file` / `line` / `summary` / `severity` /
-   `scope` / `kind` / `lens` を付与する。`kind` の定義は diff-review 側(diff-reviewer.md の
+   `scope` / `kind` / `kind_reason` / `lens` を付与する。`kind` の定義は diff-review 側(diff-reviewer.md の
    kind 体系)が正。統合報告に kind タグがあればそのまま写す。既定モードのタグ無し報告は
    「全指摘 fix」の宣言なので基本 `fix` と写すが、prompt で渡された常時 improvement の
    パターンに該当する指摘が漏れて混ざっていたら `improvement` へ分類し直す
    (迷ったら improvement に倒す)。統合報告で `[PLAUSIBLE]` が付いた指摘は、
    `summary` の**先頭に `[PLAUSIBLE]` を残して写す**(呼び出し元の機械修正の例外判定に
-   使われる。剥がさない)
+   使われる。剥がさない)。
+   `kind_reason` は**全指摘に必須**で、分類の根拠を次の語彙から 1 つ選ぶ:
+   - 常時 improvement パターンに該当: `typing`(既存の型化・enum 化)/ `extract`(既存関数からの
+     関数抽出)/ `test-harness`(テストハーネス再設計・表明形式の変更)/ `rename`(既存識別子の
+     命名変更)/ `symmetry`(対称性・一貫性を理由とする既存構造の変更)
+   - パターン外だが修正が diff 外の既存コードへ波及する: `spills-out`
+   - いずれにも当たらず fix: `in-diff`
+   `kind_reason` が `in-diff` 以外なら `kind` は `improvement` でなければならない。根拠を毎件
+   明示させるのは、パターンに該当する指摘を fix と写す取りこぼしを、自分と呼び出し元の
+   両方が検出できるようにするため(該当パターンの指摘を fix に分類した実例への対策)
 5. **yagni 重点分析を書く**。yagni レンズの指摘は「diff が導入した過剰実装・不要な一般化を
    削れ」という、他レンズと逆向き(足すのではなく削る)の修正要求であり、収束ループでは
    **最優先で扱う**。record-ready JSON とは別に、次を分析して短くまとめる:

@@ -255,6 +255,16 @@ check "changed-lines-null-when-absent" "None,130" \
     "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(map(str, json.load(sys.stdin)["changed_lines"])))')"
 has "changed-lines-delta-null" "$OUT" '"changed_lines_delta": null'
 
+# --- kind_reason(分類根拠)は判定に使わずそのまま残す ---
+S="$WORK/kind-reason.json"
+F_REASON='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severity":"must","kind":"fix","kind_reason":"in-diff"},
+           {"file":"src/b.py","line":20,"summary":"enum に型化すべき","severity":"want+","kind":"improvement","kind_reason":"typing"}]'
+OUT=$(record "$S" "$F_REASON" --head aaa111)
+check "kind-reason-verdict" "continue" "$(verdict "$OUT")"
+has "kind-reason-kept-in-remaining" "$OUT" '"kind_reason": "in-diff"'
+has "kind-reason-kept-in-improvements" "$OUT" '"kind_reason": "typing"'
+has "kind-reason-saved-in-state" "$(cat "$S")" '"kind_reason": "typing"'
+
 # --- 入力エラー ---
 S="$WORK/bad.json"
 printf 'not json' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1

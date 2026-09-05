@@ -96,7 +96,9 @@ diff-review の責務で、こちらはその read-only 単発設計に手を触
 判断を仰ぐ(欠落レンズを外して続行するか、レビュー自体をやり直すか)。
 
 受領が揃っていることを確認したら、指摘の JSON 配列を `record` へ渡す。集約エージェント経由なら
-返却された record-ready JSON をそのまま使う(`kind` / `scope` が下記の規則に沿っているかだけ点検する)。
+返却された record-ready JSON をそのまま使う(`kind` / `scope` が下記の規則に沿っているかだけ点検する。
+`kind_reason` が常時 improvement パターン名や `spills-out` なのに `kind` が `fix` の指摘は
+`improvement` へ直す)。
 直接起動時は統合報告から自分で構成する。
 
 **変更行数を `record` に渡す**: `git diff --shortstat <base-ref>...HEAD` の挿入 + 削除の合計を

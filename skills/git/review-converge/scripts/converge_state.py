@@ -22,6 +22,8 @@ diff-review の周回ごとの指摘一覧を状態ファイルへ記録し、�
         kind は fix / improvement(既定 fix。improvement = 既存コードの構造・
         シグネチャ・スタイル変更を要する提案・依頼範囲外の追加修正 =
         修正対象から除外し、見送り一覧 "improvements" へ蓄積する)。
+        kind_reason は kind 分類の根拠(任意。集約エージェントが付ける。状態ファイルと
+        出力にそのまま残すだけで、判定には使わない)。
         lens は diff-review の統合報告に付いたレンズタグ(任意。次周回の
         レンズ絞り込み "next_lenses" に使う。省略すると絞り込みは働かない)。
         指摘は file:line + 要旨の正規化ハッシュで同一性を判定する。
@@ -132,6 +134,7 @@ def parse_findings(payload: Any) -> list[dict[str, Any]]:
                 "severity": str(item.get("severity", DEFAULT_THRESHOLD)),
                 "scope": scope,
                 "kind": kind,
+                "kind_reason": str(item.get("kind_reason", "")).strip(),
                 "lens": str(item.get("lens", "")).strip(),
             }
         )
