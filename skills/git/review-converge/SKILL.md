@@ -154,9 +154,9 @@ python3 <SKILL_DIR>/scripts/converge_state.py record \
   --changed-lines <git diff --shortstat の挿入 + 削除> \
   --threshold <--until で指定された閾値。既定 want> --max-rounds 5 <<'JSON'
 [
-  {"file": "src/a.py", "line": 42, "summary": "境界値が未処理", "severity": "must", "scope": "in", "kind": "fix", "lens": "design"},
-  {"file": "src/a.py", "line": 30, "summary": "bool を enum に型化すべき", "severity": "want+", "scope": "in", "kind": "improvement", "lens": "design"},
-  {"file": "other/x.py", "line": 7, "summary": "別タスクの問題", "severity": "want", "scope": "out", "lens": "test"}
+  {"file": "src/a.py", "line": 42, "summary": "境界値が未処理", "severity": "must", "scope": "in", "kind": "fix", "kind_reason": "in-diff", "lens": "design"},
+  {"file": "src/a.py", "line": 30, "summary": "bool を enum に型化すべき", "severity": "want+", "scope": "in", "kind": "improvement", "kind_reason": "typing", "lens": "design"},
+  {"file": "other/x.py", "line": 7, "summary": "別タスクの問題", "severity": "want", "scope": "out", "kind": "fix", "kind_reason": "in-diff", "lens": "test"}
 ]
 JSON
 ```
