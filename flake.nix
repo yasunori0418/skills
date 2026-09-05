@@ -80,6 +80,9 @@
                   # nix-store-lookup の収集スクリプトが store DB を引くため。
                   # テストは偽の DB を sqlite3 で組み立てて検証する。
                   pkgs.sqlite
+                  # python3 依存のスクリプト(converge_state.py 等)の hook テストを実際に
+                  # 走らせるため。無いと各テストが SKIP して緑になる。
+                  pkgs.python3
                 ];
               }
               ''
