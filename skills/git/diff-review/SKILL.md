@@ -57,7 +57,7 @@ CLAUDE.md の継承は文書化されていない(推測)。**節に載った規
 | `status: found` | 一致した規約がある。**`[root, injected]` 以外は reviewer が全件 Read する**(上限 20 件) |
 | `status: none` | 決定論探索で規約が見つからなかった。「無い」ことも reviewer に伝える(節は省略しない) |
 | `status: explicit-only` | `DIFF_REVIEW_CONVENTIONS` に `none` が含まれ自動探索を停止した。明示分だけ載る |
-| `status: unavailable` | python3 が無い等で生成できなかった。規約照合が行われていない旨を統合報告に 1 行残す |
+| `status: unavailable` | uv も python3 も無い・スクリプト失敗・30 秒の打ち切り(`DIFF_REVIEW_CONVENTIONS_TIMEOUT` で変更可)で生成できなかった。規約照合が行われていない旨を統合報告に 1 行残す |
 | `lint: ...` | 機械 lint / formatter 設定の存在。**書式系(空白・改行・import 順・lint が検出する命名規則)は指摘しない** |
 | `[paths: ...]` `[paths: ... @ <dir>/]` `[ancestor of ...]` `[root, injected]` `[contributing]` `[explicit: ...]` | 各規約が載った根拠(`@ <dir>/` はサブディレクトリ配下の `.claude/rules/`)。末尾の括弧は h1 / h2 見出し(200 文字まで) |
 

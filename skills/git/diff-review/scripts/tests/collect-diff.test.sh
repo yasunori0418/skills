@@ -8,7 +8,8 @@
 #   - 変更なし                     -> NO_CHANGES(グラウンドトゥルースがあっても)
 #   - CONVENTIONS 節               -> manifest には常に出る(規約が無くても status: none)。
 #                                     .claude/rules の paths 照合・未追跡ファイルの照合・削除ファイルの除外、
-#                                     commit / worktree / cumulative には出ない、uv も python3 も不在で status: unavailable
+#                                     commit / worktree / cumulative には出ない、uv も python3 も不在で status: unavailable、
+#                                     timeout 超過で打ち切り(status: unavailable)
 set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLECT="$SCRIPT_DIR/../collect-diff.sh"
@@ -214,6 +215,21 @@ has "conv-nopython-status" "$OUT" "status: unavailable"
 has "conv-nopython-completes" "$OUT" "== SIZE =="
 ERR=$(cd "$D" && PATH="$BIN" "$COLLECT" manifest 2>&1 >/dev/null)
 has "conv-nopython-warn" "$ERR" "uv も python3 も無いため CONVENTIONS 節を生成できない"
+
+# --- CONVENTIONS 節: 規約列挙が timeout を超えたら打ち切って status: unavailable で完走する ---
+# (glob 照合は正規表現エンジン任せで後戻りが膨らみ得る。遅い偽インタプリタで打ち切り経路を踏む)
+SLOWPY="$WORK/slow-python"
+printf '#!/usr/bin/env bash\nsleep 5\n' >"$SLOWPY" && chmod +x "$SLOWPY"
+D="$WORK/conv-timeout" && new_repo "$D"
+OUT=$(cd "$D" && DIFF_REVIEW_PYTHON="$SLOWPY" DIFF_REVIEW_CONVENTIONS_TIMEOUT=1 "$COLLECT" manifest 2>/dev/null)
+check "conv-timeout-exit" 0 "$(
+    cd "$D" && DIFF_REVIEW_PYTHON="$SLOWPY" DIFF_REVIEW_CONVENTIONS_TIMEOUT=1 "$COLLECT" manifest >/dev/null 2>&1
+    echo $?
+)"
+has "conv-timeout-status" "$OUT" "status: unavailable"
+has "conv-timeout-completes" "$OUT" "== SIZE =="
+ERR=$(cd "$D" && DIFF_REVIEW_PYTHON="$SLOWPY" DIFF_REVIEW_CONVENTIONS_TIMEOUT=1 "$COLLECT" manifest 2>&1 >/dev/null)
+has "conv-timeout-warn" "$ERR" "1 秒で打ち切られたため CONVENTIONS 節を生成できない"
 
 # --- 規定パス外の候補: gitignored な tmp_claude/ の仕様書も候補として出る ---
 # 実運用の失敗例(tmp_claude/<日付>_<対象>_spec.md が検出されずレビューが仕様を無視した)の回帰
