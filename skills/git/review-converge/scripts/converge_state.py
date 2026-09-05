@@ -25,7 +25,8 @@ diff-review の周回ごとの指摘一覧を状態ファイルへ記録し、�
         kind_reason は kind 分類の根拠(任意。集約エージェントが付ける。状態ファイルと
         出力にそのまま残すだけで、判定には使わない)。
         lens は diff-review の統合報告に付いたレンズタグ(任意。次周回の
-        レンズ絞り込み "next_lenses" に使う。省略すると絞り込みは働かない)。
+        レンズ絞り込み "next_lenses" に使う。省略すると絞り込みは働かない。
+        "design,test" のようにカンマ併記されていればレンズ単位に分割して扱う)。
         指摘は file:line + 要旨の正規化ハッシュで同一性を判定する。
 
     converge_state.py status --state <path>
@@ -276,8 +277,15 @@ def next_lenses(remaining: list[dict[str, Any]], verdict: str) -> list[str] | No
     """
     if verdict != "continue":
         return None
-    lenses = sorted({f["lens"] for f in remaining if f.get("lens")})
-    return lenses or None
+    lenses: set[str] = set()
+    for f in remaining:
+        # 統合報告で複数レンズが 1 件に併記された "design,test" 形式のタグは
+        # レンズ単位に分割する。併記のまま返すと呼び出し元が解釈できず全レンズへ広がる
+        for lens in str(f.get("lens", "")).split(","):
+            lens = lens.strip()
+            if lens:
+                lenses.add(lens)
+    return sorted(lenses) or None
 
 
 def changed_lines_series(rounds: list[dict[str, Any]]) -> tuple[list[int | None], int | None]:

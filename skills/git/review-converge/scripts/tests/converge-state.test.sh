@@ -10,6 +10,7 @@
 #   - 解消数 <= 新規数が 2 周連続  -> diverging (自己増殖)
 #   - prev-head / status / reset   -> 前周回 sha の取得・再出力・初期化
 #   - --changed-lines              -> 周回ごとの変更行数の系列と増分(未指定は null)
+#   - lens 併記タグ               -> next_lenses でレンズ単位に分割
 #   - 壊れた入力                   -> exit 2
 # python3 が無い環境では SKIP して exit 0。
 set -uo pipefail
@@ -230,6 +231,15 @@ S="$WORK/lens-converged.json"
 OUT=$(record "$S" "$F_EMPTY" --head aaa111)
 check "lens-none-when-not-continue" "None" \
     "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["next_lenses"])')"
+
+# 複数レンズが 1 件に併記された "design,test" 形式のタグはレンズ単位に分割して集計する
+# (併記のまま返すと呼び出し元が解釈できず、残指摘に無いレンズまで起動した実例への対策)
+S="$WORK/lens-combined.json"
+F_LENS_COMBINED='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severity":"must","lens":"design,test"},
+                  {"file":"src/b.py","line":20,"summary":"過剰な防御","severity":"want","lens":" yagni "}]'
+OUT=$(record "$S" "$F_LENS_COMBINED" --head aaa111 --max-rounds 5)
+check "lens-combined-tag-is-split" "design,test,yagni" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["next_lenses"]))')"
 
 # lens 未指定(diff-review がレンズタグを出さない場合)は絞り込めないので null
 S="$WORK/lens-absent.json"
