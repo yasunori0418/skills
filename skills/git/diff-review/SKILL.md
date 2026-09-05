@@ -16,7 +16,7 @@ agent への prompt に埋め込むときは必ず実際の絶対パスに展開
 
 `<SKILL_DIR>/scripts/collect-diff.sh manifest [<base-ref>]` を実行する。
 
-- 出力: レビュー範囲(base / head の sha)・コミット一覧と統計・未コミット変更・未追跡ファイル・除外ファイル(lockfile 等は統計のみ)。総変更が小さければ全文 diff も同梱される
+- 出力: レビュー範囲(base / head の sha)・変更ファイルに適用される規約(CONVENTIONS 節)・コミット一覧と統計・未コミット変更・未追跡ファイル・除外ファイル(lockfile 等は統計のみ)。総変更が小さければ全文 diff も同梱される
 - `NO_CHANGES` が返ったら「レビュー対象の変更がない」と報告して終了する
 - ユーザーがコミット範囲・ファイル等を指定した場合は base-ref 引数で範囲を合わせる
 
@@ -36,6 +36,35 @@ agent への prompt に埋め込むときは必ず実際の絶対パスに展開
 
 確定分が 1 つ以上あるとき、全レンズの prompt に**共通ガード**を追加し、`spec` レンズを既定に昇格する。
 確定分が無ければ従来どおり(共通ガードなし・既定レンズは design / test / yagni・全指摘を境界内として扱う)。
+
+### CONVENTIONS 節(常に現れる)
+
+manifest には `== CONVENTIONS ==` 節が**常に**付く。変更ファイル(追加・変更 + 未追跡。削除は除く)に
+適用されるリポジトリ内のコーディング規約を `scripts/collect-conventions.py` が決定論で列挙したもので、
+全レンズに**レビューの第 1 基準**として渡す。
+
+探索対象は `.claude/rules/**/*.md`(frontmatter `paths:` を変更ファイルに照合。`paths` 無しは常時適用)、
+変更ファイルの祖先ディレクトリの `CLAUDE.md` / `AGENTS.md`(`CLAUDE.local.md` は除外。symlink は 1 件に
+まとめる)、`CONTRIBUTING.md`(ルート・`.github/`・`docs/`)、環境変数 `DIFF_REVIEW_CONVENTIONS` の明示指定。
+サブエージェントに自動注入されるのはルート CLAUDE.md だけで、`.claude/rules/` の paths 発火やサブディレクトリ
+CLAUDE.md の継承は文書化されていない(推測)。**節に載った規約は Read しない限り reviewer の文脈に無い**。
+
+| 行 | 意味 |
+| --- | --- |
+| `status: found` | 一致した規約がある。**`[root, injected]` 以外は reviewer が全件 Read する**(上限 20 件) |
+| `status: none` | 決定論探索で規約が見つからなかった。「無い」ことも reviewer に伝える(節は省略しない) |
+| `status: explicit-only` | `DIFF_REVIEW_CONVENTIONS` に `none` が含まれ自動探索を停止した。明示分だけ載る |
+| `status: unavailable` | python3 が無い等で生成できなかった。規約照合が行われていない旨を統合報告に 1 行残す |
+| `lint: ...` | 機械 lint / formatter 設定の存在。**書式系(空白・改行・import 順・lint が検出する命名規則)は指摘しない** |
+| `[paths: ...]` `[ancestor of ...]` `[root, injected]` `[contributing]` `[explicit: ...]` | 各規約が載った根拠。末尾の括弧は h1 / h2 見出し(200 文字まで) |
+
+`DIFF_REVIEW_CONVENTIONS` の意味論(`:` 区切り。相対パスはリポジトリルート起点。存在しないパスは WARN して落とす):
+
+- パスを列挙すると決定論探索の結果に**追加**される(`[explicit: DIFF_REVIEW_CONVENTIONS]`)。Explore が見つけた
+  規約文書の採用分を渡す用途(「候補が出たときの確定手順」)
+- トークン `none` を含めると自動探索(決定論 + Explore)を止め、明示列挙分だけを使う(`none` 単独なら空の一覧)。
+  個別除外の構文は無い
+- 21 件以上は件数だけ示して省略される。絞りたいときは `none` と必要なパスの明示列挙で対象を固定する
 
 manifest はメインセッションで **1 回だけ**実行し、出力を次段で各 agent の prompt にそのまま注入する(agent 側に再収集させない)。メインセッションで精読・分析はしない。
 

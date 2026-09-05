@@ -2,12 +2,13 @@
 # diff-review: レビュー対象差分の決定論的収集(読み取り専用・stdout のみ)
 #
 # usage:
-#   collect-diff.sh manifest [<base-ref>]                    範囲解決 + コミット一覧 + 統計(小径なら全文同梱)
+#   collect-diff.sh manifest [<base-ref>]                    範囲解決 + 規約列挙 + コミット一覧 + 統計(小径なら全文同梱)
 #   collect-diff.sh commit <sha>                             単一コミットの diff(除外適用)
 #   collect-diff.sh worktree                                 未コミット変更の diff(staged + unstaged)
 #   collect-diff.sh cumulative [<base-ref>] [-- <path>...]   累積 diff(path 明示時は除外を適用しない)
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 INLINE_THRESHOLD=300 # 累積 diff(除外分を除く)がこの行数以下なら manifest に全文を同梱
 
 # lockfile・生成物: 全文は出力せず統計のみ(git pathspec、'*' はディレクトリ区切りもまたぐ)
@@ -193,6 +194,30 @@ emit_ground_truth() {
     echo
 }
 
+# 変更ファイルに適用されるコーディング規約の列挙(collect-conventions.py へ委譲)。
+# GROUND_TRUTH と異なり節は常に出す(`status: none` も reviewer への情報)。
+# 変更ファイル集合 = 除外 pathspec 適用後の追加・変更ファイル(削除は除く)+ 未追跡ファイル。
+# python3 が無い、またはスクリプトが失敗したときは manifest を止めず `status: unavailable` で続行する。
+CONVENTIONS_HEADER="== CONVENTIONS (規約。レビューの第 1 基準。一致した規約は Read して照合する) =="
+emit_conventions() {
+    local root out
+    root=$(git rev-parse --show-toplevel)
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "WARN: python3 が無いため CONVENTIONS 節を生成できない(status: unavailable)" >&2
+        printf '%s\nstatus: unavailable\n\n' "$CONVENTIONS_HEADER"
+        return
+    fi
+    if out=$({
+        git diff --name-only --diff-filter=d "$BASE_SHA" -- . "${EXCLUDE_PATHSPEC[@]}"
+        git ls-files --others --exclude-standard --full-name
+    } | sort -u | python3 "$SCRIPT_DIR/collect-conventions.py" --root "$root"); then
+        printf '%s\n\n' "$out"
+    else
+        echo "WARN: collect-conventions.py が失敗したため CONVENTIONS 節を生成できない(status: unavailable)" >&2
+        printf '%s\nstatus: unavailable\n\n' "$CONVENTIONS_HEADER"
+    fi
+}
+
 cmd_manifest() {
     resolve_base "${1:-}"
     local head_sha branch commits untracked
@@ -213,6 +238,7 @@ cmd_manifest() {
     echo
 
     emit_ground_truth
+    emit_conventions
 
     echo "== COMMITS (base..HEAD, 古い順) =="
     if [[ -z "$commits" ]]; then
