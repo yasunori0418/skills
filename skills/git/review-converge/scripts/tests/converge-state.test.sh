@@ -11,7 +11,7 @@
 #   - prev-head / status / reset   -> 前周回 sha の取得・再出力・初期化
 #   - --changed-lines              -> 周回ごとの変更行数の系列と増分(未指定は null)
 #   - lens 併記タグ               -> next_lenses でレンズ単位に分割
-#   - keep / suppress              -> 保持した指摘の除外・ガード・再指摘禁止リスト
+#   - keep / suppress              -> 保持した指摘の除外(file + line または要旨)・ガード・再指摘禁止リスト
 #   - 壊れた入力                   -> exit 2
 # python3 が無い環境では SKIP して exit 0。
 set -uo pipefail
@@ -303,6 +303,19 @@ OUT=$(record "$S" '[{"file":"README.md","line":603,"summary":"帰結の連鎖が
 check "keep-reworded-restatement-ignored" "converged" "$(verdict "$OUT")"
 check "keep-no-oscillation" "0" \
     "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["oscillating"]))')"
+
+# 保持した指摘が次周回で行ズレして(上の行の増減)同じ要旨で再出現しても、保持済みとして除外される
+OUT=$(record "$S" '[{"file":"README.md","line":605,"summary":"失敗モードの説明が過剰","severity":"want","lens":"yagni"}]' --head r3 --max-rounds 5)
+check "keep-line-shift-same-summary-ignored" "converged" "$(verdict "$OUT")"
+has "keep-line-shift-not-in-suppress-as-below" "$OUT" '"kept_count": 1'
+# 行も要旨も異なる指摘は保持済みに当たらず修正対象に戻る
+OUT=$(record "$S" '[{"file":"README.md","line":605,"summary":"手順の番号が飛んでいる","severity":"want","lens":"docs"}]' --head r4 --max-rounds 5)
+check "keep-different-finding-still-remaining" "continue" "$(verdict "$OUT")"
+# 別ファイルの同趣旨は保持済みに当たらない
+# (r4 → r5 と新規指摘が続くので verdict は diverging になる。見たいのは remaining に残ることだけ)
+OUT=$(record "$S" '[{"file":"docs/other.md","line":603,"summary":"失敗モードの説明が過剰","severity":"want","lens":"yagni"}]' --head r5 --max-rounds 6)
+has "keep-other-file-same-summary-still-remaining" "$OUT" '"remaining_count": 1'
+
 
 # must は保持できない / want+ は --user-confirmed が要る / 直近周回に無い指摘は保持できない / 理由必須
 S="$WORK/keep-guard.json"

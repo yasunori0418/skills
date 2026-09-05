@@ -184,12 +184,29 @@ def location_key(file: Any, line: Any) -> str:
     return f"{str(file or '').strip()}:{str(line if line is not None else '').strip()}"
 
 
-def kept_locations(state: dict[str, Any]) -> frozenset[str]:
-    return frozenset(location_key(k.get("file"), k.get("line")) for k in state.get("kept", []))
+def is_kept(finding: dict[str, Any], kept: list[dict[str, Any]]) -> bool:
+    """保持済み(kept)との突合。同じ file で、line が一致するか正規化要旨が一致すれば保持済みと見なす。
+
+    line だけで突合すると、次周回の修正で上の行が増減したときに同じ指摘が別の行番号で再出現して
+    除外が効かない。要旨だけで突合すると別箇所の同趣旨の指摘まで消える。両方の OR で file 内に限る。
+    """
+    file = str(finding.get("file", "")).strip()
+    line = str(finding.get("line", "") if finding.get("line") is not None else "").strip()
+    body = normalize_summary(str(finding.get("summary", "")))
+    for k in kept:
+        if str(k.get("file", "")).strip() != file:
+            continue
+        k_line = str(k.get("line", "") if k.get("line") is not None else "").strip()
+        if k_line == line:
+            return True
+        k_body = normalize_summary(str(k.get("summary", "")))
+        if body and k_body and body == k_body:
+            return True
+    return False
 
 
 def actionable(
-    findings: list[dict[str, Any]], threshold: str, kept: frozenset[str] = frozenset()
+    findings: list[dict[str, Any]], threshold: str, kept: list[dict[str, Any]] = ()
 ) -> list[dict[str, Any]]:
     """閾値以上の重みを持つ「境界内」の fix 指摘。境界外・improvement・保持済み(kept)は修正対象から機械的に除外する。
 
@@ -203,7 +220,7 @@ def actionable(
         if f["scope"] == "in"
         and f.get("kind", "fix") == "fix"
         and severity_rank(f["severity"]) >= limit
-        and location_key(f["file"], f["line"]) not in kept
+        and not is_kept(f, list(kept))
     ]
 
 
@@ -220,7 +237,7 @@ def build_suppress(
         }
         for k in kept
     ]
-    seen = {location_key(k.get("file"), k.get("line")) for k in kept}
+    seen: set[str] = set()
     limit = severity_rank(threshold)
     for f in current["findings"]:
         loc = location_key(f["file"], f["line"])
@@ -229,6 +246,7 @@ def build_suppress(
             and f.get("kind", "fix") == "fix"
             and severity_rank(f["severity"]) < limit
             and loc not in seen
+            and not is_kept(f, kept)
         ):
             seen.add(loc)
             out.append(
@@ -258,7 +276,7 @@ def collect_improvements(rounds: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def detect_oscillation(
-    rounds: list[dict[str, Any]], threshold: str, kept: frozenset[str] = frozenset()
+    rounds: list[dict[str, Any]], threshold: str, kept: list[dict[str, Any]] = ()
 ) -> list[dict[str, Any]]:
     """振動の検出。対象は閾値以上・境界内・kind=fix の指摘のみ。
 
@@ -304,7 +322,7 @@ def detect_oscillation(
 
 
 def detect_diverging(
-    rounds: list[dict[str, Any]], threshold: str, kept: frozenset[str] = frozenset()
+    rounds: list[dict[str, Any]], threshold: str, kept: list[dict[str, Any]] = ()
 ) -> dict[str, Any] | None:
     """自己増殖(発散)の検出。対象は閾値以上・境界内・kind=fix の指摘のみ。
 
@@ -375,13 +393,12 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
     current = rounds[-1]
 
     kept = state.get("kept", [])
-    kept_locs = kept_locations(state)
 
-    remaining = actionable(current["findings"], threshold, kept_locs)
+    remaining = actionable(current["findings"], threshold, kept)
     deferred = [f for f in current["findings"] if f["scope"] == "out"]
     improvements = collect_improvements(rounds)
-    oscillating = detect_oscillation(rounds, threshold, kept_locs)
-    diverging = detect_diverging(rounds, threshold, kept_locs)
+    oscillating = detect_oscillation(rounds, threshold, kept)
+    diverging = detect_diverging(rounds, threshold, kept)
     changed_lines, changed_lines_delta = changed_lines_series(rounds)
 
     if oscillating:
