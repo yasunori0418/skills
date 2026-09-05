@@ -51,9 +51,10 @@ verdict の優先順位は oscillation > converged > diverging > limit-reached >
 起きた状態のまま終わらせないため。発散していても remaining がゼロなら収束を
 優先するのは、修正対象が尽きた時点で発散の懸念が消えるため。
 
-レンズ段階戦略("next_lenses"): continue の中間周回では、前周回で閾値以上・境界内・
-kind=fix の指摘を出したレンズだけを次周回の対象として返す。次が最終周回のとき・continue 以外・
-lens 情報が無いときは null(= 全レンズで徹底パス)を返す。
+レンズ段階戦略("next_lenses"): 全レンズの徹底パスは初回に限り、continue の 2 周目以降は
+前周回で閾値以上・境界内・kind=fix の指摘を出したレンズだけを次周回の対象として返す。
+continue 以外・lens 情報が無いときは null(= 絞り込みなし)を返す。上限周回でレンズを
+広げると新規指摘が上限到達と同時に出て修正バーストになるため、最終周回も絞り込みを維持する。
 
 依存は標準ライブラリのみ(Python 3.12+)。
 """
@@ -254,22 +255,19 @@ def detect_diverging(rounds: list[dict[str, Any]], threshold: str) -> dict[str, 
     return {"windows": windows, "new_findings": new_findings}
 
 
-def next_lenses(
-    remaining: list[dict[str, Any]], verdict: str, round_no: int, max_rounds: int
-) -> list[str] | None:
-    """次周回で起動すべきレンズ。None は「全レンズ（徹底パス）」を意味する。
+def next_lenses(remaining: list[dict[str, Any]], verdict: str) -> list[str] | None:
+    """次周回で起動すべきレンズ。None は「絞り込みなし（全レンズ）」を意味する。
 
-    段階戦略: 中間周回は前周回で閾値以上・境界内・kind=fix の指摘を出したレンズだけを回し、
-    全レンズの徹底パスは初回と最終周回に限る。指摘の出なかったレンズは修正後も
+    段階戦略: 2 周目以降は前周回で閾値以上・境界内・kind=fix の指摘を出したレンズだけを回し、
+    全レンズの徹底パスは初回に限る。指摘の出なかったレンズは修正後も
     指摘を出す見込みが薄く、全周回で全レンズを回すと周回数 x レンズ数の
-    レビューエージェントが走るため。
+    レビューエージェントが走るため。最終周回も絞り込みを維持する: 上限周回で
+    レンズを広げると新規指摘が上限到達と同時に出て、上限が修正バーストになるため。
 
-    次の周回が無い（continue 以外）とき、次が最終周回のとき、レンズ情報が
-    1 件も付いていないときは絞り込まず None を返す（見落としを避ける側に倒す）。
+    次の周回が無い（continue 以外）とき、レンズ情報が 1 件も付いていないときは
+    絞り込まず None を返す（見落としを避ける側に倒す）。
     """
     if verdict != "continue":
-        return None
-    if round_no + 1 >= max_rounds:
         return None
     lenses = sorted({f["lens"] for f in remaining if f.get("lens")})
     return lenses or None
@@ -313,7 +311,7 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
         "improvements_count": len(improvements),
         "oscillating": oscillating,
         "diverging": diverging,
-        "next_lenses": next_lenses(remaining, verdict, len(rounds), max_rounds),
+        "next_lenses": next_lenses(remaining, verdict),
     }
 
 

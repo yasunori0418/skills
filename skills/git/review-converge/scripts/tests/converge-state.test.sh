@@ -215,12 +215,14 @@ OUT=$(record "$S" "$F_LENS_IMPROVE" --head aaa111 --max-rounds 5)
 check "lens-excludes-improvement-only-lens" "logic" \
     "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["next_lenses"]))')"
 
-# 最終周回の直前(次が上限周回)は徹底パスへ戻す -> null(= 全レンズ)
+# 最終周回の直前(次が上限周回)でも徹底パスへ戻さず絞り込みを維持する
+# (上限周回でレンズを広げると新規指摘が上限到達と同時に出て修正バーストになる)
 S="$WORK/lens-final.json"
+F_OTHER_LENS='[{"file":"src/b.py","line":20,"summary":"命名が不明瞭","severity":"must","lens":"design"}]'
 record "$S" "$F_MUST" --head r1 --max-rounds 3 >/dev/null
-OUT=$(record "$S" "$F_OTHER" --head r2 --max-rounds 3)
-check "lens-final-round-is-full-pass" "None" \
-    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["next_lenses"])')"
+OUT=$(record "$S" "$F_OTHER_LENS" --head r2 --max-rounds 3)
+check "lens-final-round-keeps-narrowing" "design" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["next_lenses"]))')"
 
 # 続行しないとき(収束・上限・振動)は次周回が無いので null
 S="$WORK/lens-converged.json"
