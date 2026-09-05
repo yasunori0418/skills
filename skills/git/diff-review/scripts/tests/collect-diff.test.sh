@@ -8,7 +8,7 @@
 #   - 変更なし                     -> NO_CHANGES(グラウンドトゥルースがあっても)
 #   - CONVENTIONS 節               -> manifest には常に出る(規約が無くても status: none)。
 #                                     .claude/rules の paths 照合・未追跡ファイルの照合・削除ファイルの除外、
-#                                     commit / worktree / cumulative には出ない、python3 不在で status: unavailable
+#                                     commit / worktree / cumulative には出ない、uv も python3 も不在で status: unavailable
 set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLECT="$SCRIPT_DIR/../collect-diff.sh"
@@ -198,7 +198,7 @@ hasnt "conv-not-in-commit" "$(cd "$D" && "$COLLECT" commit "$SHA" 2>/dev/null)" 
 hasnt "conv-not-in-worktree" "$(cd "$D" && "$COLLECT" worktree 2>/dev/null)" "== CONVENTIONS"
 hasnt "conv-not-in-cumulative" "$(cd "$D" && "$COLLECT" cumulative 2>/dev/null)" "== CONVENTIONS"
 
-# --- CONVENTIONS 節: python3 が PATH に無ければ status: unavailable で manifest は完走する ---
+# --- CONVENTIONS 節: uv も python3 も PATH に無ければ status: unavailable で manifest は完走する ---
 BIN="$WORK/bin-nopython"
 mkdir -p "$BIN"
 for tool in bash git awk sed cut wc tr sort grep head find uniq basename dirname; do
@@ -213,7 +213,7 @@ check "conv-nopython-exit" 0 "$(
 has "conv-nopython-status" "$OUT" "status: unavailable"
 has "conv-nopython-completes" "$OUT" "== SIZE =="
 ERR=$(cd "$D" && PATH="$BIN" "$COLLECT" manifest 2>&1 >/dev/null)
-has "conv-nopython-warn" "$ERR" "python3 が無いため CONVENTIONS 節を生成できない"
+has "conv-nopython-warn" "$ERR" "uv も python3 も無いため CONVENTIONS 節を生成できない"
 
 # --- 規定パス外の候補: gitignored な tmp_claude/ の仕様書も候補として出る ---
 # 実運用の失敗例(tmp_claude/<日付>_<対象>_spec.md が検出されずレビューが仕様を無視した)の回帰

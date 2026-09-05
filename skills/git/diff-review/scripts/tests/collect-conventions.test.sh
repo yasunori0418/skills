@@ -10,13 +10,14 @@
 #   - DIFF_REVIEW_CONVENTIONS の追加 / 存在しないパスの WARN / none(explicit-only)
 #   - 並び順(具体度)/ 上限 20 件の省略行 / 見出し 200 文字切り / フェンス内見出しの無視 / lint 行
 #   - status: none でも節が出る / 変更ファイル無し(stdin 空)でも常時適用ルールは出る
-# python3 が無い環境では SKIP して exit 0。
+# uv も python3 も無い環境では SKIP して exit 0。
 set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PY="$SCRIPT_DIR/../collect_conventions.py"
+RUN_PY="$SCRIPT_DIR/../run-python.sh" # uv → python3 の順に実行経路を選ぶ
 
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "SKIP: $(basename "$0") python3 が無い環境のためスキップ"
+if ! command -v uv >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+    echo "SKIP: $(basename "$0") uv も python3 も無い環境のためスキップ"
     exit 0
 fi
 
@@ -54,13 +55,13 @@ run() { # root files...
     local root="$1"
     shift
     printf '%s\n' "$@" >"$WORK/in.txt"
-    python3 "$PY" --root "$root" <"$WORK/in.txt" 2>/dev/null
+    "$RUN_PY" "$PY" --root "$root" <"$WORK/in.txt" 2>/dev/null
 }
 run_err() { # root files... -> stderr
     local root="$1"
     shift
     printf '%s\n' "$@" >"$WORK/in.txt"
-    python3 "$PY" --root "$root" <"$WORK/in.txt" 2>&1 >/dev/null
+    "$RUN_PY" "$PY" --root "$root" <"$WORK/in.txt" 2>&1 >/dev/null
 }
 rule() { # root name paths-frontmatter-body(省略時は frontmatter 無し) [markdown]
     local root="$1" name="$2" fm="${3:-}" md="${4:-# $2}"
@@ -213,29 +214,29 @@ rule "$R" "always.md"
 printf '# Conv\n## 命名\n' >"$R/docs/conv.md"
 printf '# Style\n' >"$R/docs/style.md"
 printf '%s\n' "src/a.kt" >"$WORK/in.txt"
-OUT=$(DIFF_REVIEW_CONVENTIONS="docs/conv.md:docs/style.md" python3 "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
+OUT=$(DIFF_REVIEW_CONVENTIONS="docs/conv.md:docs/style.md" "$RUN_PY" "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
 has "env-explicit-a" "$OUT" "docs/conv.md"
 has "env-explicit-b" "$OUT" "docs/style.md"
 has "env-explicit-tag" "$OUT" "[explicit: DIFF_REVIEW_CONVENTIONS]"
 has "env-explicit-plus-auto" "$OUT" "always.md"
 has "env-explicit-status" "$OUT" "status: found"
-ERR=$(DIFF_REVIEW_CONVENTIONS="nope/x.md" python3 "$PY" --root "$R" <"$WORK/in.txt" 2>&1 >/dev/null)
+ERR=$(DIFF_REVIEW_CONVENTIONS="nope/x.md" "$RUN_PY" "$PY" --root "$R" <"$WORK/in.txt" 2>&1 >/dev/null)
 has "env-missing-warn" "$ERR" "DIFF_REVIEW_CONVENTIONS のパスが存在しない: nope/x.md"
-OUT=$(DIFF_REVIEW_CONVENTIONS="nope/x.md" python3 "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
+OUT=$(DIFF_REVIEW_CONVENTIONS="nope/x.md" "$RUN_PY" "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
 has "env-missing-still-section" "$OUT" "status: found"
 # 絶対パスも受ける
-OUT=$(DIFF_REVIEW_CONVENTIONS="$R/docs/conv.md" python3 "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
+OUT=$(DIFF_REVIEW_CONVENTIONS="$R/docs/conv.md" "$RUN_PY" "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
 has "env-abs" "$OUT" "- docs/conv.md"
 # none: 自動探索を止め明示分のみ
-OUT=$(DIFF_REVIEW_CONVENTIONS="none" python3 "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
+OUT=$(DIFF_REVIEW_CONVENTIONS="none" "$RUN_PY" "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
 has "env-none-status" "$OUT" "status: explicit-only"
 hasnt "env-none-no-auto" "$OUT" "always.md"
-OUT=$(DIFF_REVIEW_CONVENTIONS="none:docs/conv.md" python3 "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
+OUT=$(DIFF_REVIEW_CONVENTIONS="none:docs/conv.md" "$RUN_PY" "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
 has "env-none-explicit-status" "$OUT" "status: explicit-only"
 has "env-none-explicit-path" "$OUT" "docs/conv.md"
 hasnt "env-none-explicit-no-auto" "$OUT" "always.md"
 # 自動探索と重複する明示注入は 1 行にまとまる
-OUT=$(DIFF_REVIEW_CONVENTIONS=".claude/rules/always.md" python3 "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
+OUT=$(DIFF_REVIEW_CONVENTIONS=".claude/rules/always.md" "$RUN_PY" "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
 check "env-dup-once" 1 "$(printf '%s\n' "$OUT" | grep -c 'always.md')"
 
 # --- 並び順: rules(具体度順)→ 祖先 → root → contributing → explicit ---
@@ -248,9 +249,9 @@ printf '# M\n' >"$R/src/app/CLAUDE.md"
 printf '# R\n' >"$R/CLAUDE.md"
 printf '# C\n' >"$R/CONTRIBUTING.md"
 printf '# E\n' >"$R/docs/e.md"
-OUT=$(DIFF_REVIEW_CONVENTIONS="docs/e.md" python3 "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
+OUT=$(DIFF_REVIEW_CONVENTIONS="docs/e.md" "$RUN_PY" "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
 printf '%s\n' "src/app/x.kt" >"$WORK/in.txt"
-OUT=$(DIFF_REVIEW_CONVENTIONS="docs/e.md" python3 "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
+OUT=$(DIFF_REVIEW_CONVENTIONS="docs/e.md" "$RUN_PY" "$PY" --root "$R" <"$WORK/in.txt" 2>/dev/null)
 check "order" ".claude/rules/narrow.md .claude/rules/mid.md .claude/rules/broad.md .claude/rules/always.md src/app/CLAUDE.md CLAUDE.md CONTRIBUTING.md docs/e.md" \
     "$(printf '%s\n' "$OUT" | grep -oE '^- [^ ]+' | cut -c3- | tr '\n' ' ' | sed 's/ $//')"
 

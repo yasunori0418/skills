@@ -197,20 +197,21 @@ emit_ground_truth() {
 # 変更ファイルに適用されるコーディング規約の列挙(collect_conventions.py へ委譲)。
 # GROUND_TRUTH と異なり節は常に出す(`status: none` も reviewer への情報)。
 # 変更ファイル集合 = 除外 pathspec 適用後の追加・変更ファイル(削除は除く)+ 未追跡ファイル。
-# python3 が無い、またはスクリプトが失敗したときは manifest を止めず `status: unavailable` で続行する。
+# Python の実行経路は run-python.sh が選ぶ(uv → python3)。どちらも無い、またはスクリプトが
+# 失敗したときは manifest を止めず `status: unavailable` で続行する。
 CONVENTIONS_HEADER="== CONVENTIONS (規約。レビューの第 1 基準。一致した規約は Read して照合する) =="
 emit_conventions() {
     local root out
     root=$(git rev-parse --show-toplevel)
-    if ! command -v python3 >/dev/null 2>&1; then
-        echo "WARN: python3 が無いため CONVENTIONS 節を生成できない(status: unavailable)" >&2
+    if ! command -v uv >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+        echo "WARN: uv も python3 も無いため CONVENTIONS 節を生成できない(status: unavailable)" >&2
         printf '%s\nstatus: unavailable\n\n' "$CONVENTIONS_HEADER"
         return
     fi
     if out=$({
         git diff --name-only --diff-filter=d "$BASE_SHA" -- . "${EXCLUDE_PATHSPEC[@]}"
         git ls-files --others --exclude-standard --full-name
-    } | sort -u | python3 "$SCRIPT_DIR/collect_conventions.py" --root "$root"); then
+    } | sort -u | "$SCRIPT_DIR/run-python.sh" "$SCRIPT_DIR/collect_conventions.py" --root "$root"); then
         printf '%s\n\n' "$out"
     else
         echo "WARN: collect_conventions.py が失敗したため CONVENTIONS 節を生成できない(status: unavailable)" >&2
