@@ -219,7 +219,9 @@ has "conv-nopython-warn" "$ERR" "uv も python3 も無いため CONVENTIONS 節�
 # --- CONVENTIONS 節: 規約列挙が timeout を超えたら打ち切って status: unavailable で完走する ---
 # (glob 照合は正規表現エンジン任せで後戻りが膨らみ得る。遅い偽インタプリタで打ち切り経路を踏む)
 SLOWPY="$WORK/slow-python"
-printf '#!/usr/bin/env bash\nsleep 5\n' >"$SLOWPY" && chmod +x "$SLOWPY"
+# shebang は sandbox 内の bash 実パスにする(nix sandbox に /usr/bin/env は無く、実行時に
+# 生成したファイルは patchShebangs の対象外。env 経由だと exec に失敗して 124 にならない)
+printf '#!%s\nsleep 5\n' "$(command -v bash)" >"$SLOWPY" && chmod +x "$SLOWPY"
 D="$WORK/conv-timeout" && new_repo "$D"
 OUT=$(cd "$D" && DIFF_REVIEW_PYTHON="$SLOWPY" DIFF_REVIEW_CONVENTIONS_TIMEOUT=1 "$COLLECT" manifest 2>/dev/null)
 check "conv-timeout-exit" 0 "$(
