@@ -40,7 +40,7 @@ agent への prompt に埋め込むときは必ず実際の絶対パスに展開
 ### CONVENTIONS 節(常に現れる)
 
 manifest には `== CONVENTIONS ==` 節が**常に**付く。変更ファイル(追加・変更 + 未追跡。削除は除く)に
-適用されるリポジトリ内のコーディング規約を `scripts/collect-conventions.py` が決定論で列挙したもので、
+適用されるリポジトリ内のコーディング規約を `scripts/collect_conventions.py` が決定論で列挙したもので、
 全レンズに**レビューの第 1 基準**として渡す。
 
 探索対象は `.claude/rules/**/*.md`(frontmatter `paths:` を変更ファイルに照合。`paths` 無しは常時適用。

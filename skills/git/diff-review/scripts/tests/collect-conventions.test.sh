@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verifies collect-conventions.py (diff-review の規約列挙):
+# Verifies collect_conventions.py (diff-review の規約列挙):
 #   - paths: 単一文字列 / YAML リスト / インラインリスト / frontmatter 無し(常時適用)
 #   - glob: ** 再帰 / * は / を跨がない / ? / ブレース展開(ネスト) / [...] / 末尾 ** /
 #           / を含まないパターンは root 直下のみ / 展開上限超過は WARN + 不一致
@@ -13,7 +13,7 @@
 # python3 が無い環境では SKIP して exit 0。
 set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-PY="$SCRIPT_DIR/../collect-conventions.py"
+PY="$SCRIPT_DIR/../collect_conventions.py"
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "SKIP: $(basename "$0") python3 が無い環境のためスキップ"

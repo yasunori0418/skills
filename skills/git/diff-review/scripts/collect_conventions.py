@@ -2,7 +2,7 @@
 """diff-review: 変更ファイルに適用されるコーディング規約の決定論的列挙(読み取り専用)。
 
 usage:
-    collect-conventions.py --root <repo-root> < changed-files.txt
+    collect_conventions.py --root <repo-root> < changed-files.txt
 
 stdin  : 変更ファイルのパス(1 行 1 パス、リポジトリルート相対)。削除ファイルは含めない
 stdout : manifest に同梱する `== CONVENTIONS ==` 節

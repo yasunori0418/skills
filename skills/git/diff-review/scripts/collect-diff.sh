@@ -194,7 +194,7 @@ emit_ground_truth() {
     echo
 }
 
-# 変更ファイルに適用されるコーディング規約の列挙(collect-conventions.py へ委譲)。
+# 変更ファイルに適用されるコーディング規約の列挙(collect_conventions.py へ委譲)。
 # GROUND_TRUTH と異なり節は常に出す(`status: none` も reviewer への情報)。
 # 変更ファイル集合 = 除外 pathspec 適用後の追加・変更ファイル(削除は除く)+ 未追跡ファイル。
 # python3 が無い、またはスクリプトが失敗したときは manifest を止めず `status: unavailable` で続行する。
@@ -210,10 +210,10 @@ emit_conventions() {
     if out=$({
         git diff --name-only --diff-filter=d "$BASE_SHA" -- . "${EXCLUDE_PATHSPEC[@]}"
         git ls-files --others --exclude-standard --full-name
-    } | sort -u | python3 "$SCRIPT_DIR/collect-conventions.py" --root "$root"); then
+    } | sort -u | python3 "$SCRIPT_DIR/collect_conventions.py" --root "$root"); then
         printf '%s\n\n' "$out"
     else
-        echo "WARN: collect-conventions.py が失敗したため CONVENTIONS 節を生成できない(status: unavailable)" >&2
+        echo "WARN: collect_conventions.py が失敗したため CONVENTIONS 節を生成できない(status: unavailable)" >&2
         printf '%s\nstatus: unavailable\n\n' "$CONVENTIONS_HEADER"
     fi
 }
