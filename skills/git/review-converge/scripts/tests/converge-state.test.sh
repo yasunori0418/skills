@@ -9,7 +9,10 @@
 #   - 一度消えた指摘の再出現       -> oscillation (reappeared)
 #   - 解消数 <= 新規数が 2 周連続  -> diverging (自己増殖)
 #   - prev-head / status / reset   -> 前周回 sha の取得・再出力・初期化
-#   - 壊れた入力                   -> exit 2
+#   - --changed-lines              -> 周回ごとの変更行数の系列と増分(未指定は null)
+#   - lens 併記タグ               -> next_lenses でレンズ単位に分割
+#   - keep / suppress              -> 保持した指摘の除外(file + line または要旨)・ガード・再指摘禁止リスト
+#   - 壊れた入力 / 語彙外 severity  -> exit 2
 # python3 が無い環境では SKIP して exit 0。
 set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -215,12 +218,14 @@ OUT=$(record "$S" "$F_LENS_IMPROVE" --head aaa111 --max-rounds 5)
 check "lens-excludes-improvement-only-lens" "logic" \
     "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["next_lenses"]))')"
 
-# 最終周回の直前(次が上限周回)は徹底パスへ戻す -> null(= 全レンズ)
+# 最終周回の直前(次が上限周回)でも徹底パスへ戻さず絞り込みを維持する
+# (上限周回でレンズを広げると新規指摘が上限到達と同時に出て修正バーストになる)
 S="$WORK/lens-final.json"
+F_OTHER_LENS='[{"file":"src/b.py","line":20,"summary":"命名が不明瞭","severity":"must","lens":"design"}]'
 record "$S" "$F_MUST" --head r1 --max-rounds 3 >/dev/null
-OUT=$(record "$S" "$F_OTHER" --head r2 --max-rounds 3)
-check "lens-final-round-is-full-pass" "None" \
-    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["next_lenses"])')"
+OUT=$(record "$S" "$F_OTHER_LENS" --head r2 --max-rounds 3)
+check "lens-final-round-keeps-narrowing" "design" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["next_lenses"]))')"
 
 # 続行しないとき(収束・上限・振動)は次周回が無いので null
 S="$WORK/lens-converged.json"
@@ -228,11 +233,116 @@ OUT=$(record "$S" "$F_EMPTY" --head aaa111)
 check "lens-none-when-not-continue" "None" \
     "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["next_lenses"])')"
 
+# 複数レンズが 1 件に併記された "design,test" 形式のタグはレンズ単位に分割して集計する
+# (併記のまま返すと呼び出し元が解釈できず、残指摘に無いレンズまで起動した実例への対策)
+S="$WORK/lens-combined.json"
+F_LENS_COMBINED='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severity":"must","lens":"design,test"},
+                  {"file":"src/b.py","line":20,"summary":"過剰な防御","severity":"want","lens":" yagni "}]'
+OUT=$(record "$S" "$F_LENS_COMBINED" --head aaa111 --max-rounds 5)
+check "lens-combined-tag-is-split" "design,test,yagni" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["next_lenses"]))')"
+
 # lens 未指定(diff-review がレンズタグを出さない場合)は絞り込めないので null
 S="$WORK/lens-absent.json"
 OUT=$(record "$S" "$F_MUST" --head aaa111 --max-rounds 5)
 check "lens-absent-falls-back-to-full" "None" \
     "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["next_lenses"])')"
+
+# --- 差分推移(--changed-lines) ---
+# 周回ごとの変更行数を系列で出し、最初と最後の差を増分として出す(verdict には影響しない)
+S="$WORK/changed-lines.json"
+record "$S" "$F_MUST" --head r1 --changed-lines 100 >/dev/null
+OUT=$(record "$S" "$F_OTHER" --head r2 --changed-lines 130)
+check "changed-lines-series" "100,130" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(map(str, json.load(sys.stdin)["changed_lines"])))')"
+has "changed-lines-delta" "$OUT" '"changed_lines_delta": 30'
+check "changed-lines-verdict-unaffected" "continue" "$(verdict "$OUT")"
+
+# 未指定の周回は null。非 null が 2 点無ければ増分も null
+S="$WORK/changed-lines-absent.json"
+record "$S" "$F_MUST" --head r1 >/dev/null
+OUT=$(record "$S" "$F_OTHER" --head r2 --changed-lines 130)
+check "changed-lines-null-when-absent" "None,130" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(map(str, json.load(sys.stdin)["changed_lines"])))')"
+has "changed-lines-delta-null" "$OUT" '"changed_lines_delta": null'
+
+# --- kind_reason(分類根拠)は判定に使わずそのまま残す ---
+S="$WORK/kind-reason.json"
+F_REASON='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severity":"must","kind":"fix","kind_reason":"in-diff"},
+           {"file":"src/b.py","line":20,"summary":"enum に型化すべき","severity":"want+","kind":"improvement","kind_reason":"typing"}]'
+OUT=$(record "$S" "$F_REASON" --head aaa111)
+check "kind-reason-verdict" "continue" "$(verdict "$OUT")"
+has "kind-reason-kept-in-remaining" "$OUT" '"kind_reason": "in-diff"'
+has "kind-reason-kept-in-improvements" "$OUT" '"kind_reason": "typing"'
+has "kind-reason-saved-in-state" "$(cat "$S")" '"kind_reason": "typing"'
+
+# --- 保持(keep)と再指摘禁止リスト(suppress) ---
+keep() { # state file line reason [extra args...] -> stdout
+    local state="$1" file="$2" line="$3" reason="$4"
+    shift 4
+    python3 "$STATE_PY" keep --state "$state" --file "$file" --line "$line" --reason "$reason" "$@" 2>&1
+}
+S="$WORK/keep.json"
+F_KEEP='[{"file":"README.md","line":603,"summary":"失敗モードの説明が過剰","severity":"want","lens":"yagni"},
+         {"file":"README.md","line":599,"summary":"言い換えの重複","severity":"nit","lens":"yagni"}]'
+OUT=$(record "$S" "$F_KEEP" --head r1 --max-rounds 5)
+check "keep-before-verdict" "continue" "$(verdict "$OUT")"
+# 閾値未満の nit は suppress に載る(保持しなくても次周回で再指摘させない)
+has "suppress-has-below-threshold" "$OUT" '閾値未満(nit)のため見送り'
+
+# want の保持: remaining から外れて収束し、kept / suppress に理由付きで載る
+OUT=$(keep "$S" README.md 603 "test レンズが 2 周目に要求した失敗モードの記述")
+check "keep-want-exit" 0 $?
+check "keep-want-converges" "converged" "$(verdict "$OUT")"
+has "keep-in-kept" "$OUT" '"kept_count": 1'
+has "keep-in-suppress" "$OUT" '保持: test レンズが 2 周目に要求した失敗モードの記述'
+has "keep-saved-in-state" "$(cat "$S")" '"reason": "test レンズが 2 周目に要求した失敗モードの記述"'
+
+# 保持した箇所を次周回で言い換えて再指摘されても stuck / reappeared にならず、修正対象にも戻らない
+OUT=$(record "$S" '[{"file":"README.md","line":603,"summary":"帰結の連鎖が長すぎる","severity":"want","lens":"yagni"}]' --head r2 --max-rounds 5)
+check "keep-reworded-restatement-ignored" "converged" "$(verdict "$OUT")"
+check "keep-no-oscillation" "0" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["oscillating"]))')"
+
+# 保持した指摘が次周回で行ズレして(上の行の増減)同じ要旨で再出現しても、保持済みとして除外される
+OUT=$(record "$S" '[{"file":"README.md","line":605,"summary":"失敗モードの説明が過剰","severity":"want","lens":"yagni"}]' --head r3 --max-rounds 5)
+check "keep-line-shift-same-summary-ignored" "converged" "$(verdict "$OUT")"
+has "keep-line-shift-not-in-suppress-as-below" "$OUT" '"kept_count": 1'
+# 行も要旨も異なる指摘は保持済みに当たらず修正対象に戻る
+OUT=$(record "$S" '[{"file":"README.md","line":605,"summary":"手順の番号が飛んでいる","severity":"want","lens":"docs"}]' --head r4 --max-rounds 5)
+check "keep-different-finding-still-remaining" "continue" "$(verdict "$OUT")"
+# 別ファイルの同趣旨は保持済みに当たらない
+# (r4 → r5 と新規指摘が続くので verdict は diverging になる。見たいのは remaining に残ることだけ)
+OUT=$(record "$S" '[{"file":"docs/other.md","line":603,"summary":"失敗モードの説明が過剰","severity":"want","lens":"yagni"}]' --head r5 --max-rounds 6)
+has "keep-other-file-same-summary-still-remaining" "$OUT" '"remaining_count": 1'
+
+
+# must は保持できない / want+ は --user-confirmed が要る / 直近周回に無い指摘は保持できない / 理由必須
+S="$WORK/keep-guard.json"
+F_GUARD='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severity":"must"},
+          {"file":"src/b.py","line":20,"summary":"命名が不明瞭","severity":"want+"}]'
+record "$S" "$F_GUARD" --head r1 >/dev/null
+keep "$S" src/a.py 10 "同意しない" >/dev/null 2>&1
+check "keep-refuses-must" 2 $?
+keep "$S" src/b.py 20 "呼び出し元の命名規約に合わせている" >/dev/null 2>&1
+check "keep-refuses-want-plus-without-confirm" 2 $?
+keep "$S" src/b.py 20 "呼び出し元の命名規約に合わせている" --user-confirmed >/dev/null 2>&1
+check "keep-accepts-want-plus-with-confirm" 0 $?
+keep "$S" src/zzz.py 1 "存在しない指摘" >/dev/null 2>&1
+check "keep-refuses-unknown-location" 2 $?
+keep "$S" src/b.py 20 "   " --user-confirmed >/dev/null 2>&1
+check "keep-refuses-empty-reason" 2 $?
+
+# 停止系 verdict 中の keep は裁定(--user-confirmed)無しでは拒否する(keep 連打で収束扱いにする迂回を防ぐ)
+S="$WORK/keep-stop.json"
+F_STOP='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severity":"want"}]'
+record "$S" "$F_STOP" --head r1 --max-rounds 2 >/dev/null
+OUT=$(record "$S" '[{"file":"src/a.py","line":11,"summary":"別の未処理","severity":"want"}]' --head r2 --max-rounds 2)
+check "keep-stop-precondition" "limit-reached" "$(verdict "$OUT")"
+keep "$S" src/a.py 11 "呼び出し元で保証済み" >/dev/null 2>&1
+check "keep-refuses-under-stop-verdict" 2 $?
+OUT=$(keep "$S" src/a.py 11 "呼び出し元で保証済み(ユーザー裁定)" --user-confirmed)
+check "keep-accepts-under-stop-verdict-with-confirm" "converged" "$(verdict "$OUT")"
 
 # --- 入力エラー ---
 S="$WORK/bad.json"
@@ -240,6 +350,13 @@ printf 'not json' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
 check "invalid-json" 2 $?
 printf '[{"file":"a","line":1,"summary":"s","scope":"nowhere"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
 check "invalid-scope" 2 $?
+printf '[{"file":"a","line":1,"summary":"s","severity":"critical"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
+check "invalid-severity" 2 $?
+# 大小文字・前後空白の揺れは正規化して受ける(語彙内なら拒否しない)
+S_SEV="$WORK/sev-case.json"
+OUT=$(record "$S_SEV" '[{"file":"a","line":1,"summary":"s","severity":" Must "}]' --head r1)
+check "severity-case-normalized" "continue" "$(verdict "$OUT")"
+has "severity-stored-lowercase" "$(cat "$S_SEV")" '"severity": "must"'
 printf '[{"file":"a","line":1,"summary":"s","kind":"refactor"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
 check "invalid-kind" 2 $?
 

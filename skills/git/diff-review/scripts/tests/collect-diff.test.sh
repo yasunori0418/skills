@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Verifies collect-diff.sh manifest (diff-review の差分収集):
-#   - グラウンドトゥルース無し     -> GROUND_TRUTH 節を出さない(従来出力とバイト単位で一致)
+#   - グラウンドトゥルース無し     -> GROUND_TRUTH 節を出さない(節の挿入以外は従来出力と一致)
 #   - docs/dev/<対象>/spec.md あり -> 節に spec / basic-design / test-case のパスが出る
 #   - 対象が複数                   -> 全対象が列挙される
 #   - 境界ファイルあり             -> 節に .claude/task-boundary.json の内容が出る
 #   - 境界ファイルのみ             -> 節が出る(対象ディレクトリ不要)
 #   - 変更なし                     -> NO_CHANGES(グラウンドトゥルースがあっても)
+#   - CONVENTIONS 節               -> manifest には常に出る(規約が無くても status: none)。
+#                                     .claude/rules の paths 照合・未追跡ファイルの照合・削除ファイルの除外、
+#                                     commit / worktree / cumulative には出ない、uv も python3 も不在で status: unavailable、
+#                                     timeout 超過で打ち切り(status: unavailable)
 set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLECT="$SCRIPT_DIR/../collect-diff.sh"
@@ -58,6 +62,9 @@ new_repo() { # dir
 
 manifest() { # dir -> stdout
     (cd "$1" && "$COLLECT" manifest 2>/dev/null)
+}
+conv_section() { # manifest-output -> CONVENTIONS 節のみ(UNTRACKED 等に同じパスが出るため絞る)
+    printf '%s\n' "$1" | sed -n '/^== CONVENTIONS/,/^$/p'
 }
 
 # --- グラウンドトゥルース無し: 節を出さない ---
@@ -147,6 +154,84 @@ git -C "$D" add -A
 git -C "$D" commit --quiet -m "docs: spec"
 OUT=$(manifest "$D")
 check "nochanges" "NO_CHANGES" "$OUT"
+
+# --- CONVENTIONS 節: 規約が無くても常に出る(status: none) ---
+has "conv-plain-section" "$BASELINE" "== CONVENTIONS"
+has "conv-plain-none" "$BASELINE" "status: none"
+has "conv-plain-lint" "$BASELINE" "lint: (なし)"
+
+# --- CONVENTIONS 節: .claude/rules の paths が変更ファイルに一致すると found ---
+D="$WORK/conv-rules" && new_repo "$D"
+mkdir -p "$D/.claude/rules"
+printf -- '---\npaths: "*.md"\n---\n# Root docs\n' >"$D/.claude/rules/root-md.md"
+printf -- '---\npaths: "src/**/*.kt"\n---\n# Kotlin\n' >"$D/.claude/rules/kotlin.md"
+OUT=$(conv_section "$(manifest "$D")")
+has "conv-rules-found" "$OUT" "status: found"
+has "conv-rules-matched" "$OUT" ".claude/rules/root-md.md"
+hasnt "conv-rules-unmatched" "$OUT" ".claude/rules/kotlin.md"
+# 未追跡ファイルも照合対象(src/a.kt を未追跡で置く)
+mkdir -p "$D/src"
+echo "fun main() {}" >"$D/src/a.kt"
+OUT=$(conv_section "$(manifest "$D")")
+has "conv-untracked-matched" "$OUT" ".claude/rules/kotlin.md"
+
+# --- CONVENTIONS 節: 削除ファイルは照合に使われない ---
+D="$WORK/conv-deleted" && new_repo "$D"
+git -C "$D" checkout --quiet main
+mkdir -p "$D/src/legacy" "$D/.claude/rules"
+echo "old" >"$D/src/legacy/gone.kt"
+printf -- '---\npaths: "src/legacy/**"\n---\n# Legacy\n' >"$D/.claude/rules/legacy.md"
+git -C "$D" add -A
+git -C "$D" commit --quiet -m "chore: legacy"
+git -C "$D" checkout --quiet -b feat-del
+git -C "$D" rm --quiet src/legacy/gone.kt
+git -C "$D" commit --quiet -m "refactor: remove legacy"
+OUT=$(conv_section "$(manifest "$D")")
+has "conv-deleted-section" "$OUT" "== CONVENTIONS"
+hasnt "conv-deleted-not-matched" "$OUT" ".claude/rules/legacy.md"
+
+# --- CONVENTIONS 節: manifest 以外のサブコマンドには出ない ---
+D="$WORK/conv-subcmds" && new_repo "$D"
+mkdir -p "$D/.claude/rules"
+printf -- '---\npaths: "*.md"\n---\n# Root docs\n' >"$D/.claude/rules/root-md.md"
+SHA=$(git -C "$D" rev-parse HEAD)
+hasnt "conv-not-in-commit" "$(cd "$D" && "$COLLECT" commit "$SHA" 2>/dev/null)" "== CONVENTIONS"
+hasnt "conv-not-in-worktree" "$(cd "$D" && "$COLLECT" worktree 2>/dev/null)" "== CONVENTIONS"
+hasnt "conv-not-in-cumulative" "$(cd "$D" && "$COLLECT" cumulative 2>/dev/null)" "== CONVENTIONS"
+
+# --- CONVENTIONS 節: uv も python3 も PATH に無ければ status: unavailable で manifest は完走する ---
+BIN="$WORK/bin-nopython"
+mkdir -p "$BIN"
+for tool in bash git awk sed cut wc tr sort grep head find uniq basename dirname; do
+    src=$(command -v "$tool" 2>/dev/null) && ln -s "$src" "$BIN/$tool"
+done
+D="$WORK/conv-nopython" && new_repo "$D"
+OUT=$(cd "$D" && PATH="$BIN" "$COLLECT" manifest 2>/dev/null)
+check "conv-nopython-exit" 0 "$(
+    cd "$D" && PATH="$BIN" "$COLLECT" manifest >/dev/null 2>&1
+    echo $?
+)"
+has "conv-nopython-status" "$OUT" "status: unavailable"
+has "conv-nopython-completes" "$OUT" "== SIZE =="
+ERR=$(cd "$D" && PATH="$BIN" "$COLLECT" manifest 2>&1 >/dev/null)
+has "conv-nopython-warn" "$ERR" "uv も python3 も無いため CONVENTIONS 節を生成できない"
+
+# --- CONVENTIONS 節: 規約列挙が timeout を超えたら打ち切って status: unavailable で完走する ---
+# (glob 照合は正規表現エンジン任せで後戻りが膨らみ得る。遅い偽インタプリタで打ち切り経路を踏む)
+SLOWPY="$WORK/slow-python"
+# shebang は sandbox 内の bash 実パスにする(nix sandbox に /usr/bin/env は無く、実行時に
+# 生成したファイルは patchShebangs の対象外。env 経由だと exec に失敗して 124 にならない)
+printf '#!%s\nsleep 5\n' "$(command -v bash)" >"$SLOWPY" && chmod +x "$SLOWPY"
+D="$WORK/conv-timeout" && new_repo "$D"
+OUT=$(cd "$D" && DIFF_REVIEW_PYTHON="$SLOWPY" DIFF_REVIEW_CONVENTIONS_TIMEOUT=1 "$COLLECT" manifest 2>/dev/null)
+check "conv-timeout-exit" 0 "$(
+    cd "$D" && DIFF_REVIEW_PYTHON="$SLOWPY" DIFF_REVIEW_CONVENTIONS_TIMEOUT=1 "$COLLECT" manifest >/dev/null 2>&1
+    echo $?
+)"
+has "conv-timeout-status" "$OUT" "status: unavailable"
+has "conv-timeout-completes" "$OUT" "== SIZE =="
+ERR=$(cd "$D" && DIFF_REVIEW_PYTHON="$SLOWPY" DIFF_REVIEW_CONVENTIONS_TIMEOUT=1 "$COLLECT" manifest 2>&1 >/dev/null)
+has "conv-timeout-warn" "$ERR" "1 秒で打ち切られたため CONVENTIONS 節を生成できない"
 
 # --- 規定パス外の候補: gitignored な tmp_claude/ の仕様書も候補として出る ---
 # 実運用の失敗例(tmp_claude/<日付>_<対象>_spec.md が検出されずレビューが仕様を無視した)の回帰

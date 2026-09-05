@@ -2,12 +2,13 @@
 # diff-review: レビュー対象差分の決定論的収集(読み取り専用・stdout のみ)
 #
 # usage:
-#   collect-diff.sh manifest [<base-ref>]                    範囲解決 + コミット一覧 + 統計(小径なら全文同梱)
+#   collect-diff.sh manifest [<base-ref>]                    範囲解決 + 規約列挙 + コミット一覧 + 統計(小径なら全文同梱)
 #   collect-diff.sh commit <sha>                             単一コミットの diff(除外適用)
 #   collect-diff.sh worktree                                 未コミット変更の diff(staged + unstaged)
 #   collect-diff.sh cumulative [<base-ref>] [-- <path>...]   累積 diff(path 明示時は除外を適用しない)
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 INLINE_THRESHOLD=300 # 累積 diff(除外分を除く)がこの行数以下なら manifest に全文を同梱
 
 # lockfile・生成物: 全文は出力せず統計のみ(git pathspec、'*' はディレクトリ区切りもまたぐ)
@@ -193,6 +194,44 @@ emit_ground_truth() {
     echo
 }
 
+# 変更ファイルに適用されるコーディング規約の列挙(collect_conventions.py へ委譲)。
+# GROUND_TRUTH と異なり節は常に出す(`status: none` も reviewer への情報)。
+# 変更ファイル集合 = 除外 pathspec 適用後の追加・変更ファイル(削除は除く)+ 未追跡ファイル。
+# Python の実行経路は run-python.sh が選ぶ(uv → python3)。どちらも無い、またはスクリプトが
+# 失敗したときは manifest を止めず `status: unavailable` で続行する。
+# glob 照合は Python の正規表現エンジンに委ねており(wcmatch)、`*` を多数並べたパターン ×
+# 長いファイル名では後戻りが多項式時間になり得る。エンジン内にタイムアウトは無いので、
+# プロセス単位の `timeout` で打ち切る(既定 30 秒。DIFF_REVIEW_CONVENTIONS_TIMEOUT で変更可)。
+CONVENTIONS_HEADER="== CONVENTIONS (規約。レビューの第 1 基準。一致した規約は Read して照合する) =="
+CONVENTIONS_TIMEOUT="${DIFF_REVIEW_CONVENTIONS_TIMEOUT:-30}"
+emit_conventions() {
+    local root out rc
+    root=$(git rev-parse --show-toplevel)
+    if [[ -z "${DIFF_REVIEW_PYTHON:-}" ]] && ! command -v uv >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+        echo "WARN: uv も python3 も無いため CONVENTIONS 節を生成できない(status: unavailable)" >&2
+        printf '%s\nstatus: unavailable\n\n' "$CONVENTIONS_HEADER"
+        return
+    fi
+    local -a runner=("$SCRIPT_DIR/run-python.sh")
+    if command -v timeout >/dev/null 2>&1; then
+        runner=(timeout "$CONVENTIONS_TIMEOUT" "${runner[@]}")
+    fi
+    rc=0
+    out=$({
+        git diff --name-only --diff-filter=d "$BASE_SHA" -- . "${EXCLUDE_PATHSPEC[@]}"
+        git ls-files --others --exclude-standard --full-name
+    } | sort -u | "${runner[@]}" "$SCRIPT_DIR/collect_conventions.py" --root "$root") || rc=$?
+    if [[ $rc -eq 0 ]]; then
+        printf '%s\n\n' "$out"
+    elif [[ $rc -eq 124 ]]; then
+        echo "WARN: collect_conventions.py が ${CONVENTIONS_TIMEOUT} 秒で打ち切られたため CONVENTIONS 節を生成できない(status: unavailable。paths の glob が複雑すぎる可能性)" >&2
+        printf '%s\nstatus: unavailable\n\n' "$CONVENTIONS_HEADER"
+    else
+        echo "WARN: collect_conventions.py が失敗したため CONVENTIONS 節を生成できない(status: unavailable)" >&2
+        printf '%s\nstatus: unavailable\n\n' "$CONVENTIONS_HEADER"
+    fi
+}
+
 cmd_manifest() {
     resolve_base "${1:-}"
     local head_sha branch commits untracked
@@ -213,6 +252,7 @@ cmd_manifest() {
     echo
 
     emit_ground_truth
+    emit_conventions
 
     echo "== COMMITS (base..HEAD, 古い順) =="
     if [[ -z "$commits" ]]; then
