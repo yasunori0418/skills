@@ -45,6 +45,9 @@ diff-review の周回ごとの指摘一覧を状態ファイルへ記録し、�
         出力の "kept" に蓄積、"suppress"(次周回へ渡す再指摘禁止リスト)に載せる。
         must は保持できない(エスカレーションへ)。want+ は --user-confirmed
         (AskUserQuestion で承認済み)が無ければ拒否する。直近周回に無い指摘は保持できない。
+        直近の verdict が停止系(limit-reached / oscillation / diverging)のときも
+        --user-confirmed が無ければ拒否する(裁定前に keep で remaining を消して
+        収束扱いにする迂回を防ぐ。承認付きの keep は裁定結果の記録として使う)。
 
     converge_state.py reset --state <path>
         状態ファイルを削除して収束ループを初期化する。
@@ -96,6 +99,7 @@ SEVERITY_ORDER = ["nit", "want", "want+", "must"]
 KINDS = ("fix", "improvement")
 DEFAULT_THRESHOLD = "want"
 DEFAULT_MAX_ROUNDS = 5
+STOP_VERDICTS = ("limit-reached", "oscillation", "diverging")
 STATE_VERSION = 2
 
 
@@ -480,6 +484,15 @@ def cmd_keep(args: argparse.Namespace) -> int:
     reason = (args.reason or "").strip()
     if not reason:
         print("ERROR: --reason は空にできない(保持の根拠を書くこと)", file=sys.stderr)
+        return 2
+
+    last_verdict = str((state.get("last_result") or {}).get("verdict", ""))
+    if last_verdict in STOP_VERDICTS and not args.user_confirmed:
+        print(
+            f"ERROR: 停止系 verdict({last_verdict})中の保持はユーザーの裁定(--user-confirmed)が要る。"
+            "裁定前に keep で remaining を消して収束させない(手順 4 のエスカレーションへ)",
+            file=sys.stderr,
+        )
         return 2
 
     loc = location_key(args.file, args.line)

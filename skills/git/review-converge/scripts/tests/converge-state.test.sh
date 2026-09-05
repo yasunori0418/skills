@@ -320,6 +320,17 @@ check "keep-refuses-unknown-location" 2 $?
 keep "$S" src/b.py 20 "   " --user-confirmed >/dev/null 2>&1
 check "keep-refuses-empty-reason" 2 $?
 
+# 停止系 verdict 中の keep は裁定(--user-confirmed)無しでは拒否する(keep 連打で収束扱いにする迂回を防ぐ)
+S="$WORK/keep-stop.json"
+F_STOP='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severity":"want"}]'
+record "$S" "$F_STOP" --head r1 --max-rounds 2 >/dev/null
+OUT=$(record "$S" '[{"file":"src/a.py","line":11,"summary":"別の未処理","severity":"want"}]' --head r2 --max-rounds 2)
+check "keep-stop-precondition" "limit-reached" "$(verdict "$OUT")"
+keep "$S" src/a.py 11 "呼び出し元で保証済み" >/dev/null 2>&1
+check "keep-refuses-under-stop-verdict" 2 $?
+OUT=$(keep "$S" src/a.py 11 "呼び出し元で保証済み(ユーザー裁定)" --user-confirmed)
+check "keep-accepts-under-stop-verdict-with-confirm" "converged" "$(verdict "$OUT")"
+
 # --- 入力エラー ---
 S="$WORK/bad.json"
 printf 'not json' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
