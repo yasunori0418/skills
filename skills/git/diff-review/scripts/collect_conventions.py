@@ -16,7 +16,8 @@ stderr : WARN(存在しない明示パス・ブレース展開の上限超過)
     CONTRIBUTING.md            ルート / .github/ / docs/
     DIFF_REVIEW_CONVENTIONS    ':' 区切りの追加パス。トークン `none` で自動探索を停止(明示分のみ)
 
-git は叩かない。標準ライブラリのみ(python3.12+)。
+git は叩かない。依存は pyproject.toml(wcmatch / bracex / python-frontmatter)。実行は
+scripts/run-python.sh 経由(uv があれば依存を解決した venv、無ければ PATH の python3)。
 """
 
 from __future__ import annotations
@@ -26,6 +27,10 @@ import os
 import re
 import sys
 from pathlib import Path
+
+import bracex
+import frontmatter
+from wcmatch import glob as wglob
 
 SECTION_HEADER = "== CONVENTIONS (規約。レビューの第 1 基準。一致した規約は Read して照合する) =="
 ENV_VAR = "DIFF_REVIEW_CONVENTIONS"
@@ -75,130 +80,52 @@ def warn(msg: str) -> None:
     print(f"WARN: {msg}", file=sys.stderr)
 
 
-# --- glob -> regex ---------------------------------------------------------
+# --- glob 照合(wcmatch / bracex に委譲) ----------------------------------
+
+# 公式仕様に合わせる: `**` は 0 個以上のディレクトリ(GLOBSTAR)/ `*` `?` は `/` を跨がない /
+# ブレース展開はネスト可(BRACE。展開は bracex で先に済ませるので照合時は残らない)/
+# ドットファイルも一致させる(DOTGLOB。`**/.github/**` のような規約パスを落とさない)/
+# 大文字小文字は OS によらず区別する(CASE。Windows でも規約パスは大小を区別する)。
+GLOB_FLAGS = wglob.GLOBSTAR | wglob.BRACE | wglob.DOTGLOB | wglob.CASE
 
 
 class BraceBudgetExceeded(Exception):
     pass
 
 
-def expand_braces(pattern: str, budget: list[int]) -> list[str]:
-    """`{a,b}` をブレース展開する(ネスト可)。展開結果は budget[0] から差し引く。
-
-    ブレースを含まないパターンは予算を消費しない(公式仕様)。
-    """
-    depth = 0
-    start = -1
-    for i, ch in enumerate(pattern):
-        if ch == "\\":
-            continue
-        if ch == "{":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif ch == "}" and depth > 0:
-            depth -= 1
-            if depth == 0:
-                inner = pattern[start + 1 : i]
-                alternatives = split_top_level(inner)
-                if len(alternatives) < 2:
-                    # `{x}` は展開せずリテラル扱い(下で '{' をエスケープする)
-                    break
-                results: list[str] = []
-                for alt in alternatives:
-                    for expanded in expand_braces(pattern[:start] + alt + pattern[i + 1 :], budget):
-                        results.append(expanded)
-                return results
-    # ここに来るのはブレース無し・`{x}` 単独・対応の取れないブレース(いずれもリテラル扱い)
-    budget[0] -= 1
-    if budget[0] < 0:
-        raise BraceBudgetExceeded
-    return [pattern]
-
-
-def split_top_level(s: str) -> list[str]:
-    parts: list[str] = []
-    depth = 0
-    cur = []
-    i = 0
-    while i < len(s):
-        ch = s[i]
-        if ch == "\\" and i + 1 < len(s):
-            cur.append(ch)
-            cur.append(s[i + 1])
-            i += 2
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-        if ch == "," and depth == 0:
-            parts.append("".join(cur))
-            cur = []
-        else:
-            cur.append(ch)
-        i += 1
-    parts.append("".join(cur))
-    return parts
-
-
-def glob_to_regex(pattern: str) -> re.Pattern[str]:
-    """単一(ブレース展開済み)glob を root 起点の正規表現へ変換する。
-
-    `**` は 0 個以上のディレクトリを跨ぐ / `*` `?` は `/` を跨がない / `[...]` は文字集合 /
-    `\\x` はリテラル。`*.kt` のような `/` を含まないパターンは root 直下にのみ一致する(公式仕様)。
-    """
+def normalize_pattern(pattern: str) -> str:
+    """root 起点の相対 glob に正規化する(先頭の `/` と `./` を落とす)。"""
     pattern = pattern.lstrip("/")
     if pattern.startswith("./"):
         pattern = pattern[2:]
-    out: list[str] = []
-    i = 0
-    n = len(pattern)
-    while i < n:
-        ch = pattern[i]
-        if ch == "\\" and i + 1 < n:
-            out.append(re.escape(pattern[i + 1]))
-            i += 2
-        elif ch == "*":
-            if pattern.startswith("**", i):
-                j = i + 2
-                if (i == 0 or pattern[i - 1] == "/") and j < n and pattern[j] == "/":
-                    out.append("(?:.*/)?")  # `**/` : 0 個以上のディレクトリ
-                    i = j + 1
-                elif (i == 0 or pattern[i - 1] == "/") and j == n:
-                    out.append(".*")  # 末尾の `**`
-                    i = j
-                else:
-                    out.append(".*")  # `a**b` のような非標準位置は貪欲一致
-                    i = j
-            else:
-                out.append("[^/]*")
-                i += 1
-        elif ch == "?":
-            out.append("[^/]")
-            i += 1
-        elif ch == "[":
-            j = i + 1
-            if j < n and pattern[j] in "!^":
-                j += 1
-            if j < n and pattern[j] == "]":
-                j += 1
-            while j < n and pattern[j] != "]":
-                j += 1
-            if j >= n:
-                out.append(re.escape("["))
-                i += 1
-            else:
-                body = pattern[i + 1 : j]
-                if body and body[0] in "!^":
-                    body = "^" + body[1:]
-                body = body.replace("\\", "\\\\")
-                out.append(f"[{body}]")
-                i = j + 1
-        else:
-            out.append(re.escape(ch))
-            i += 1
-    return re.compile("^" + "".join(out) + "$")
+    return pattern
+
+
+def expand_braces(pattern: str, budget: list[int]) -> list[str]:
+    """`{a,b}` をブレース展開する(ネスト可。bracex に委譲)。展開結果は budget[0] から差し引く。
+
+    ブレースを含まないパターンは予算を消費しない(公式仕様)。`{x}` 単独・対応の取れない
+    ブレースは bracex がリテラルとして返す。
+    """
+    if "{" not in pattern:
+        return [pattern]
+    try:
+        expanded = bracex.expand(pattern, limit=max(budget[0], 0))
+    except bracex.ExpansionLimitException as e:
+        raise BraceBudgetExceeded from e
+    budget[0] -= len(expanded)
+    if budget[0] < 0:
+        raise BraceBudgetExceeded
+    return expanded
+
+
+def glob_match(pattern: str, path: str) -> bool:
+    """単一(ブレース展開済み)glob を root 相対パスに照合する。
+
+    `*.kt` のような `/` を含まないパターンは root 直下にのみ一致する(`*` が `/` を跨がないため)。
+    非標準位置の `**`(`a**b`)は wcmatch の解釈(`*` 相当。`/` を跨がない)に従う。
+    """
+    return wglob.globmatch(path, normalize_pattern(pattern), flags=GLOB_FLAGS)
 
 
 def specificity(pattern: str) -> tuple[int, int, str]:
@@ -206,72 +133,37 @@ def specificity(pattern: str) -> tuple[int, int, str]:
     return (pattern.count("**"), -pattern.count("/"), pattern)
 
 
-# --- frontmatter -----------------------------------------------------------
+# --- frontmatter(python-frontmatter に委譲) ------------------------------
 
 
 def parse_frontmatter(text: str) -> tuple[list[str] | None, str]:
-    """先頭の `---` ... `---` だけを簡易解析し (paths, body) を返す。
+    """frontmatter を解析し (paths, body) を返す。
 
-    paths は単一文字列・インラインリスト・ブロックリストを受ける。frontmatter が無い /
-    paths キーが無いときは None(常時適用)。
+    paths は単一文字列・インラインリスト・ブロックリストを受ける(YAML として解釈。
+    引用符・行末コメントは YAML の規則どおり)。frontmatter が無い / paths キーが無いときは
+    None(常時適用)。`paths:` が空値・空リストのときは [](何にも一致しない)。文字列でも
+    リストでもない値は WARN して [] にする。YAML として壊れているときは WARN して frontmatter
+    無しと同じ扱い(None。本文は原文のまま)にする。
     """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
+    try:
+        post = frontmatter.loads(text)
+    except Exception as e:  # yaml.YAMLError 等。壊れた frontmatter でルールを落とさない
+        warn(f"frontmatter を解析できない({type(e).__name__})。paths 無しとして扱う")
         return None, text
-    end = None
-    for idx in range(1, len(lines)):
-        if lines[idx].strip() == "---":
-            end = idx
-            break
-    if end is None:
-        return None, text
-    fm = lines[1:end]
-    body = "\n".join(lines[end + 1 :])
-    paths: list[str] | None = None
-    i = 0
-    while i < len(fm):
-        line = fm[i]
-        m = re.match(r"^paths\s*:\s*(.*)$", line)
-        if not m:
-            i += 1
-            continue
-        rest = m.group(1).strip()
-        if rest.startswith("#"):
-            rest = ""
-        if rest == "":
-            items: list[str] = []
-            j = i + 1
-            while j < len(fm):
-                lm = re.match(r"^\s+-\s*(.*)$", fm[j])
-                if not lm:
-                    if fm[j].strip() == "" or fm[j].startswith("#"):
-                        j += 1
-                        continue
-                    break
-                items.append(unquote(lm.group(1)))
-                j += 1
-            paths = items
-        elif rest.startswith("["):
-            inner = rest.strip()
-            if inner.endswith("]"):
-                inner = inner[1:-1]
-            else:
-                inner = inner[1:]
-            paths = [unquote(p) for p in split_top_level(inner) if p.strip()]
-        else:
-            paths = [unquote(rest)]
-        break
-    return paths, body
-
-
-def unquote(s: str) -> str:
-    s = s.strip()
-    # 行末コメント(引用符外)を落とす
-    if s and s[0] not in "\"'":
-        s = re.split(r"\s+#", s, maxsplit=1)[0].strip()
-    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
-        s = s[1:-1]
-    return s
+    if "paths" not in post.metadata:
+        return None, post.content
+    raw = post.metadata.get("paths")
+    if raw is None:
+        return [], post.content
+    if isinstance(raw, str):
+        return [raw], post.content
+    if isinstance(raw, list):
+        items = [str(x) for x in raw if isinstance(x, (str, int, float)) and str(x).strip()]
+        if len(items) != len(raw):
+            warn("paths に文字列でない要素があるため無視する")
+        return items, post.content
+    warn(f"paths が文字列でもリストでもない({type(raw).__name__})。何にも一致しない扱いにする")
+    return [], post.content
 
 
 def extract_headings(body: str) -> str:
@@ -371,11 +263,10 @@ def match_rule(root: Path, rule: Path, base: str, changed: list[str], scoped: li
     try:
         for raw in paths:
             for expanded in expand_braces(raw, budget):
-                regex = glob_to_regex(expanded)
-                if any(regex.match(f) for f in changed):
+                if any(glob_match(expanded, f) for f in changed):
                     matched.append(expanded)
                     effective.append(expanded)
-                elif base and any(regex.match(f) for f in scoped):
+                elif base and any(glob_match(expanded, f) for f in scoped):
                     matched.append(expanded)
                     effective.append(f"{base}/{expanded}")
     except BraceBudgetExceeded:

@@ -3,7 +3,13 @@ name = "diff-review-tools"
 version = "0.1.0"
 description = "diff-review スキルの決定論収集 CLI（変更ファイルに適用される規約の列挙）"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    # glob 照合(** / ブレース / 文字集合)。ブレース展開の上限は bracex を直接使う
+    "wcmatch>=10",
+    "bracex>=2",
+    # .claude/rules の YAML frontmatter(paths:)
+    "python-frontmatter>=1.1",
+]
 
 [dependency-groups]
 dev = [

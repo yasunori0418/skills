@@ -81,8 +81,14 @@
                   # テストは偽の DB を sqlite3 で組み立てて検証する。
                   pkgs.sqlite
                   # python3 依存のスクリプト(converge_state.py 等)の hook テストを実際に
-                  # 走らせるため。無いと各テストが SKIP して緑になる。
-                  pkgs.python3
+                  # 走らせるため。無いと各テストが SKIP して緑になる。sandbox には uv が
+                  # 無いので run-python.sh は python3 に落ちる。diff-review の
+                  # collect_conventions.py が要る依存(pyproject.toml と同じ)を揃える。
+                  (pkgs.python3.withPackages (ps: [
+                    ps.wcmatch
+                    ps.bracex
+                    ps.python-frontmatter
+                  ]))
                 ];
               }
               ''
@@ -107,7 +113,13 @@
             pkgs.runCommand "check-pytest"
               {
                 nativeBuildInputs = [
-                  (pkgs.python3.withPackages (ps: [ ps.pytest ]))
+                  (pkgs.python3.withPackages (ps: [
+                    ps.pytest
+                    # diff-review の collect_conventions.py の依存(pyproject.toml と同じ)
+                    ps.wcmatch
+                    ps.bracex
+                    ps.python-frontmatter
+                  ]))
                   # job-graph の boundary bootstrap 統合テストが git を実行する。
                   pkgs.git
                   # job-graph の boundary bootstrap が既存境界ファイルとのマージに jq を使う。
