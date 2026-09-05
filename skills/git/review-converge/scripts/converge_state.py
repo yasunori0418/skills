@@ -104,7 +104,8 @@ STATE_VERSION = 2
 
 
 def severity_rank(severity: str) -> int:
-    """severity の重み。未知の値は最も重い must 扱い(見落としを避ける)。"""
+    """severity の重み。未知の値は最も重い must 扱い(見落としを避ける。record の入口では語彙外を拒否するので
+    ここに来るのは旧状態ファイルの値だけ)。"""
     s = (severity or "").strip().lower()
     if s in SEVERITY_ORDER:
         return SEVERITY_ORDER.index(s)
@@ -146,13 +147,16 @@ def parse_findings(payload: Any) -> list[dict[str, Any]]:
         kind = str(item.get("kind", "fix")).strip().lower()
         if kind not in KINDS:
             raise ValueError(f"kind は fix / improvement のいずれか: {kind!r}")
+        severity = str(item.get("severity", DEFAULT_THRESHOLD)).strip().lower()
+        if severity not in SEVERITY_ORDER:
+            raise ValueError(f"severity は {' / '.join(SEVERITY_ORDER)} のいずれか: {severity!r}")
         out.append(
             {
                 "key": finding_key(item),
                 "file": str(item.get("file", "")),
                 "line": item.get("line"),
                 "summary": str(item.get("summary", "")),
-                "severity": str(item.get("severity", DEFAULT_THRESHOLD)),
+                "severity": severity,
                 "scope": scope,
                 "kind": kind,
                 "kind_reason": str(item.get("kind_reason", "")).strip(),
@@ -524,11 +528,11 @@ def cmd_keep(args: argparse.Namespace) -> int:
         print(f"ERROR: 直近周回に無い指摘は保持できない: {loc}", file=sys.stderr)
         return 2
     top = max(matches, key=lambda f: severity_rank(f["severity"]))
-    severity = str(top["severity"]).strip().lower()
-    if severity == "must":
+    rank = severity_rank(top["severity"])
+    if rank >= severity_rank("must"):
         print(f"ERROR: must は保持できない。エスカレーションで裁定すること: {loc}", file=sys.stderr)
         return 2
-    if severity == "want+" and not args.user_confirmed:
+    if rank == severity_rank("want+") and not args.user_confirmed:
         print(
             f"ERROR: want+ の保持には AskUserQuestion の承認(--user-confirmed)が要る: {loc}",
             file=sys.stderr,

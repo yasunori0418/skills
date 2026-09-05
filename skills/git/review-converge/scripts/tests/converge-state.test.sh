@@ -12,7 +12,7 @@
 #   - --changed-lines              -> 周回ごとの変更行数の系列と増分(未指定は null)
 #   - lens 併記タグ               -> next_lenses でレンズ単位に分割
 #   - keep / suppress              -> 保持した指摘の除外(file + line または要旨)・ガード・再指摘禁止リスト
-#   - 壊れた入力                   -> exit 2
+#   - 壊れた入力 / 語彙外 severity  -> exit 2
 # python3 が無い環境では SKIP して exit 0。
 set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -350,6 +350,13 @@ printf 'not json' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
 check "invalid-json" 2 $?
 printf '[{"file":"a","line":1,"summary":"s","scope":"nowhere"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
 check "invalid-scope" 2 $?
+printf '[{"file":"a","line":1,"summary":"s","severity":"critical"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
+check "invalid-severity" 2 $?
+# 大小文字・前後空白の揺れは正規化して受ける(語彙内なら拒否しない)
+S_SEV="$WORK/sev-case.json"
+OUT=$(record "$S_SEV" '[{"file":"a","line":1,"summary":"s","severity":" Must "}]' --head r1)
+check "severity-case-normalized" "continue" "$(verdict "$OUT")"
+has "severity-stored-lowercase" "$(cat "$S_SEV")" '"severity": "must"'
 printf '[{"file":"a","line":1,"summary":"s","kind":"refactor"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
 check "invalid-kind" 2 $?
 
