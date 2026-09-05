@@ -270,7 +270,9 @@ OUT=$(run "$R" "src/a.kt")
 hasnt "heads-h3" "$OUT" "h3:"
 hasnt "heads-fenced" "$OUT" "fenced"
 has "heads-ellipsis" "$OUT" "…)"
-LEN=$(printf '%s\n' "$OUT" | grep '^- ' | sed -E 's/.*\((h1.*)\)$/\1/' | awk '{print length($0)}')
+# 文字数は python3 で数える(nix sandbox は C ロケールで awk の length がバイト数になる)
+printf '%s\n' "$OUT" | grep '^- ' | sed -E 's/.*\((h1.*)\)$/\1/' >"$WORK/heads.txt"
+LEN=$(python3 -c 'import sys; print(len(open(sys.argv[1], encoding="utf-8").read().rstrip("\n")))' "$WORK/heads.txt")
 check "heads-truncated" 200 "$LEN"
 rule "$R" "short.md" "" "$(printf '# One\n## Two\n### Three\n')"
 OUT=$(run "$R" "src/a.kt")
