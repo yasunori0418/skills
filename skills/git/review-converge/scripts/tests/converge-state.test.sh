@@ -11,6 +11,7 @@
 #   - prev-head / status / reset   -> 前周回 sha の取得・再出力・初期化
 #   - --changed-lines              -> 周回ごとの変更行数の系列と増分(未指定は null)
 #   - lens 併記タグ               -> next_lenses でレンズ単位に分割
+#   - keep / suppress              -> 保持した指摘の除外・ガード・再指摘禁止リスト
 #   - 壊れた入力                   -> exit 2
 # python3 が無い環境では SKIP して exit 0。
 set -uo pipefail
@@ -274,6 +275,50 @@ check "kind-reason-verdict" "continue" "$(verdict "$OUT")"
 has "kind-reason-kept-in-remaining" "$OUT" '"kind_reason": "in-diff"'
 has "kind-reason-kept-in-improvements" "$OUT" '"kind_reason": "typing"'
 has "kind-reason-saved-in-state" "$(cat "$S")" '"kind_reason": "typing"'
+
+# --- 保持(keep)と再指摘禁止リスト(suppress) ---
+keep() { # state file line reason [extra args...] -> stdout
+    local state="$1" file="$2" line="$3" reason="$4"
+    shift 4
+    python3 "$STATE_PY" keep --state "$state" --file "$file" --line "$line" --reason "$reason" "$@" 2>&1
+}
+S="$WORK/keep.json"
+F_KEEP='[{"file":"README.md","line":603,"summary":"失敗モードの説明が過剰","severity":"want","lens":"yagni"},
+         {"file":"README.md","line":599,"summary":"言い換えの重複","severity":"nit","lens":"yagni"}]'
+OUT=$(record "$S" "$F_KEEP" --head r1 --max-rounds 5)
+check "keep-before-verdict" "continue" "$(verdict "$OUT")"
+# 閾値未満の nit は suppress に載る(保持しなくても次周回で再指摘させない)
+has "suppress-has-below-threshold" "$OUT" '閾値未満(nit)のため見送り'
+
+# want の保持: remaining から外れて収束し、kept / suppress に理由付きで載る
+OUT=$(keep "$S" README.md 603 "test レンズが 2 周目に要求した失敗モードの記述")
+check "keep-want-exit" 0 $?
+check "keep-want-converges" "converged" "$(verdict "$OUT")"
+has "keep-in-kept" "$OUT" '"kept_count": 1'
+has "keep-in-suppress" "$OUT" '保持: test レンズが 2 周目に要求した失敗モードの記述'
+has "keep-saved-in-state" "$(cat "$S")" '"reason": "test レンズが 2 周目に要求した失敗モードの記述"'
+
+# 保持した箇所を次周回で言い換えて再指摘されても stuck / reappeared にならず、修正対象にも戻らない
+OUT=$(record "$S" '[{"file":"README.md","line":603,"summary":"帰結の連鎖が長すぎる","severity":"want","lens":"yagni"}]' --head r2 --max-rounds 5)
+check "keep-reworded-restatement-ignored" "converged" "$(verdict "$OUT")"
+check "keep-no-oscillation" "0" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["oscillating"]))')"
+
+# must は保持できない / want+ は --user-confirmed が要る / 直近周回に無い指摘は保持できない / 理由必須
+S="$WORK/keep-guard.json"
+F_GUARD='[{"file":"src/a.py","line":10,"summary":"境界値が未処理","severity":"must"},
+          {"file":"src/b.py","line":20,"summary":"命名が不明瞭","severity":"want+"}]'
+record "$S" "$F_GUARD" --head r1 >/dev/null
+keep "$S" src/a.py 10 "同意しない" >/dev/null 2>&1
+check "keep-refuses-must" 2 $?
+keep "$S" src/b.py 20 "呼び出し元の命名規約に合わせている" >/dev/null 2>&1
+check "keep-refuses-want-plus-without-confirm" 2 $?
+keep "$S" src/b.py 20 "呼び出し元の命名規約に合わせている" --user-confirmed >/dev/null 2>&1
+check "keep-accepts-want-plus-with-confirm" 0 $?
+keep "$S" src/zzz.py 1 "存在しない指摘" >/dev/null 2>&1
+check "keep-refuses-unknown-location" 2 $?
+keep "$S" src/b.py 20 "   " --user-confirmed >/dev/null 2>&1
+check "keep-refuses-empty-reason" 2 $?
 
 # --- 入力エラー ---
 S="$WORK/bad.json"

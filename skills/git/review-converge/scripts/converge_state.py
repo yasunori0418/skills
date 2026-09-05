@@ -36,6 +36,16 @@ diff-review の周回ごとの指摘一覧を状態ファイルへ記録し、�
         前周回の head sha を stdout に出す(未記録なら空文字・exit 1)。
         2 周目以降の差分レビュー最適化に使う。
 
+    converge_state.py keep --state <path> --file <path> --line <n> --reason <text>
+                           [--user-confirmed]
+        直近周回の指摘(file:line)を「保持」として記録し、判定結果を再出力する。
+        保持 = 修正しないと決めた指摘。他レンズの指摘がその記述・コードを要求している、
+        またはレビュアーの事実前提が誤りと検証済み、の場合に限る(理由は必須)。
+        保持した file:line は全周回の修正対象(remaining)・振動・発散の判定から除外し、
+        出力の "kept" に蓄積、"suppress"(次周回へ渡す再指摘禁止リスト)に載せる。
+        must は保持できない(エスカレーションへ)。want+ は --user-confirmed
+        (AskUserQuestion で承認済み)が無ければ拒否する。直近周回に無い指摘は保持できない。
+
     converge_state.py reset --state <path>
         状態ファイルを削除して収束ループを初期化する。
 
@@ -57,6 +67,12 @@ verdict の優先順位は oscillation > converged > diverging > limit-reached >
 振動していても閾値以上の指摘が消えていれば収束を優先しないのは、打ち消し合いが
 起きた状態のまま終わらせないため。発散していても remaining がゼロなら収束を
 優先するのは、修正対象が尽きた時点で発散の懸念が消えるため。
+
+再指摘禁止リスト("suppress"): 保持した指摘と、直近周回で閾値未満だった境界内 fix 指摘を
+file:line + 要旨 + 理由で列挙する。呼び出し元はこれを次周回の diff-review へ渡し、同じ
+file:line・同趣旨の再指摘を抑止する(同じ箇所を周回ごとに言い換えて再指摘し、他レンズが
+要求した記述を別レンズが削らせる打ち消し合いが起きた実例への対策)。要旨の言い換えで
+finding_key が変わるため、突合は key ではなく file:line で行う。
 
 レンズ段階戦略("next_lenses"): 全レンズの徹底パスは初回に限り、continue の 2 周目以降は
 前周回で閾値以上・境界内・kind=fix の指摘を出したレンズだけを次周回の対象として返す。
@@ -159,10 +175,22 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def actionable(findings: list[dict[str, Any]], threshold: str) -> list[dict[str, Any]]:
-    """閾値以上の重みを持つ「境界内」の fix 指摘。境界外・improvement は修正対象から機械的に除外する。
+def location_key(file: Any, line: Any) -> str:
+    """file:line の突合キー。保持(kept)の判定に使う。要旨は含めない(言い換えで変わるため)。"""
+    return f"{str(file or '').strip()}:{str(line if line is not None else '').strip()}"
+
+
+def kept_locations(state: dict[str, Any]) -> frozenset[str]:
+    return frozenset(location_key(k.get("file"), k.get("line")) for k in state.get("kept", []))
+
+
+def actionable(
+    findings: list[dict[str, Any]], threshold: str, kept: frozenset[str] = frozenset()
+) -> list[dict[str, Any]]:
+    """閾値以上の重みを持つ「境界内」の fix 指摘。境界外・improvement・保持済み(kept)は修正対象から機械的に除外する。
 
     kind の既定 fix は f.get で吸収する(旧バージョンの状態ファイルには kind が無い)。
+    保持済みの除外は全周回に適用する(除外しないと保持した箇所の再指摘が stuck 判定になる)。
     """
     limit = severity_rank(threshold)
     return [
@@ -171,7 +199,43 @@ def actionable(findings: list[dict[str, Any]], threshold: str) -> list[dict[str,
         if f["scope"] == "in"
         and f.get("kind", "fix") == "fix"
         and severity_rank(f["severity"]) >= limit
+        and location_key(f["file"], f["line"]) not in kept
     ]
+
+
+def build_suppress(
+    current: dict[str, Any], threshold: str, kept: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """次周回へ渡す再指摘禁止リスト: 保持した指摘 + 直近周回で閾値未満だった境界内 fix 指摘。"""
+    out: list[dict[str, Any]] = [
+        {
+            "file": k.get("file"),
+            "line": k.get("line"),
+            "summary": k.get("summary", ""),
+            "reason": f"保持: {k.get('reason', '')}",
+        }
+        for k in kept
+    ]
+    seen = {location_key(k.get("file"), k.get("line")) for k in kept}
+    limit = severity_rank(threshold)
+    for f in current["findings"]:
+        loc = location_key(f["file"], f["line"])
+        if (
+            f["scope"] == "in"
+            and f.get("kind", "fix") == "fix"
+            and severity_rank(f["severity"]) < limit
+            and loc not in seen
+        ):
+            seen.add(loc)
+            out.append(
+                {
+                    "file": f["file"],
+                    "line": f["line"],
+                    "summary": f["summary"],
+                    "reason": f"閾値未満({f['severity']})のため見送り",
+                }
+            )
+    return out
 
 
 def collect_improvements(rounds: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -189,7 +253,9 @@ def collect_improvements(rounds: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(seen.values())
 
 
-def detect_oscillation(rounds: list[dict[str, Any]], threshold: str) -> list[dict[str, Any]]:
+def detect_oscillation(
+    rounds: list[dict[str, Any]], threshold: str, kept: frozenset[str] = frozenset()
+) -> list[dict[str, Any]]:
     """振動の検出。対象は閾値以上・境界内・kind=fix の指摘のみ。
 
     - stuck:      同一指摘が直近 2 周連続で未解消
@@ -200,7 +266,7 @@ def detect_oscillation(rounds: list[dict[str, Any]], threshold: str) -> list[dic
 
     per_round: list[dict[str, dict[str, Any]]] = []
     for r in rounds:
-        actionable_map = {f["key"]: f for f in actionable(r["findings"], threshold)}
+        actionable_map = {f["key"]: f for f in actionable(r["findings"], threshold, kept)}
         per_round.append(actionable_map)
 
     oscillating: dict[str, dict[str, Any]] = {}
@@ -233,7 +299,9 @@ def detect_oscillation(rounds: list[dict[str, Any]], threshold: str) -> list[dic
     return sorted(oscillating.values(), key=lambda f: (f["kind"], f["file"], str(f["line"])))
 
 
-def detect_diverging(rounds: list[dict[str, Any]], threshold: str) -> dict[str, Any] | None:
+def detect_diverging(
+    rounds: list[dict[str, Any]], threshold: str, kept: frozenset[str] = frozenset()
+) -> dict[str, Any] | None:
     """自己増殖(発散)の検出。対象は閾値以上・境界内・kind=fix の指摘のみ。
 
     周回間の遷移ごとに「新規出現 key 数 > 0 かつ 解消 key 数 <= 新規出現 key 数」を
@@ -245,7 +313,7 @@ def detect_diverging(rounds: list[dict[str, Any]], threshold: str) -> dict[str, 
     if len(rounds) < 3:
         return None
 
-    keys_per_round = [{f["key"] for f in actionable(r["findings"], threshold)} for r in rounds]
+    keys_per_round = [{f["key"] for f in actionable(r["findings"], threshold, kept)} for r in rounds]
     windows: list[dict[str, Any]] = []
     for idx in (len(rounds) - 2, len(rounds) - 1):
         new = keys_per_round[idx] - keys_per_round[idx - 1]
@@ -255,7 +323,7 @@ def detect_diverging(rounds: list[dict[str, Any]], threshold: str) -> dict[str, 
         windows.append({"round": idx + 1, "new_count": len(new), "resolved_count": len(resolved)})
 
     latest_new_keys = keys_per_round[-1] - keys_per_round[-2]
-    latest = {f["key"]: f for f in actionable(rounds[-1]["findings"], threshold)}
+    latest = {f["key"]: f for f in actionable(rounds[-1]["findings"], threshold, kept)}
     new_findings = [
         {k: latest[key][k] for k in ("file", "line", "summary", "severity")}
         for key in sorted(latest_new_keys)
@@ -302,11 +370,14 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
     max_rounds = state.get("max_rounds", DEFAULT_MAX_ROUNDS)
     current = rounds[-1]
 
-    remaining = actionable(current["findings"], threshold)
+    kept = state.get("kept", [])
+    kept_locs = kept_locations(state)
+
+    remaining = actionable(current["findings"], threshold, kept_locs)
     deferred = [f for f in current["findings"] if f["scope"] == "out"]
     improvements = collect_improvements(rounds)
-    oscillating = detect_oscillation(rounds, threshold)
-    diverging = detect_diverging(rounds, threshold)
+    oscillating = detect_oscillation(rounds, threshold, kept_locs)
+    diverging = detect_diverging(rounds, threshold, kept_locs)
     changed_lines, changed_lines_delta = changed_lines_series(rounds)
 
     if oscillating:
@@ -333,6 +404,9 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
         "deferred_count": len(deferred),
         "improvements": improvements,
         "improvements_count": len(improvements),
+        "kept": kept,
+        "kept_count": len(kept),
+        "suppress": build_suppress(current, threshold, kept),
         "oscillating": oscillating,
         "diverging": diverging,
         "changed_lines": changed_lines,
@@ -394,6 +468,63 @@ def cmd_prev_head(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_keep(args: argparse.Namespace) -> int:
+    path = Path(args.state)
+    if not path.exists():
+        print(f"ERROR: 状態ファイルが無い: {path}", file=sys.stderr)
+        return 2
+    state = load_state(path)
+    if not state["rounds"]:
+        print(f"ERROR: 記録された周回が無い: {path}", file=sys.stderr)
+        return 2
+    reason = (args.reason or "").strip()
+    if not reason:
+        print("ERROR: --reason は空にできない(保持の根拠を書くこと)", file=sys.stderr)
+        return 2
+
+    loc = location_key(args.file, args.line)
+    matches = [
+        f
+        for f in state["rounds"][-1]["findings"]
+        if f["scope"] == "in"
+        and f.get("kind", "fix") == "fix"
+        and location_key(f["file"], f["line"]) == loc
+    ]
+    if not matches:
+        print(f"ERROR: 直近周回に無い指摘は保持できない: {loc}", file=sys.stderr)
+        return 2
+    top = max(matches, key=lambda f: severity_rank(f["severity"]))
+    severity = str(top["severity"]).strip().lower()
+    if severity == "must":
+        print(f"ERROR: must は保持できない。エスカレーションで裁定すること: {loc}", file=sys.stderr)
+        return 2
+    if severity == "want+" and not args.user_confirmed:
+        print(
+            f"ERROR: want+ の保持には AskUserQuestion の承認(--user-confirmed)が要る: {loc}",
+            file=sys.stderr,
+        )
+        return 2
+
+    entry = {
+        "file": top["file"],
+        "line": top["line"],
+        "summary": top["summary"],
+        "severity": top["severity"],
+        "lens": top.get("lens", ""),
+        "reason": reason,
+        "round": len(state["rounds"]),
+    }
+    kept = [k for k in state.get("kept", []) if location_key(k.get("file"), k.get("line")) != loc]
+    kept.append(entry)
+    state["kept"] = kept
+
+    result = evaluate(state)
+    state["last_result"] = result
+    save_state(path, state)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_reset(args: argparse.Namespace) -> int:
     path = Path(args.state)
     path.unlink(missing_ok=True)
@@ -437,6 +568,18 @@ def main(argv: list[str] | None = None) -> int:
     p_prev = sub.add_parser("prev-head", help="前周回の head sha を出力する")
     p_prev.add_argument("--state", required=True)
     p_prev.set_defaults(func=cmd_prev_head)
+
+    p_keep = sub.add_parser("keep", help="直近周回の指摘を保持(修正しない)として記録する")
+    p_keep.add_argument("--state", required=True)
+    p_keep.add_argument("--file", required=True, help="指摘のファイルパス(record に渡したものと同じ表記)")
+    p_keep.add_argument("--line", required=True, help="指摘の行番号")
+    p_keep.add_argument("--reason", required=True, help="保持の根拠(他レンズの要求 / 検証済みの事実)")
+    p_keep.add_argument(
+        "--user-confirmed",
+        action="store_true",
+        help="want+ の保持を AskUserQuestion で承認済みであることの宣言",
+    )
+    p_keep.set_defaults(func=cmd_keep)
 
     p_reset = sub.add_parser("reset", help="状態ファイルを削除する")
     p_reset.add_argument("--state", required=True)
