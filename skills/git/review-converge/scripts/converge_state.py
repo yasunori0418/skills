@@ -8,8 +8,12 @@ diff-review の周回ごとの指摘一覧を状態ファイルへ記録し、�
 サブコマンド:
 
     converge_state.py record --state <path> [--head <sha>] [--threshold want]
-                             [--max-rounds 5] < findings.json
+                             [--max-rounds 5] [--changed-lines N] < findings.json
         1 周回分の指摘を記録し、判定結果を JSON で stdout に出す。
+        --changed-lines は対象範囲の変更行数(挿入 + 削除。任意)。周回ごとに保存し、
+        出力の "changed_lines"(周回ごとの系列。未指定は null)と
+        "changed_lines_delta"(最初と最後の非 null の差。2 点無ければ null)で
+        レビュー中の差分膨張を可視化する。verdict には使わない。
         stdin は指摘の JSON 配列(または {"findings": [...]})。各要素:
             {"file": "src/a.py", "line": 42, "summary": "...",
              "severity": "must", "scope": "in", "kind": "fix", "lens": "design"}
@@ -273,6 +277,14 @@ def next_lenses(remaining: list[dict[str, Any]], verdict: str) -> list[str] | No
     return lenses or None
 
 
+def changed_lines_series(rounds: list[dict[str, Any]]) -> tuple[list[int | None], int | None]:
+    """周回ごとの変更行数の系列と、最初と最後の非 null 値の差。旧状態ファイルは全 null。"""
+    series = [r.get("changed_lines") for r in rounds]
+    known = [v for v in series if v is not None]
+    delta = known[-1] - known[0] if len(known) >= 2 else None
+    return series, delta
+
+
 def evaluate(state: dict[str, Any]) -> dict[str, Any]:
     rounds = state["rounds"]
     threshold = state.get("threshold", DEFAULT_THRESHOLD)
@@ -284,6 +296,7 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
     improvements = collect_improvements(rounds)
     oscillating = detect_oscillation(rounds, threshold)
     diverging = detect_diverging(rounds, threshold)
+    changed_lines, changed_lines_delta = changed_lines_series(rounds)
 
     if oscillating:
         verdict = "oscillation"
@@ -311,6 +324,8 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
         "improvements_count": len(improvements),
         "oscillating": oscillating,
         "diverging": diverging,
+        "changed_lines": changed_lines,
+        "changed_lines_delta": changed_lines_delta,
         "next_lenses": next_lenses(remaining, verdict),
     }
 
@@ -330,7 +345,9 @@ def cmd_record(args: argparse.Namespace) -> int:
     state["version"] = STATE_VERSION
     state["threshold"] = args.threshold
     state["max_rounds"] = args.max_rounds
-    state["rounds"].append({"head": args.head, "findings": findings})
+    state["rounds"].append(
+        {"head": args.head, "changed_lines": args.changed_lines, "findings": findings}
+    )
 
     result = evaluate(state)
     state["last_result"] = result
@@ -393,6 +410,12 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=DEFAULT_MAX_ROUNDS,
         help=f"周回上限(既定 {DEFAULT_MAX_ROUNDS})",
+    )
+    p_record.add_argument(
+        "--changed-lines",
+        type=int,
+        default=None,
+        help="対象範囲の変更行数(挿入 + 削除)。周回間の差分推移の可視化に使う(任意)",
     )
     p_record.set_defaults(func=cmd_record)
 

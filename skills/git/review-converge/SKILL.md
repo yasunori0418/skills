@@ -97,11 +97,17 @@ diff-review の責務で、こちらはその read-only 単発設計に手を触
 
 受領が揃っていることを確認したら、指摘の JSON 配列を `record` へ渡す。集約エージェント経由なら
 返却された record-ready JSON をそのまま使う(`kind` / `scope` が下記の規則に沿っているかだけ点検する)。
-直接起動時は統合報告から自分で構成する:
+直接起動時は統合報告から自分で構成する。
+
+**変更行数を `record` に渡す**: `git diff --shortstat <base-ref>...HEAD` の挿入 + 削除の合計を
+`--changed-lines <N>` で渡す(base-ref は事前準備で確定した対象範囲)。周回間の差分推移を
+最終報告に出すための計測で、verdict には影響しない。取れないときは省略してよい
+(省略時は推移を出さない)。
 
 ```sh
 python3 <SKILL_DIR>/scripts/converge_state.py record \
   --state <STATE> --head "$(git rev-parse HEAD)" \
+  --changed-lines <git diff --shortstat の挿入 + 削除> \
   --threshold <--until で指定された閾値。既定 want> --max-rounds 5 <<'JSON'
 [
   {"file": "src/a.py", "line": 42, "summary": "境界値が未処理", "severity": "must", "scope": "in", "kind": "fix", "lens": "design"},
@@ -181,13 +187,16 @@ JSON
 
 1. **結果**: verdict・周回数・適用閾値
 2. **残指摘**(収束以外のとき): `remaining` を severity 順で
-3. **見送り improvement**: `improvements`(改善提案。周回横断で蓄積済み)を「ファイル:行 / 要旨 /
+3. **差分の推移**: `changed_lines` の系列(1 周目 → 最終周回)と `changed_lines_delta`。増分が正なら
+   「レビュー中に差分が N 行増えた」と明記する(修正が新規コードを積み増しているシグナル。
+   良否の判定はしない)。`--changed-lines` を渡していない周回しか無ければこの節を「計測なし」とする
+4. **見送り improvement**: `improvements`(改善提案。周回横断で蓄積済み)を「ファイル:行 / 要旨 /
    見送り理由(改善提案のため収束ループでは修正しない)」の形で列挙する。**1 件も落とさない**。
    ゼロ件ならこの節を「なし」とする
-4. **見送り一覧**: `deferred`(境界外指摘)を「ファイル:行 / 要旨 / 見送り理由(タスク境界外のため
+5. **見送り一覧**: `deferred`(境界外指摘)を「ファイル:行 / 要旨 / 見送り理由(タスク境界外のため
    別タスク・別 PR で対応)」の形で列挙する。**1 件も落とさない**。境界ファイルが無かった場合は
    この節を「なし」とする
-5. **完成の定義の残項目**: `docs/dev/definition-of-done.md` があれば Read し、**人判定節**の
+6. **完成の定義の残項目**: `docs/dev/definition-of-done.md` があれば Read し、**人判定節**の
    チェックリストを未チェックのまま転記する(機械判定節は転記しない)。ファイルが無ければ節ごと省略する
 
 見送り(improvements + deferred)が 1 件でもあれば、報告と同じ内容を**見送りファイル**として書き出す:

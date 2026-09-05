@@ -9,6 +9,7 @@
 #   - 一度消えた指摘の再出現       -> oscillation (reappeared)
 #   - 解消数 <= 新規数が 2 周連続  -> diverging (自己増殖)
 #   - prev-head / status / reset   -> 前周回 sha の取得・再出力・初期化
+#   - --changed-lines              -> 周回ごとの変更行数の系列と増分(未指定は null)
 #   - 壊れた入力                   -> exit 2
 # python3 が無い環境では SKIP して exit 0。
 set -uo pipefail
@@ -235,6 +236,24 @@ S="$WORK/lens-absent.json"
 OUT=$(record "$S" "$F_MUST" --head aaa111 --max-rounds 5)
 check "lens-absent-falls-back-to-full" "None" \
     "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["next_lenses"])')"
+
+# --- 差分推移(--changed-lines) ---
+# 周回ごとの変更行数を系列で出し、最初と最後の差を増分として出す(verdict には影響しない)
+S="$WORK/changed-lines.json"
+record "$S" "$F_MUST" --head r1 --changed-lines 100 >/dev/null
+OUT=$(record "$S" "$F_OTHER" --head r2 --changed-lines 130)
+check "changed-lines-series" "100,130" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(map(str, json.load(sys.stdin)["changed_lines"])))')"
+has "changed-lines-delta" "$OUT" '"changed_lines_delta": 30'
+check "changed-lines-verdict-unaffected" "continue" "$(verdict "$OUT")"
+
+# 未指定の周回は null。非 null が 2 点無ければ増分も null
+S="$WORK/changed-lines-absent.json"
+record "$S" "$F_MUST" --head r1 >/dev/null
+OUT=$(record "$S" "$F_OTHER" --head r2 --changed-lines 130)
+check "changed-lines-null-when-absent" "None,130" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(",".join(map(str, json.load(sys.stdin)["changed_lines"])))')"
+has "changed-lines-delta-null" "$OUT" '"changed_lines_delta": null'
 
 # --- 入力エラー ---
 S="$WORK/bad.json"
