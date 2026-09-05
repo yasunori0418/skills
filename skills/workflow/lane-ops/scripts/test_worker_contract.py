@@ -83,6 +83,19 @@ def test_iteration_bounds_limited_to_diff_introduced():
     assert "improvement だけが残った状態も同様に収束扱いで終了してよい" in s
 
 
+def test_iteration_bounds_stop_on_terminal_verdict():
+    s = wc.render(task())
+    assert "verdict が limit-reached / oscillation / diverging のときは" in s
+    assert "残指摘の内容に関わらず修正せず" in s
+    assert "review-converge の最終報告を添えて親へ報告して停止する" in s
+    assert "親の裁定後に指示された範囲だけ修正する" in s
+
+
+def test_maintain_has_no_terminal_verdict_clause():
+    s = wc.render(maintain_task())
+    assert "verdict が limit-reached / oscillation / diverging" not in s
+
+
 def test_scope_overrides_review_converge():
     s = wc.render(task())
     assert "スコープ規約は review-converge の指摘にも優先して適用される" in s

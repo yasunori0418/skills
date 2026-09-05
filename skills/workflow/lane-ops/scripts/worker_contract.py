@@ -327,7 +327,10 @@ def render_implement(task: TaskInfo) -> str:
                 "既存コードへの改修提案（improvement）は実質的な指摘に含めない。"
                 "2 巡目以降で新規指摘が純粋な可読性 nit だけになったら、"
                 "nit は「見送り」と記録して収束扱いで終了する（無制限の磨き込みで膠着しない）。"
-                "improvement だけが残った状態も同様に収束扱いで終了してよい"
+                "improvement だけが残った状態も同様に収束扱いで終了してよい。"
+                "ただし verdict が limit-reached / oscillation / diverging のときは、"
+                "残指摘の内容に関わらず修正せず、review-converge の最終報告を添えて親へ報告して停止する"
+                "（親の裁定後に指示された範囲だけ修正する）"
             ),
             (
                 "- PR 作成後の凍結: PR を作成したら実装を凍結する。以降の実装変更・push を行わず、"
