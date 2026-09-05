@@ -43,9 +43,11 @@ manifest には `== CONVENTIONS ==` 節が**常に**付く。変更ファイル(
 適用されるリポジトリ内のコーディング規約を `scripts/collect-conventions.py` が決定論で列挙したもので、
 全レンズに**レビューの第 1 基準**として渡す。
 
-探索対象は `.claude/rules/**/*.md`(frontmatter `paths:` を変更ファイルに照合。`paths` 無しは常時適用)、
-変更ファイルの祖先ディレクトリの `CLAUDE.md` / `AGENTS.md`(`CLAUDE.local.md` は除外。symlink は 1 件に
-まとめる)、`CONTRIBUTING.md`(ルート・`.github/`・`docs/`)、環境変数 `DIFF_REVIEW_CONVENTIONS` の明示指定。
+探索対象は `.claude/rules/**/*.md`(frontmatter `paths:` を変更ファイルに照合。`paths` 無しは常時適用。
+変更ファイルの祖先ディレクトリ配下の `.claude/rules/` も拾い、その `paths` はディレクトリ起点と root 起点の
+両方で照合する)、変更ファイルの祖先ディレクトリの `CLAUDE.md` / `AGENTS.md`(`CLAUDE.local.md` は除外。
+symlink は 1 件にまとめる)、`CONTRIBUTING.md`(ルート・`.github/`・`docs/`)、環境変数 `DIFF_REVIEW_CONVENTIONS`
+の明示指定。
 サブエージェントに自動注入されるのはルート CLAUDE.md だけで、`.claude/rules/` の paths 発火やサブディレクトリ
 CLAUDE.md の継承は文書化されていない(推測)。**節に載った規約は Read しない限り reviewer の文脈に無い**。
 
@@ -56,7 +58,7 @@ CLAUDE.md の継承は文書化されていない(推測)。**節に載った規
 | `status: explicit-only` | `DIFF_REVIEW_CONVENTIONS` に `none` が含まれ自動探索を停止した。明示分だけ載る |
 | `status: unavailable` | python3 が無い等で生成できなかった。規約照合が行われていない旨を統合報告に 1 行残す |
 | `lint: ...` | 機械 lint / formatter 設定の存在。**書式系(空白・改行・import 順・lint が検出する命名規則)は指摘しない** |
-| `[paths: ...]` `[ancestor of ...]` `[root, injected]` `[contributing]` `[explicit: ...]` | 各規約が載った根拠。末尾の括弧は h1 / h2 見出し(200 文字まで) |
+| `[paths: ...]` `[paths: ... @ <dir>/]` `[ancestor of ...]` `[root, injected]` `[contributing]` `[explicit: ...]` | 各規約が載った根拠(`@ <dir>/` はサブディレクトリ配下の `.claude/rules/`)。末尾の括弧は h1 / h2 見出し(200 文字まで) |
 
 `DIFF_REVIEW_CONVENTIONS` の意味論(`:` 区切り。相対パスはリポジトリルート起点。存在しないパスは WARN して落とす):
 

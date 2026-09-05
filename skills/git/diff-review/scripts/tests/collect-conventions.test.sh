@@ -5,6 +5,7 @@
 #           / を含まないパターンは root 直下のみ / 展開上限超過は WARN + 不一致
 #   - 祖先 CLAUDE.md / AGENTS.md の列挙、CLAUDE.local.md 除外、symlink の realpath 重複除去、
 #     root の [root, injected] 注記、root AGENTS.md(別実体)は [root]
+#   - サブディレクトリ配下の .claude/rules(祖先のみ・paths は両起点で照合)
 #   - CONTRIBUTING の 3 箇所
 #   - DIFF_REVIEW_CONVENTIONS の追加 / 存在しないパスの WARN / none(explicit-only)
 #   - 並び順(具体度)/ 上限 20 件の省略行 / 見出し 200 文字切り / フェンス内見出しの無視 / lint 行
@@ -288,6 +289,29 @@ hasnt "lint-pyproject-plain" "$OUT" "pyproject.toml"
 printf '[tool.ruff]\nline-length = 100\n' >>"$R/pyproject.toml"
 OUT=$(run "$R" "src/a.kt")
 has "lint-pyproject-ruff" "$OUT" "pyproject.toml"
+
+# --- サブディレクトリ配下の .claude/rules: 祖先にあるものだけ拾い、paths は両起点で照合 ---
+R="$WORK/nested" && mkdir -p "$R/mod/.claude/rules" "$R/other/.claude/rules" "$R/mod/src"
+printf -- '---\npaths: "src/**/*.kt"\n---\n# Mod local\n' >"$R/mod/.claude/rules/local.md"     # サブディレクトリ起点
+printf -- '---\npaths: "mod/src/**/*.kt"\n---\n# Mod rooted\n' >"$R/mod/.claude/rules/rooted.md" # root 起点
+printf -- '---\npaths: "web/**"\n---\n# Mod miss\n' >"$R/mod/.claude/rules/miss.md"
+printf -- '# Mod always\n' >"$R/mod/.claude/rules/always.md"
+printf -- '# Other always\n' >"$R/other/.claude/rules/always.md"
+rule "$R" "root-broad.md" 'paths: "**/*.kt"'
+OUT=$(run "$R" "mod/src/a.kt")
+has "nested-local-origin" "$OUT" "mod/.claude/rules/local.md"
+has "nested-local-tag" "$OUT" "[paths: src/**/*.kt @ mod/]"
+has "nested-root-origin" "$OUT" "mod/.claude/rules/rooted.md"
+hasnt "nested-miss" "$OUT" "mod/.claude/rules/miss.md"
+has "nested-always" "$OUT" "mod/.claude/rules/always.md"
+has "nested-always-tag" "$OUT" "[paths: なし (mod/ 配下に常時適用)]"
+hasnt "nested-other-not-ancestor" "$OUT" "other/.claude/rules/always.md"
+# nested は root の同等パターンより具体的として上に並ぶ
+check "nested-order" ".claude/rules/root-broad.md" "$(printf '%s\n' "$OUT" | grep -oE '^- [^ ]+' | cut -c3- | grep -v '^mod/' | head -1)"
+check "nested-before-root" "mod/.claude/rules/local.md" "$(printf '%s\n' "$OUT" | grep -oE '^- [^ ]+' | cut -c3- | head -1)"
+OUT=$(run "$R" "other/z.go")
+hasnt "nested-not-under-mod" "$OUT" "mod/.claude/rules"
+has "nested-other-ancestor" "$OUT" "other/.claude/rules/always.md"
 
 # --- 壊れた frontmatter(閉じ --- 無し)は常時適用として扱い落とさない ---
 R="$WORK/broken" && mkdir -p "$R/.claude/rules"

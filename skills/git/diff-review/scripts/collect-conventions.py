@@ -9,7 +9,9 @@ stdout : manifest に同梱する `== CONVENTIONS ==` 節
 stderr : WARN(存在しない明示パス・ブレース展開の上限超過)
 
 探索対象(決定論):
-    .claude/rules/**/*.md      frontmatter `paths:` を変更ファイルに照合。paths 無しは常時適用
+    .claude/rules/**/*.md      frontmatter `paths:` を変更ファイルに照合。paths 無しは常時適用。
+                               変更ファイルの祖先ディレクトリ配下の .claude/rules/ も拾う
+                               (paths はそのディレクトリ起点と root 起点の両方で照合)
     <祖先>/CLAUDE.md, AGENTS.md 変更ファイルの祖先ディレクトリを root まで遡る(CLAUDE.local.md は除外)
     CONTRIBUTING.md            ルート / .github/ / docs/
     DIFF_REVIEW_CONVENTIONS    ':' 区切りの追加パス。トークン `none` で自動探索を停止(明示分のみ)
@@ -323,38 +325,67 @@ def relative_to_root(root: Path, p: Path) -> str:
     return str(p)
 
 
+def ancestor_dirs(changed: list[str]) -> list[str]:
+    """変更ファイルの祖先ディレクトリ(root を除く)。深い方を先に返す。"""
+    dirs: set[str] = set()
+    for f in changed:
+        parent = Path(f).parent
+        while parent != Path("."):
+            dirs.add(parent.as_posix())
+            parent = parent.parent
+    return sorted(dirs, key=lambda s: (-s.count("/"), s))
+
+
 def discover_rules(root: Path, changed: list[str]) -> list[Entry]:
-    rules_dir = root / RULES_DIR
-    if not rules_dir.is_dir():
-        return []
+    """`.claude/rules/**/*.md` を root と変更ファイルの祖先ディレクトリから拾い、paths を照合する。
+
+    サブディレクトリ配下の `.claude/rules/` は公式ドキュメントで「nested」として言及されるが、
+    その paths の起点は文書化されていない。そのディレクトリ起点と root 起点の両方で照合し、
+    どちらかに当たれば一致とする。
+    """
     entries: list[Entry] = []
-    for rule in sorted(rules_dir.rglob("*.md")):
-        if not rule.is_file():
+    for base in [""] + ancestor_dirs(changed):
+        rules_dir = root / base / RULES_DIR if base else root / RULES_DIR
+        if not rules_dir.is_dir():
             continue
-        text = read_text(rule)
-        paths, body = parse_frontmatter(text)
-        relpath = rel(root, rule)
-        if paths is None:
-            entries.append(Entry(relpath, "[paths: なし (常時適用)]", extract_headings(body), (1, 0, 0, relpath)))
-            continue
-        budget = [BRACE_BUDGET]
-        matched: list[str] = []
-        try:
-            for raw in paths:
-                for expanded in expand_braces(raw, budget):
-                    regex = glob_to_regex(expanded)
-                    if any(regex.match(f) for f in changed):
-                        matched.append(expanded)
-        except BraceBudgetExceeded:
-            warn(f"{relpath} の paths はブレース展開が {BRACE_BUDGET} パターンを超えるため不一致扱い")
-            continue
-        if not matched:
-            continue
-        best = min(matched, key=specificity)
-        spec = specificity(best)
-        shown = ", ".join(dict.fromkeys(matched))
-        entries.append(Entry(relpath, f"[paths: {shown}]", extract_headings(body), (0, spec[0], spec[1], relpath)))
+        scoped = [c[len(base) + 1 :] for c in changed if c.startswith(base + "/")] if base else changed
+        for rule in sorted(rules_dir.rglob("*.md")):
+            if not rule.is_file():
+                continue
+            entries.extend(match_rule(root, rule, base, changed, scoped))
     return entries
+
+
+def match_rule(root: Path, rule: Path, base: str, changed: list[str], scoped: list[str]) -> list[Entry]:
+    """1 つのルールファイルを照合して Entry を 0 or 1 件返す。base は所属ディレクトリ(root は空)。"""
+    paths, body = parse_frontmatter(read_text(rule))
+    relpath = rel(root, rule)
+    where = f" @ {base}/" if base else ""
+    if paths is None:
+        # paths 無し: root なら常時適用、nested ならそのディレクトリ配下の変更に適用(祖先として拾われた時点で該当)
+        tag = "[paths: なし (常時適用)]" if not base else f"[paths: なし ({base}/ 配下に常時適用)]"
+        return [Entry(relpath, tag, extract_headings(body), (1, -base.count("/") - (1 if base else 0), 0, relpath))]
+    budget = [BRACE_BUDGET]
+    matched: list[str] = []
+    effective: list[str] = []  # 具体度比較用の root 起点の実効パターン
+    try:
+        for raw in paths:
+            for expanded in expand_braces(raw, budget):
+                regex = glob_to_regex(expanded)
+                if any(regex.match(f) for f in changed):
+                    matched.append(expanded)
+                    effective.append(expanded)
+                elif base and any(regex.match(f) for f in scoped):
+                    matched.append(expanded)
+                    effective.append(f"{base}/{expanded}")
+    except BraceBudgetExceeded:
+        warn(f"{relpath} の paths はブレース展開が {BRACE_BUDGET} パターンを超えるため不一致扱い")
+        return []
+    if not matched:
+        return []
+    spec = min(specificity(e) for e in effective)
+    shown = ", ".join(dict.fromkeys(matched))
+    return [Entry(relpath, f"[paths: {shown}{where}]", extract_headings(body), (0, spec[0], spec[1], relpath))]
 
 
 def discover_instruction_files(root: Path, changed: list[str]) -> list[Entry]:
@@ -377,13 +408,7 @@ def discover_instruction_files(root: Path, changed: list[str]) -> list[Entry]:
         seen[key] = Entry(relpath, tag, extract_headings(parse_frontmatter(read_text(p))[1]), order)
 
     # モジュール階層(root を除く祖先、深い方を上位)
-    dirs: set[str] = set()
-    for f in changed:
-        parent = Path(f).parent
-        while parent != Path("."):
-            dirs.add(parent.as_posix())
-            parent = parent.parent
-    for d in sorted(dirs, key=lambda s: (-s.count("/"), s)):
+    for d in ancestor_dirs(changed):
         for name in ANCESTOR_INSTRUCTION_FILES:
             depth = d.count("/") + 1
             add(root / d / name, f"[ancestor of {d}/]", (2, -depth, 0, f"{d}/{name}"))
