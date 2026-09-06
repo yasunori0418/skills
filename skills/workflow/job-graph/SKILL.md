@@ -66,6 +66,13 @@ spec の task に `boundary`（glob 配列）を書くと、起動コマンド�
 - **計画ファイル**（引数のパス）: 事前に対話で固めた計画を読む
 - **epic issue 番号**: `gh issue view <番号>` で本文とサブ issue を読み、タスクの叩き台を組む
 
+**計画ファイル入口で、計画ファイルと同階層の `job-graph/spec.json` が存在する（job-plan が生成済み）
+ときは spec を起草しない。** `<SKILL>/../job-plan/scripts/check_plan_spec.py <plan.md> <spec.json>`
+（stdlib のみ。`python3` 直叩きでよい）を実行し `VERDICT: PASS` を確認してから Phase 1 へ進む。FAIL は
+spec を直さず、ユーザーへ plan.md と spec.json のどちらが正か確認する（job-plan での合意内容が正）。
+job-plan は同一プラグインの兄弟スキルとして配置される前提（lane-ops の `worker_contract.py` と同じ
+兄弟パス解決）。job-plan が無い環境では従来どおり起草する。
+
 各タスクの依存辺・境界を意味的に判定し JSON spec に落とす（判定基準は `references/dependency-analysis.md`）。計画の変更ファイル一覧・規模目安も `expected_files` / `expected_scale` として spec に落とし、計画ファイルは `plan` に書く（基準は `references/spec.md`。計画に無ければ問う）。**依存関係や境界が欠けている・曖昧なときは、憶測で埋めずユーザーへ問いを立てて締める**。依存の読み違えはグラフを破綻させ、境界の読み違えは誤 deny かドリフト取り逃がしになる。タスク数が多く spec 起草が重い場合に限り、起草をサブエージェントへ委任してよい（任意の最適化）。
 
 ### Phase 1: 事前確認・スケジュール算出 → plan 承認
