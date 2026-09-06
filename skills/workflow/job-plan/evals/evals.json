@@ -1,0 +1,65 @@
+{
+  "skill_name": "job-plan",
+  "notes": [
+    "job-plan は grilling の対話が本体で、無人のサブエージェント実行では人の回答が無い。各プロンプトは『人間は居ない。answers.md の方針で答えたものとして自走せよ』を明記し、成果物（plan.md / spec.json）まで到達させて形と末尾ゲートを評価する。対話品質そのものは viewer の Outputs タブで人がレビューする。",
+    "{{FIXTURE}} は `bash evals/make_fixture.sh <eval名> tmp_claude/job-plan-workspace/fixtures/<eval名>/<run>` で生成したディレクトリの絶対パスに置換する。with_skill / without_skill の各ランに別のフィクスチャを与え、そこを cwd にする（同じ cwd だと tmp_claude/<job>/ を奪い合う）。",
+    "issue を無断で作っていないことは transcript で確認する（`gh issue create` / `gh api … sub_issues` が現れない）。サブエージェント内の PATH 差し替えは効かないことがあるので fake gh には頼らない。"
+  ],
+  "evals": [
+    {
+      "id": 1,
+      "name": "two-lane-stacked",
+      "fixture": "two-lane-stacked",
+      "prompt": "作業ディレクトリは {{FIXTURE}}（git リポジトリ。cd してから作業する）。このリポジトリに次の変更を job-graph で手放し実行したい: ロガーに warn レベルを足す／設定にリトライ回数 DEMO_RETRY_MAX を足す／クライアントの get を 5xx のときそのリトライ回数で再試行する。job-graph がそのまま消費できる計画（tmp_claude/<job>/plan.md と tmp_claude/<job>/job-graph/spec.json）を対話で確定してほしい。\n\n重要: この実行に人間は居ない。対話の各問いには {{FIXTURE}}/answers.md に書かれた方針で答えたものとして自走し、書かれていない問いだけ自分の推奨案を採用せよ。問いのラウンドを提示してターンを終えるな。成果物を書き出し、整合検査を通し、引き渡しコマンドを提示するところまで一気に進めること。GitHub issue は作らない。",
+      "expected_output": "tmp_claude/retry-and-logger/plan.md（6 章）と job-graph/spec.json が書かれ、A（独立）/ B1（独立）/ B2（B1 依存）の 3 task に分かれる。check_plan_spec.py が PASS、plan_orchestration.py が ERROR なしで SCHEDULE が wave 0 = A, B1 / wave 1 = B2。最後に /job-graph tmp_claude/retry-and-logger/plan.md を提示する。",
+      "expectations": [
+        "tmp_claude/retry-and-logger/plan.md が存在し、`## 1.`〜`## 6.` の 6 章見出しを全て持つ",
+        "tmp_claude/retry-and-logger/job-graph/spec.json が存在し、tasks が A / B1 / B2 の 3 件で B2 の depends_on が [\"B1\"]、A と B1 の depends_on が空",
+        "spec.json の各 task に boundary・expected_files・expected_scale が入っており、expected_files に glob が含まれない",
+        "spec.json の plan が tmp_claude/retry-and-logger/plan.md を指す",
+        "check_plan_spec.py を plan.md と spec.json に対して実行すると最終行が VERDICT: PASS になる",
+        "plan_orchestration.py を spec.json に対して実行すると ERROR が無く、SCHEDULE で A と B1 が wave 0、B2 が wave 1 になる",
+        "plan.md 第 4 章に『バックオフは固定 0 秒』の裁定が `- 裁定: … / 承認: ユーザー確認済み` 様式で書かれている",
+        "plan.md 第 5 章に指数バックオフが含まれる",
+        "最終応答に `/job-graph tmp_claude/retry-and-logger/plan.md` が含まれる",
+        "transcript に `gh issue create` と `gh api` の sub_issues 呼び出しが現れない"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "feature-spec-input",
+      "fixture": "feature-spec-input",
+      "prompt": "作業ディレクトリは {{FIXTURE}}（git リポジトリ。cd してから作業する）。docs/dev/retry-policy/spec.md（REQ-# 付きの機能仕様）を入力に、job-graph で手放し実行できる計画（tmp_claude/<job>/plan.md と tmp_claude/<job>/job-graph/spec.json）を対話で確定してほしい。REQ-# が全て task に対応付くようにすること。\n\n重要: この実行に人間は居ない。対話の各問いには {{FIXTURE}}/answers.md に書かれた方針で答えたものとして自走し、書かれていない問いだけ自分の推奨案を採用せよ。問いのラウンドを提示してターンを終えるな。成果物を書き出し、整合検査を通し、引き渡しコマンドを提示するところまで一気に進めること。GitHub issue は作らない。",
+      "expected_output": "tmp_claude/retry-policy/plan.md と spec.json が書かれ、REQ-01〜03 が第 1 章に列挙され各 task の対応要求に引き継がれる。第 4 章の事前裁定が『該当なし』ではなく 2 件の実体を持つ。check_plan_spec.py PASS（REQ-# 孤児の WARNING なし）。",
+      "expectations": [
+        "tmp_claude/retry-policy/plan.md の第 1 章に REQ-01、REQ-02、REQ-03 が全て現れる",
+        "plan.md 第 3 章の各 task に `- 対応要求:` があり、REQ-01〜03 がいずれかの task に載っている",
+        "spec.json の各 task の prompt に対応する REQ-# が含まれる",
+        "plan.md 第 4 章が『該当なし』ではなく、`- 裁定: … / 承認: ユーザー確認済み` 様式の行を 2 本以上持つ",
+        "check_plan_spec.py の出力が VERDICT: PASS で、WARNING に REQ-# の孤児が無い",
+        "plan_orchestration.py が ERROR なしで終わる",
+        "plan.md 第 5 章に指数バックオフと非冪等メソッドの再試行が含まれる",
+        "最終応答に `/job-graph tmp_claude/retry-policy/plan.md` が含まれる",
+        "transcript に `gh issue create` と `gh api` の sub_issues 呼び出しが現れない"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "revise-existing",
+      "fixture": "revise-existing",
+      "prompt": "作業ディレクトリは {{FIXTURE}}（git リポジトリ。cd してから作業する）。既に tmp_claude/retry-policy/ に job-graph 向けの計画（plan.md と job-graph/spec.json）がある。ここに『ロガーに warn レベルを足す』タスクを 1 つ足したい。計画を更新してほしい。\n\n重要: この実行に人間は居ない。対話の各問いには {{FIXTURE}}/answers.md に書かれた方針で答えたものとして自走し、書かれていない問いだけ自分の推奨案を採用せよ。問いのラウンドを提示してターンを終えるな。成果物を書き出し、整合検査を通し、引き渡しコマンドを提示するところまで一気に進めること。GitHub issue は作らない。",
+      "expected_output": "既存 tmp_claude/retry-policy/ を改訂として扱い（別名を作らない）、A（feat-logger-warn、独立）が追加される。既存 B1 / B2 の spec（branch・depends_on・boundary・expected_files・expected_scale）は変わらない。check_plan_spec.py PASS。issue は作られない。",
+      "expectations": [
+        "改訂か別名かの分岐が transcript に現れ、既存の tmp_claude/retry-policy/ を改訂している（tmp_claude/ 配下に別名の job ディレクトリを作っていない）",
+        "spec.json の tasks が A / B1 / B2 の 3 件で、A の branch が feat-logger-warn、depends_on が空",
+        "B1 と B2 の branch・depends_on・boundary・expected_files・expected_scale がフィクスチャの元の値と一致する",
+        "plan.md 第 3 章に `### A:` 節があり、7 つの小見出し（branch / 依存 / 完了条件 / 変更対象 / 規模目安 / 境界 / コミット計画）を持つ",
+        "plan.md 第 4 章の既存裁定（固定 0 秒）が保たれている",
+        "check_plan_spec.py の出力が VERDICT: PASS",
+        "plan_orchestration.py が ERROR なしで終わり、SCHEDULE で A と B1 が wave 0",
+        "最終応答に `/job-graph tmp_claude/retry-policy/plan.md` が含まれる",
+        "transcript に `gh issue create` と `gh api` の sub_issues 呼び出しが現れない"
+      ]
+    }
+  ]
+}
