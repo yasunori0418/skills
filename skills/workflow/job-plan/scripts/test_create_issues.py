@@ -267,8 +267,9 @@ def test_partial_failure_then_rerun_skips_written_back_tasks() -> None:
     rc = ci.run(opts(epic=10), runner, fx, PLAN_OK, spec_ok())
     assert rc == 1
     assert fx.issues == [("A", 101)]
-    assert fx.plan_lines == []
-    assert any("再実行で続きから" in w for w in fx.warns)
+    # epic 行は sub-issue 作業の前に書かれる（途中で落ちても --epic で拾える）
+    assert fx.plan_lines == ["- epic: https://github.com/o/r/issues/10"]
+    assert any("--epic 10 を付けて再実行" in w for w in fx.warns)
 
     # 再実行: A は issue 済みなので飛ばし、B1 / B2 だけ作る
     runner2 = FakeGhRunner(no_override)
@@ -278,6 +279,25 @@ def test_partial_failure_then_rerun_skips_written_back_tasks() -> None:
     creates = [c for c in runner2.calls if c.args[:3] == ("gh", "issue", "create")]
     assert [c.args[4] for c in creates] == ["demo: B1 設定追加", "demo: B2 クライアント実装"]
     assert fx2.issues == [("B1", 101), ("B2", 102)]
+
+
+def test_new_epic_failure_records_epic_url_before_sub_issues() -> None:
+    runner = FakeGhRunner(fail_create_titled("demo: A ロガー整理"))
+    fx = FakeEffects()
+    rc = ci.run(opts(), runner, fx, PLAN_OK, spec_ok())
+    assert rc == 1
+    assert fx.plan_lines == ["- epic: https://github.com/o/r/issues/101"]
+    assert any("--epic 101" in w for w in fx.warns)
+
+
+def test_task_missing_in_plan_is_rejected_before_any_gh_call() -> None:
+    tasks = tasks_ok()
+    tasks.append({"id": "Z", "branch": "z"})
+    runner = FakeGhRunner(no_override)
+    fx = FakeEffects()
+    rc = ci.run(opts(), runner, fx, PLAN_OK, spec_ok(tasks=tasks))
+    assert rc == 2
+    assert runner.argv() == []
 
 
 # ---------- --sync ----------

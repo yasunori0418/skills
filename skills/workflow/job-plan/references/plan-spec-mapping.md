@@ -77,9 +77,10 @@ external-writes 準拠: **本文を提示 → 承認 → 実行**。承認前に
    ```
 
    スクリプトは `gh auth status` / `gh repo view` を先に検査し、失敗なら何も作らず exit 2。
-   task ごとに作成 → spec の `issue` 書き戻し → 紐付け、の順で進み、紐付け失敗は WARNING +
-   タスクリストで代替する。途中で落ちたら（exit 1）同じコマンドを再実行する（`issue` が埋まった
-   task は飛ぶ）
+   epic を確定した直後にその URL を plan.md 第 6 章へ書き、task ごとに作成 → spec の `issue`
+   書き戻し → 紐付け、の順で進む。紐付け失敗は WARNING + タスクリストで代替する。途中で落ちたら
+   （exit 1）**第 6 章の epic 番号を `--epic <番号>` に付けて**同じコマンドを再実行する（`issue` が
+   埋まった task は飛ぶ。`--epic` 無しで再実行すると epic が二重に作られる）
 3. 完了後、第 6 章に epic / sub-issue の URL が追記されているのを確認し、`check_plan_spec.py` を
    もう一度通す（`issue` の書き戻しは検査対象外なので PASS のまま。念のため）
 

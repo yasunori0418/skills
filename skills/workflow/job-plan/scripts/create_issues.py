@@ -16,7 +16,8 @@
 - `--sync`（改訂。`--epic` 必須）: 現在の sub-issue 集合を API から取り、spec の `issue` と突合する。
   既存 task は `gh pr list --head <branch>` で着手済みを判定し、未着手は本文更新・着手済みは通知コメント。
   API にあって spec に無い sub-issue は理由コメント付きで close。新規 task は新規経路。epic に新版コメント
-- 冪等: 書き戻しは task ごとに即時。途中で失敗しても再実行は `issue` が埋まった task を飛ばす
+- 冪等: 書き戻しは task ごとに即時。epic の URL は作成直後に plan.md 第 6 章へ書く。途中で失敗したら
+  `--epic <番号>` を付けて再実行すると `issue` が埋まった task を飛ばして続きから進む
 
 終了コード: 0 = 完了、1 = 途中で gh が失敗（書き戻し済みの分は spec に残る。再実行で続きから）、
 2 = 事前検査・入力の失敗。
@@ -562,6 +563,8 @@ def run(opts: Options, runner: GhRunner, effects: Effects, plan_text: str, spec_
     try:
         plan = parse_plan_text(opts.plan, plan_text)
         spec = parse_spec_tasks(spec_data)
+        # plan.md と spec の task 対応は epic を作る前に検証する（作った後に落ちると epic が孤児になる）。
+        plan_actions(plan, spec, opts.epic, None)
         repo = preflight(runner)
     except (cps.InputError, GhError) as e:
         effects.warn(f"事前検査に失敗（何も作っていない）: {e}")
@@ -572,13 +575,19 @@ def run(opts: Options, runner: GhRunner, effects: Effects, plan_text: str, spec_
         ep = plan_epic(opts, plan)
         out.epic = ensure_epic(runner, effects, repo, ep)
         out.epic_is_new = ep.is_new
+        # epic の URL は sub-issue 作業の前に第 6 章へ書く。途中で落ちても再実行時に --epic で拾える。
+        effects.append_plan(handoff_lines(plan.text, repo, out.epic, []))
         # 新規 epic の番号は作成後に決まるので、行動計画（本文の `epic: #N`）は確定後に組む。
         actions = plan_actions(plan, spec, out.epic, remote)
         execute_actions(runner, effects, repo, ep.body, actions, out)
     except (cps.InputError, GhError) as e:
-        effects.warn(f"途中で失敗した。spec.json へ書き戻した分はそのまま残る（再実行で続きから）: {e}")
+        effects.warn(
+            f"途中で失敗した。spec.json へ書き戻した分はそのまま残る。"
+            f"同じ引数に --epic {out.epic} を付けて再実行すると続きから進む: {e}"
+        )
         return 1
-    effects.append_plan(handoff_lines(plan.text, repo, out.epic, out.created))
+    # epic 行は上で追記済み。plan.text は読み込み時点の内容なので、sub-issue 行だけを追記する。
+    effects.append_plan([l for l in handoff_lines(plan.text, repo, out.epic, out.created) if not l.startswith("- epic:")])
     effects.info(f"完了: epic {repo.issue_url(out.epic)} / sub-issue {len(out.created)} 件作成")
     return 0
 

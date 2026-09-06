@@ -54,7 +54,6 @@ plan.md は 2 つの読者を持つ。ワーカーの `/review-converge` が `DI
 ## 4. 事前裁定
 
 - 裁定: <内容> / 承認: ユーザー確認済み
-（無ければ `- 該当なし`）
 
 ## 5. スコープ外
 
@@ -64,8 +63,10 @@ plan.md は 2 つの読者を持つ。ワーカーの `/review-converge` が `DI
 
 - 起動: `/job-graph tmp_claude/<job>/plan.md`
 - 親の permission mode: acceptEdits 等の明示モード
-（issue を出したら create_issues.py が epic / sub-issue の URL をここへ追記する）
 ````
+
+第 4 章は 1 行 1 裁定の固定様式で、上の例のような裁定行か `- 該当なし` 以外の行（注記・散文）を
+置くと ERROR になる。第 6 章は issue を出したとき `create_issues.py` が URL 行を末尾に追記する。
 
 ## 各章の書き方
 
