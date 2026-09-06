@@ -1,0 +1,27 @@
+[project]
+name = "job-plan-tools"
+version = "0.1.0"
+description = "job-plan スキルの決定論ツール（plan.md と spec.json の整合検査・issue 起票）"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+# スキルをプラグインとして分離しても、`uv run --project <skill-dir>` で
+# requires-python に沿った .venv を用意して実行する。配布物ではないので package 化しない。
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["scripts"]
+pythonpath = ["scripts"]
+
+# 型検査は scripts/test_typecheck.py が PATH の pyright を実行して pytest の失敗に変換する。
+# pyright 本体は PyPI 版が sandbox で動かない(実行時に node を取得する)ため nix 側で供給する。
+[tool.pyright]
+typeCheckingMode = "strict"
+include = ["scripts"]
+pythonVersion = "3.11"

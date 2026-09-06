@@ -74,6 +74,9 @@
                   yamllint # YAML lint
                   markdownlint-cli2 # Markdown lint for SKILL.md
 
+                  # Python 型検査(job-plan の pyright strict ゲートをローカルで回す)
+                  pyright
+
                   # Data wrangling
                   yq-go # YAML/JSON query & edit (`yq`)
                   jq # JSON query

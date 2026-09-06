@@ -58,4 +58,10 @@ tmp_claude/<job>/
     prompts/              # --prompt-dir: <task-id>.md と launch_<task-id>.sh
 ```
 
+この配置は job-plan スキル（`/job-plan`）が生成するものと同じ。**plan.md と同階層に
+`job-graph/spec.json` が既にあるときは Phase 0 で起草せず、job-plan の `check_plan_spec.py`
+（`<SKILL>/../job-plan/scripts/`。lane-ops と同じ兄弟パス解決）で整合を検査して再利用する**。
+job-plan 側の plan.md は第 3 章が固定文法で、`expected_files` / `boundary` / `expected_scale` /
+`depends_on` を機械的に写せる。
+
 scratchpad（セッション固有の一時ディレクトリ）に置くと、**親交代（セッション再開・別セッションの親へ引き継ぎ）でパスが失効し、起動済みワーカーへ渡した prompt ファイルや後続 wave の launch スクリプトが読めなくなった実績**がある。`tmp_claude/` はリポジトリ直下で gitignored、worktree からも絶対パスで辿れ、handoff.md と同じ場所に揃う。spec と prompt-dir の絶対パスは handoff.md の「所在」に記録する。

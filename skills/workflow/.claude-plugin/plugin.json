@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "workflow-skills",
-  "description": "作業運用スキル群（external-writes / test-targeted / lane-ops / job-graph）。外部システムへの書き込み運用ルール・テスト絞り込み運用ルール・herdr エージェントレーンの操縦とグラフオーケストレーションを扱う。",
+  "description": "作業運用スキル群（external-writes / test-targeted / lane-ops / job-graph / job-plan）。外部システムへの書き込み運用ルール・テスト絞り込み運用ルール・herdr エージェントレーンの操縦とグラフオーケストレーション・その計画を対話で確定する上流工程を扱う。",
   "version": "0.4.0",
   "author": {
     "name": "yasunori0418"
@@ -11,6 +11,7 @@
   "skills": [
     "./external-writes",
     "./job-graph",
+    "./job-plan",
     "./lane-ops",
     "./test-targeted"
   ]

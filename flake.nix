@@ -106,9 +106,9 @@
 
           # skills/ 配下の pytest を走らせる。pyproject.toml を持つスキルだけを自動探索
           # するため、Python テストを CI に載せる条件は pyproject.toml を置くこと
-          # (現時点の対象は lane-ops / job-graph / session-insights の 3 件)。job-graph の
-          # plan_orchestration.py が lane-ops を兄弟パスで参照するため、skills ツリー
-          # 全体をコピーする必要がある。
+          # (現時点の対象は lane-ops / job-graph / job-plan / session-insights / diff-review)。
+          # job-graph の plan_orchestration.py が lane-ops を兄弟パスで参照するため、skills
+          # ツリー全体をコピーする必要がある。
           checks.pytest =
             pkgs.runCommand "check-pytest"
               {
@@ -124,6 +124,9 @@
                   pkgs.git
                   # job-graph の boundary bootstrap が既存境界ファイルとのマージに jq を使う。
                   pkgs.jq
+                  # job-plan の test_typecheck.py が pyright(strict)を PATH から実行する。
+                  # PyPI 版は実行時に node を取りに行き sandbox で動かないため nix 版を使う。
+                  pkgs.pyright
                 ];
                 env = {
                   # session-insights のテストが Path.home() を踏む。
