@@ -121,5 +121,3 @@ issue を出したなら epic の URL、改訂なら変更した task の一覧�
 - `references/`: `grilling-brief.md`（brief 雛形・閉じる項目・調査ラウンド）/ `plan-template.md`
   （plan.md の 6 章と第 3 章の固定文法）/ `plan-spec-mapping.md`（plan → spec の対応表、末尾ゲートと
   issue 起票・改訂同期のコマンド）
-- `evals/`: skill-creator 用の評価プロンプト（`evals.json`）と、評価用ダミーリポジトリを
-  `tmp_claude/` 配下へ生成する `make_fixture.sh`。運用時には使わない
