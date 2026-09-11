@@ -2,7 +2,8 @@
 # Verifies launch.sh の純関数（外部コマンド ghq/tmux/claude に触れない部分）。
 #   - sanitize / resolve_matches / session_base_name / next_session_name /
 #     inject_remote_control / detect_backend / detect_topology /
-#     herdr_session_name / backend_attach_hint を source して単体検証する。
+#     herdr_session_name / backend_attach_hint / is_query_token / query_order_hint を
+#     source して単体検証する。
 #   - ghq list の fixture はヒアドキュメントで固定し実環境に依存しない。
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -252,6 +253,56 @@ check "extopo:query-only" "1" "$((${#_out[@]} - 1))"
 mapfile -d '' _out < <(extract_topology_flag --session)
 check "extopo:flag-only" "session" "${_out[0]}"
 check "extopo:flag-only-count" "0" "$((${#_out[@]} - 1))"
+
+# ---- is_query_token ---------------------------------------------------------
+# query 省略の判定は AI ではなくここで確定する。空と `-` 始まり（claude への
+# passthrough 引数）だけが「省略」。ghq キー・パス指定は query。
+is_query_token 'nput' && rc=0 || rc=1
+check "isquery:bare" "0" "$rc"
+is_query_token '~/dotfiles' && rc=0 || rc=1
+check "isquery:path" "0" "$rc"
+is_query_token '' && rc=0 || rc=1
+check "isquery:empty" "1" "$rc"
+is_query_token '--remote-control' && rc=0 || rc=1
+check "isquery:long-flag" "1" "$rc"
+is_query_token '-p' && rc=0 || rc=1
+check "isquery:short-flag" "1" "$rc"
+# 引数なし呼び出しも「省略」（cmd_launch が rest 空で呼ぶ経路と揃える）。
+is_query_token && rc=0 || rc=1
+check "isquery:noarg" "1" "$rc"
+
+# ---- query_order_hint --------------------------------------------------------
+# Issue #39 の実例: `--remote-control nput` は query 省略 + 値が ghq キーに一意一致。
+# 書き順の取り違えとしてヒントを返す（値を query として採用はしない）。
+_hint=$(printf '%s\n' "$GHQ_LIST" | query_order_hint --remote-control nput)
+check "hint:unique" \
+    "hint: --remote-control の値 'nput' は github.com/yasunori0418/nput に一致します。プロジェクト指定なら 'nput --remote-control' の順に書きます（値なしの --remote-control にはセッション名が自動で入ります）" \
+    "$_hint"
+# 後続に別の passthrough があっても最初の --remote-control の値だけ見る。
+_hint=$(printf '%s\n' "$GHQ_LIST" | query_order_hint --remote-control nput --model opus)
+check "hint:with-trailing-args" "0" "$([ -n "$_hint" ] && echo 0 || echo 1)"
+# 前に別フラグがあっても走査は続ける。
+_hint=$(printf '%s\n' "$GHQ_LIST" | query_order_hint --model opus --remote-control nput)
+check "hint:after-other-flag" "0" "$([ -n "$_hint" ] && echo 0 || echo 1)"
+# 複数一致（nixpkgs が 2 件）はどれを指すか決められないので出さない。
+_hint=$(printf '%s\n' "$GHQ_LIST" | query_order_hint --remote-control nixpkgs)
+check "hint:ambiguous" "" "$_hint"
+# 0 件は出さない（リモコン名として正当な値）。
+_hint=$(printf '%s\n' "$GHQ_LIST" | query_order_hint --remote-control myname)
+check "hint:not-found" "" "$_hint"
+# 値なしの --remote-control（末尾 / 直後がフラグ）は自動注入対象なので出さない。
+_hint=$(printf '%s\n' "$GHQ_LIST" | query_order_hint --remote-control)
+check "hint:bare-trailing" "" "$_hint"
+_hint=$(printf '%s\n' "$GHQ_LIST" | query_order_hint --remote-control -p 'hi')
+check "hint:bare-before-flag" "" "$_hint"
+# パス形の値は ghq を引かない。
+_hint=$(printf '%s\n' "$GHQ_LIST" | query_order_hint --remote-control ~/nput)
+check "hint:path-value" "" "$_hint"
+# --remote-control が無ければ出さない。
+_hint=$(printf '%s\n' "$GHQ_LIST" | query_order_hint -p 'nput')
+check "hint:no-remote-control" "" "$_hint"
+_hint=$(printf '%s\n' "$GHQ_LIST" | query_order_hint)
+check "hint:no-args" "" "$_hint"
 
 # backend_attach_hint: topology=session だけ attach コマンドをそのまま案内する
 # （detached で立てた session はユーザーが attach するまで画面に現れないため）。

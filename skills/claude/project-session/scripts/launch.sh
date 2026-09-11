@@ -40,10 +40,16 @@
 # 伝播しない（実測で確認済み）。既存 server へ繋ぐだけの workspace create /
 # pane run には env -u を付けない。
 #
+# query の有無も AI に判定させない（is_query_token）。topology フラグを除いた先頭トークンが
+# 無い、または `-` 始まり（claude への passthrough 引数）なら「query 省略」として全一覧を
+# stdout に出し exit 4 で中断する（cmd_no_query）。SKILL.md 側は exit code で分岐するだけで、
+# 「省略かどうか」を読解しない。
+#
 # 純関数（sanitize/resolve_matches/session_base_name/next_session_name/
 # inject_remote_control/detect_backend/extract_topology_flag/detect_topology/
 # herdr_session_name/backend_attach_hint/backend_required_tools/is_path_query/
-# expand_path_query/inherited_session_vars/env_unset_prefix/subtract_ids）は
+# expand_path_query/is_query_token/query_order_hint/inherited_session_vars/
+# env_unset_prefix/subtract_ids）は
 # 外部コマンド（ghq/tmux/herdr/claude）を
 # 呼ばず、入力は引数と stdin のみ。これにより CI sandbox（jq/git のみ、
 # ghq/tmux/herdr/claude 無し）で
@@ -225,6 +231,49 @@ expand_path_query() {
     '~/'*) printf '%s/%s' "$home" "${query#'~/'}" ;;
     *) printf '%s' "$query" ;;
     esac
+}
+
+# is_query_token <token>
+# その 1 トークンがプロジェクト指定（query）として置かれたものかを判定する。
+# 空、または `-` 始まり（`--remote-control` / `-p` 等、claude への passthrough 引数）なら
+# query ではない（return 1）。それ以外（ghq キー・パス指定）は query（return 0）。
+# 「省略かどうか」を AI の読解に任せず、ここで機械的に確定する。
+# 外部コマンドを呼ばないので単体テストできる。
+is_query_token() {
+    case "${1:-}" in
+    "" | -*) return 1 ;;
+    *) return 0 ;;
+    esac
+}
+
+# query_order_hint <claude引数...>
+# stdin に ghq list を受け取り、query 省略時の passthrough 引数列に
+# `--remote-control <値>` の形があって、その値が ghq list に一意一致するなら
+# 「書き順の取り違え」と見てヒントを 1 行返す（一致しなければ何も出さない）。
+# 値をプロジェクト指定として採用はしない（claude 本体の `--remote-control [name]` の
+# 値と区別できないため）。判断はユーザーに返し、AI がこの値を query に流用することも
+# 想定しない。外部コマンドを呼ばないので単体テストできる。
+query_order_hint() {
+    local list value matches count
+    list=$(cat)
+    while [ "$#" -gt 0 ]; do
+        if [ "$1" = "--remote-control" ] && [ "$#" -ge 2 ]; then
+            value="$2"
+            if is_query_token "$value" && ! is_path_query "$value"; then
+                matches=$(printf '%s\n' "$list" | resolve_matches "$value")
+                if [ -n "$matches" ]; then
+                    count=$(printf '%s\n' "$matches" | grep -c '^')
+                    if [ "$count" -eq 1 ]; then
+                        printf "hint: --remote-control の値 '%s' は %s に一致します。プロジェクト指定なら '%s --remote-control' の順に書きます（値なしの --remote-control にはセッション名が自動で入ります）\n" \
+                            "$value" "$matches" "$value"
+                    fi
+                fi
+            fi
+            return 0
+        fi
+        shift
+    done
+    return 0
 }
 
 # resolve_matches <query>  (ghq list 全文を stdin から)
@@ -502,14 +551,37 @@ cmd_list() {
     ghq list
 }
 
-# cmd_resolve <query> — resolve_matches の結果で分岐する。
+# cmd_no_query <claude引数...> — query 省略時の共通処理。
+#   stdout に全一覧、stderr に `no query`（+ 該当すれば query_order_hint）、exit 4。
+#   AI はこの一覧をユーザーに提示して選ばせる（cwd や会話文脈で補わない）。
+cmd_no_query() {
+    if ! command -v ghq >/dev/null 2>&1; then
+        # shellcheck disable=SC2016
+        printf 'error: `ghq` が見つかりません（PATH に必要）\n' >&2
+        return 1
+    fi
+    local list hint
+    list=$(ghq list)
+    printf '%s\n' "$list"
+    printf 'no query\n' >&2
+    hint=$(printf '%s\n' "$list" | query_order_hint "$@")
+    [ -z "$hint" ] || printf '%s\n' "$hint" >&2
+    return 4
+}
+
+# cmd_resolve [query] — resolve_matches の結果で分岐する。
+#   省略（空 / `-` 始まり）: cmd_no_query（全一覧、exit 4）
 #   一意: stdout に relpath 1 行、exit 0
 #   複数: stdout に候補一覧、stderr に ambiguous、exit 2
 #   0 件: stdout に全一覧、stderr に not found、exit 3
 # 直接パス指定（/... ~... ./... ../...）は ghq を引かず、存在すれば絶対パスを 1 行返す
 # （launch 側と判定を揃える。存在しなければ not found 扱いで exit 3）。
 cmd_resolve() {
-    local query="$1" list matches count
+    local query="${1:-}" list matches count
+    if ! is_query_token "$query"; then
+        cmd_no_query
+        return
+    fi
     if is_path_query "$query"; then
         local abs_path
         abs_path=$(expand_path_query "$query")
@@ -543,18 +615,20 @@ cmd_resolve() {
     fi
 }
 
-# cmd_launch [--session] <query> [claude引数...] — 本体。
+# cmd_launch [--session] [query] [claude引数...] — 本体。
+#   query 省略（フラグを除いた先頭が無い / `-` 始まり）は cmd_no_query（全一覧、exit 4）。
 cmd_launch() {
     # 0. topology フラグを query より前から抜き取る（query 以降は claude への
     #    passthrough なので走査しない）。フラグ未指定なら環境変数へフォールバックする。
+    #    残りの先頭が query でなければ「省略」として一覧を返す（AI に判定させない）。
     local -a rest=()
     local flag_topology=""
     mapfile -d '' rest < <(extract_topology_flag "$@")
     flag_topology="${rest[0]}"
     rest=("${rest[@]:1}")
-    if [ "${#rest[@]}" -eq 0 ]; then
-        printf 'usage: launch.sh launch [--session] <query> [claude引数...]\n' >&2
-        return 1
+    if [ "${#rest[@]}" -eq 0 ] || ! is_query_token "${rest[0]}"; then
+        cmd_no_query "${rest[@]}"
+        return
     fi
 
     local query="${rest[0]}"
@@ -677,22 +751,14 @@ main() {
         ;;
     resolve)
         shift
-        [ "$#" -ge 1 ] || {
-            printf 'usage: launch.sh resolve <query>\n' >&2
-            return 1
-        }
-        cmd_resolve "$1"
+        cmd_resolve "${1:-}"
         ;;
     launch)
         shift
-        [ "$#" -ge 1 ] || {
-            printf 'usage: launch.sh launch [--session] <query> [claude引数...]\n' >&2
-            return 1
-        }
         cmd_launch "$@"
         ;;
     *)
-        printf 'usage: launch.sh {list|resolve <query>|launch [--session] <query> [claude引数...]}\n' >&2
+        printf 'usage: launch.sh {list|resolve [query]|launch [--session] [query] [claude引数...]}\n' >&2
         return 1
         ;;
     esac
