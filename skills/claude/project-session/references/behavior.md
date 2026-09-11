@@ -13,6 +13,14 @@
   既存名は backend と topology から引く（tmux はセッション名、herdr は topology=workspace なら
   現在 session の workspace ラベル、topology=session なら herdr の session 名（**停止中も含む**。
   同名 session を作ると既存の状態に相乗りしてしまうため））。
+- **query 省略の判定**: `--session` を除いた先頭トークンが無い、または `-` 始まりなら「省略」と判定し、
+  `ghq list` 全件を stdout・`no query` を stderr に出して **exit 4** で中断する（`launch` / `resolve` 共通）。
+  `-` 始まりは claude への passthrough 引数の形なので、`--remote-control nput` の `nput` を query として
+  拾うことはない。省略かどうかを AI に読解させないための機械判定。
+- **書き順ヒント**: exit 4 のとき、passthrough 引数に `--remote-control <値>` があり、その値が
+  `ghq list` に一意一致するなら stderr に `hint:` 行を 1 行足す（「`<値> --remote-control` の順では?」）。
+  値をプロジェクト指定として採用はしない。claude 本体の `--remote-control [name]` の値と区別できないため、
+  判断はユーザーに返す。複数一致・0 件・値なし・パス形の値では出さない。
 - **`--remote-control` 補完**: 値なしの `--remote-control`（末尾、または直後が `-` 始まり）のときだけ、
   実セッション名（suffix 込み）を値として自動注入する。ユーザーが値を書いた場合は触らない（最初の 1 個のみ）。
 - **親セッションのマーカー除去**: 起動する claude は独立したセッションなので、`env -u` で親セッション
