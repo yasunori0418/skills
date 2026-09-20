@@ -107,6 +107,11 @@ check "mixed-status-list" "  - 回収済みレーン (teammate)" "$(context "$RU
 # running のものが一覧のどこにも出ないことを件数で固定する
 check "mixed-status-count" "1" "$(context "$RUNNING_AND_IDLE" | grep -c '^  - ' || true)"
 
+# status で絞ったあとも type の絞り込みが効いていること。idle の shell は
+# status 条項を素通りするので、type 条項が消えたらここが落ちる。
+check "idle-shell-silent" "" \
+    "$(context '{"background_tasks":[{"id":"s1","type":"shell","status":"idle","command":"tail -f log"}]}')"
+
 # status の欠落・未知の値は従来どおり差し戻す（安全側）
 check "missing-status-blocks" "稼働中のサブエージェント/チームメイトが 1 体残っています:" \
     "$(summary '{"background_tasks":[{"id":"a1","type":"subagent","description":"status 無し"}]}')"
