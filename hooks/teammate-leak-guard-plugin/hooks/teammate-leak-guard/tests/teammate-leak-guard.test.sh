@@ -75,4 +75,42 @@ check "fallback-id" "  - a1 (subagent)" \
 SHAPE=$(printf '%s' "$TEAMMATE" | "$GUARD" | jq -r '[(.decision // "-"), (if has("hookSpecificOutput") then "has-hso" else "no-hso" end)] | join(",")')
 check "output-shape" "block,no-hso" "$SHAPE"
 
+# --- status による絞り込み ---------------------------------------------------
+# running（稼働中）は成果物をまだ返していない。ここで差し戻すと回収前の停止を促して
+# しまうため対象外にする。差し戻すのは idle（空いて待機中）以降のもの。
+
+# 終了コードも併せて見る（check は引数内のコマンド置換なので exit を拾わない）
+silent_rc() { # json -> "<出力>|<終了コード>"
+    local out rc=0
+    out=$(printf '%s' "$1" | "$GUARD") || rc=$?
+    printf '%s|%s' "$out" "$rc"
+}
+
+RUNNING_ONLY='{"background_tasks":[
+  {"id":"a1","type":"subagent","status":"running","description":"design レンズでレビュー"},
+  {"id":"a2","type":"subagent","status":"running","description":"spec レンズでレビュー"}
+]}'
+check "running-only-silent" "|0" "$(silent_rc "$RUNNING_ONLY")"
+
+IDLE_TEAMMATE='{"background_tasks":[
+  {"id":"t1","type":"teammate","status":"idle","description":"rcfix-e"}
+]}'
+check "idle-blocks" "稼働中のサブエージェント/チームメイトが 1 体残っています:" "$(summary "$IDLE_TEAMMATE")"
+
+# 混在: idle のものだけが数にも一覧にも載る
+RUNNING_AND_IDLE='{"background_tasks":[
+  {"id":"a1","type":"subagent","status":"running","description":"まだレビュー中"},
+  {"id":"t1","type":"teammate","status":"idle","description":"回収済みレーン"}
+]}'
+check "mixed-status-summary" "稼働中のサブエージェント/チームメイトが 1 体残っています:" "$(summary "$RUNNING_AND_IDLE")"
+check "mixed-status-list" "  - 回収済みレーン (teammate)" "$(context "$RUNNING_AND_IDLE" | sed -n '2p')"
+# running のものが一覧のどこにも出ないことを件数で固定する
+check "mixed-status-count" "1" "$(context "$RUNNING_AND_IDLE" | grep -c '^  - ' || true)"
+
+# status の欠落・未知の値は従来どおり差し戻す（安全側）
+check "missing-status-blocks" "稼働中のサブエージェント/チームメイトが 1 体残っています:" \
+    "$(summary '{"background_tasks":[{"id":"a1","type":"subagent","description":"status 無し"}]}')"
+check "unknown-status-blocks" "稼働中のサブエージェント/チームメイトが 1 体残っています:" \
+    "$(summary '{"background_tasks":[{"id":"a1","type":"subagent","status":"pending","description":"未知の状態"}]}')"
+
 exit "$fail"
