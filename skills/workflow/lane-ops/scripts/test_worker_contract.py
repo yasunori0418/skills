@@ -127,7 +127,7 @@ def test_tempfile_clause_in_both_modes(mode):
 @pytest.mark.parametrize("mode", ["implement", "maintain"])
 def test_tempfile_clause_follows_commit_granularity(mode):
     s = wc.render(task(mode=mode))
-    assert s.index("コミット粒度") < s.index("一時ファイル")
+    assert s.index("コミット粒度") < s.index("一時ファイルの扱い") < s.index("- push:")
 
 
 @pytest.mark.parametrize("mode", ["implement", "maintain"])
@@ -135,8 +135,9 @@ def test_tempfile_clause_warns_shared_worktree_dirs(mode):
     # tmp_claude/ 等の gitignored ディレクトリが primary への symlink で共有され、
     # 既定名の状態ファイルを別レーンが上書きする事故が実際に起きた。
     s = wc.render(task(mode=mode))
-    assert "スキル既定のファイル名をそのまま使わずタスク ID を付ける" in s
-    assert "worktree 間で symlink 共有されていることがあり" in s
+    assert "`tmp_claude/` などリポジトリ内の gitignore されたディレクトリ" in s
+    assert "scratchpad と違い他レーンと実体を共有する" in s
+    assert "スキルが既定名を決めているファイルは他レーンのものかもしれない" in s
     assert "見つけても消さず上書きしない" in s
 
 
@@ -149,6 +150,7 @@ def test_tempfile_clause_kept_without_parent():
 def test_report_clause_offers_file_input_for_command_names():
     s = wc.render(task())
     assert "コマンド名を含む報告は `report.sh --file <path>` を使う" in s
+    assert "本文ファイルは Write ツールで書く" in s
 
 
 def test_report_file_guidance_omitted_without_parent():
