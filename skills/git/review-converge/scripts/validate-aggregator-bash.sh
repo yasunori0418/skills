@@ -4,6 +4,10 @@
 # ときだけ通し、書き込み・ビルド系コマンド(tee / cp / mv / rm / go / cargo / npm / make /
 # nix build)は exit 2 でブロック(stderr がエージェントに返る)。それ以外は通す
 # (diff-review スキルの実行に要る uv / python3 / git / 各スクリプトを塞がないため)。
+#
+# 判定はコマンドの「構造」に対して行い、データは見ない。統合報告の本文は heredoc や
+# 引用文字列に載ってこの hook を通るため、本文中の `rm` の説明や markdown の引用行 `>` を
+# コマンド・リダイレクトと読むと、唯一許可すべき書き出しを塞いで周回が空転する。
 set -euo pipefail
 
 INPUT=$(cat)
@@ -15,13 +19,50 @@ deny() {
     exit 2
 }
 
-# stderr の /dev/null 捨てと 2>&1 は書き込みではないので先に落とす
-STRIPPED=$(printf '%s' "$COMMAND" | sed -E 's#[0-9]*>>?[[:space:]]*(&[0-9]+|/dev/null)##g')
+# 1) heredoc の本体を落とす。`<<EOF` / `<<'EOF'` / `<<-EOF` の区切り語を拾い、
+#    区切り行までを本文として取り除く(本文はデータでありコマンドではない)。
+# awk(POSIX ERE)は後方参照を持たないため、引用の有無を明示の選択で書く
+HEREDOC_RE='<<-?[[:space:]]*([A-Za-z_][A-Za-z0-9_]*|"[A-Za-z_][A-Za-z0-9_]*"|\x27[A-Za-z_][A-Za-z0-9_]*\x27)'
+STRIPPED=$(printf '%s' "$COMMAND" | awk -v re="$HEREDOC_RE" '
+    function delim(s,   t) {
+        t = s
+        sub(/^<<-?[[:space:]]*/, "", t)
+        gsub(/^["\x27]|["\x27]$/, "", t)
+        return t
+    }
+    {
+        if (skip) {
+            stripped = $0
+            sub(/^[[:space:]]+/, "", stripped)
+            if (stripped == term) { skip = 0 }
+            next
+        }
+        line = $0
+        if (match(line, re)) {
+            term = delim(substr(line, RSTART, RLENGTH))
+            skip = 1
+            line = substr(line, 1, RSTART - 1) substr(line, RSTART + RLENGTH)
+        }
+        print line
+    }
+')
+
+# 2) 引用文字列の中身を落とす(検索パターンの `>` や本文の説明をコマンドと読まないため)。
+#    リダイレクト先が引用符で括られている場合に備え、引用符自体は目印として残す。
+STRIPPED=$(printf '%s' "$STRIPPED" | sed -E "s/'[^']*'/''/g; s/\"[^\"]*\"/\"\"/g")
+
+# 3) stderr の /dev/null 捨てと 2>&1 は書き込みではないので落とす
+STRIPPED=$(printf '%s' "$STRIPPED" | sed -E 's#[0-9]*>>?[[:space:]]*(&[0-9]+|/dev/null)##g')
 
 # 残ったリダイレクトの出力先を 1 つずつ検査する(> / >> / >| のいずれも対象)
 REPORT_RE='^review-converge-round-[0-9]+\.md$'
 while IFS= read -r target; do
     [[ -z "$target" ]] && continue
+    # 引用の中身は 2) で落ちているため、引用符付き・変数展開の出力先は空文字などになり
+    # 静的に解決できない先として拒否される(リテラルの絶対パスで書かせる)
+    if [[ "$target" == '""' || "$target" == "''" || "$target" == *'$'* ]]; then
+        deny "リダイレクト先を静的に解決できない(引用符・変数展開を使わずリテラルの絶対パスで書くこと): ${target}"
+    fi
     if ! [[ "$(basename -- "$target")" =~ $REPORT_RE ]]; then
         deny "統合報告(review-converge-round-<数字>.md)以外への書き込みは不可: ${target}"
     fi

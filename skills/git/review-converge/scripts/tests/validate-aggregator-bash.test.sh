@@ -50,10 +50,27 @@ hook_exit() { # command -> スクリプト本体の exit code
 check "report-redirect-allowed" "0" "$(hook_exit 'cat body.md > /tmp/x/review-converge-round-1.md')"
 check "report-append-allowed" "0" "$(hook_exit 'echo done >> /tmp/x/review-converge-round-12.md')"
 check "report-relative-allowed" "0" "$(hook_exit 'printf x >| review-converge-round-3.md')"
+# 実運用形: heredoc で本文を書き出す。本文に拒否語の行・markdown の引用行・バッククォートを
+# 含めても、データはコマンドとして読まれない(唯一の書き出し経路を塞ぐ退行の固定)
+check "report-heredoc-body-allowed" "0" "$(hook_exit 'cat > /tmp/x/review-converge-round-1.md <<EOF
+## レビュー結果
+- rm -rf の確認ダイアログがレーンを止める
+- make test / nix build は実測検証なので行わない
+> 引用行の markdown
+`cp a b` のようなコマンド引用
+EOF')"
+check "report-heredoc-quoted-delim-allowed" "0" "$(hook_exit "cat > /tmp/x/review-converge-round-2.md <<'EOF'
+- nix build の成果物を作らない
+EOF")"
+# 引用符付き・変数展開の出力先は静的に解決できないので拒否側(安全側)に倒す
+check "report-quoted-blocked" "2" "$(hook_exit 'cat body.md > "/tmp/x/review-converge-round-1.md"')"
+check "report-variable-blocked" "2" "$(hook_exit 'cat body.md > "$REPORT"')"
+# 許可先と拒否先が 1 コマンドに混在するとき、最初の 1 件で打ち切らず全件検査する
+check "mixed-redirect-blocked" "2" "$(hook_exit 'cat a >| /tmp/review-converge-round-1.md; echo b > out.txt')"
 
 # --- (2) それ以外のリダイレクトと書き込み・ビルド系コマンドは拒否 ---
 check "other-redirect-blocked" "2" "$(hook_exit 'git diff > out.txt')"
-check "report-nosuffix-blocked" "2" "$(hook_exit 'echo x > review-converge-round-.md')"
+check "report-no-number-blocked" "2" "$(hook_exit 'echo x > review-converge-round-.md')"
 check "report-wrongname-blocked" "2" "$(hook_exit 'echo x > review-converge-round-1.txt')"
 check "tee-blocked" "2" "$(hook_exit 'cat a | tee b')"
 check "cp-blocked" "2" "$(hook_exit 'cp a b')"
@@ -75,6 +92,14 @@ payload 'git diff > out.txt'
 ERR=$("$HOOK" < "$WORK/in.json" 2>&1 > /dev/null)
 has "blocked-reason-redirect" "$ERR" "Blocked"
 has "blocked-reason-redirect-target" "$ERR" "out.txt"
+
+payload 'nix build .#foo'
+ERR=$("$HOOK" < "$WORK/in.json" 2>&1 > /dev/null)
+has "blocked-reason-nix" "$ERR" "Blocked"
+has "blocked-reason-nix-build" "$ERR" "nix build"
+
+# 検索パターン内の > はリダイレクトではない(引用の中身をコマンドと読まない)
+check "quoted-pattern-allowed" "0" "$(hook_exit 'rg -n "a>b" src')"
 
 # --- (3) 参照系・スキルのスクリプトは許可 ---
 check "git-diff-allowed" "0" "$(hook_exit 'git diff HEAD~1')"
