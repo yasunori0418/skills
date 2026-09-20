@@ -28,7 +28,8 @@ cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
 # 対象操作の検出。コマンド文字列全体への部分一致だと、報告コマンドの引数・検索
 # パターン・heredoc 本文に載ったリテラルにまで反応する（実行されないテキストを
 # 履歴書き換えと誤認する）。そのためコマンドを引用符・heredoc を解した上で
-# segment（; | & 改行 区切り）へ分解し、各 segment の先頭語と git 名で判定する。
+# segment（; | & 改行 区切り）へ分解し、各 segment の先頭語と git の
+# サブコマンド名で判定する。
 # 引用符は外して中身を残すので、sh -c "…" の payload も語として見える。
 found_rebase=0
 found_reset=0
@@ -163,7 +164,11 @@ split_and_classify() {
                 fi
                 ;;
             '<')
-                if [ "${cmd:i:1}" = '<' ] && [ "${cmd:i+1:1}" != '<' ]; then
+                if [ "${cmd:i:1}" = '<' ] && [ "${cmd:i+1:1}" = '<' ]; then
+                    # <<< は here-string（データ）。演算子だけ読み飛ばして
+                    # heredoc として扱わない（後続の segment を飲み込まないため）
+                    i=$((i + 2))
+                elif [ "${cmd:i:1}" = '<' ]; then
                     i=$((i + 1))
                     strip_tabs=0
                     if [ "${cmd:i:1}" = '-' ]; then
