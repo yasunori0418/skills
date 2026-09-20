@@ -106,6 +106,46 @@ def test_scope_forbids_convention_overextension():
     assert "既存の適用範囲を超えて新しい種類の対象へ拡張適用しない" in s
 
 
+# ------------------------------------------------------------
+# 一時ファイル（rm を発生させない運用）
+# ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["implement", "maintain"])
+def test_tempfile_clause_in_both_modes(mode):
+    s = wc.render(task(mode=mode))
+    assert "一時ファイル" in s
+    assert "scratchpad の一時ファイルは消さない" in s
+    assert "`mktemp -d` で一意な名前を使う" in s
+    assert "上書きは `>|` で行う" in s
+    assert (
+        "実測検証は scratchpad に置いたコピーの上で行い、"
+        "worktree のファイルを書き換えて戻す手順は禁止" in s
+    )
+
+
+@pytest.mark.parametrize("mode", ["implement", "maintain"])
+def test_tempfile_clause_follows_commit_granularity(mode):
+    s = wc.render(task(mode=mode))
+    assert s.index("コミット粒度") < s.index("一時ファイル")
+
+
+def test_tempfile_clause_kept_without_parent():
+    # 報告先が無いレーンでも一時ファイルの扱いは変わらない（報告条項と独立）。
+    s = wc.render(task(parent=""))
+    assert "scratchpad の一時ファイルは消さない" in s
+
+
+def test_report_clause_offers_file_input_for_command_names():
+    s = wc.render(task())
+    assert "コマンド名を含む報告は `report.sh --file <path>` を使う" in s
+
+
+def test_report_file_guidance_omitted_without_parent():
+    s = wc.render(task(parent=""))
+    assert "--file" not in s
+
+
 def test_subagent_liveness_management():
     s = wc.render(task())
     assert "サブエージェントの生存管理" in s
