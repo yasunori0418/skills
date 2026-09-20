@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# Verifies validate-aggregator-bash.sh (review-aggregator の PreToolUse hook) と、その配線:
+#   - スクリプト本体: 統合報告ファイル(basename が review-converge-round-<数字>.md)への
+#                     リダイレクトのみ許可。それ以外のリダイレクトと書き込み・ビルド系
+#                     コマンド(tee / cp / mv / rm / go / cargo / npm / make / nix build) -> exit 2
+#                     参照系・スキルのスクリプト(git diff / collect-diff.sh / run-python.sh) -> exit 0
+#   - review-aggregator.md の frontmatter にある hook の command 文字列を抽出して実行:
+#       (a) CLAUDE_PLUGIN_ROOT 未設定 + $HOME/.claude/skills に配置(nput 配置) -> 解決でき rm が exit 2
+#       (b) CLAUDE_PLUGIN_ROOT 未設定 + $HOME が空(スクリプト不在)             -> exit 2 + not found
+#       (c) CLAUDE_PLUGIN_ROOT=<repo>/skills/git(plugin 配置)                  -> 解決でき git diff が exit 0
+#     不在時に exit 127(非ブロック扱い)で素通しになる退行を固定する。
+# command の抽出は YAML として読む(uv も python3 も無い環境では配線テストだけ SKIP)。
+set -uo pipefail
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+HOOK="$SCRIPT_DIR/../validate-aggregator-bash.sh"
+RUN_PY="$SCRIPT_DIR/../../../diff-review/scripts/run-python.sh" # uv → python3 の順に実行経路を選ぶ
+AGENT_MD="$SCRIPT_DIR/../../agents/review-aggregator.md"
+PLUGIN_ROOT=$(cd "$SCRIPT_DIR/../../.." && pwd) # category root(skills/git)
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+fail=0
+check() { # label expected actual
+    if [ "$2" = "$3" ]; then
+        echo "PASS: $(basename "$0")[$1] -> '$3'"
+    else
+        echo "FAIL: $(basename "$0")[$1] expected '$2', got '$3'"
+        fail=1
+    fi
+}
+has() { # label haystack needle
+    if printf '%s' "$2" | grep -qF -- "$3"; then
+        echo "PASS: $(basename "$0")[$1] contains '$3'"
+    else
+        echo "FAIL: $(basename "$0")[$1] missing '$3'"
+        fail=1
+    fi
+}
+payload() { # command -> hook 入力 JSON を $WORK/in.json に書く
+    printf '{"tool_input": {"command": %s}}' "$(printf '%s' "$1" | jq -Rs .)" >| "$WORK/in.json"
+}
+hook_exit() { # command -> スクリプト本体の exit code
+    payload "$1"
+    "$HOOK" < "$WORK/in.json" > /dev/null 2>&1
+    echo $?
+}
+
+# --- (1) 統合報告ファイルへのリダイレクトは許可 ---
+check "report-redirect-allowed" "0" "$(hook_exit 'cat body.md > /tmp/x/review-converge-round-1.md')"
+check "report-append-allowed" "0" "$(hook_exit 'echo done >> /tmp/x/review-converge-round-12.md')"
+check "report-relative-allowed" "0" "$(hook_exit 'printf x >| review-converge-round-3.md')"
+
+# --- (2) それ以外のリダイレクトと書き込み・ビルド系コマンドは拒否 ---
+check "other-redirect-blocked" "2" "$(hook_exit 'git diff > out.txt')"
+check "report-nosuffix-blocked" "2" "$(hook_exit 'echo x > review-converge-round-.md')"
+check "report-wrongname-blocked" "2" "$(hook_exit 'echo x > review-converge-round-1.txt')"
+check "tee-blocked" "2" "$(hook_exit 'cat a | tee b')"
+check "cp-blocked" "2" "$(hook_exit 'cp a b')"
+check "mv-blocked" "2" "$(hook_exit 'mv a b')"
+check "rm-blocked" "2" "$(hook_exit 'rm -rf x')"
+check "go-blocked" "2" "$(hook_exit 'go test ./...')"
+check "cargo-blocked" "2" "$(hook_exit 'cargo build')"
+check "npm-blocked" "2" "$(hook_exit 'npm run build')"
+check "make-blocked" "2" "$(hook_exit 'make test')"
+check "nix-build-blocked" "2" "$(hook_exit 'nix build .#foo')"
+check "chained-rm-blocked" "2" "$(hook_exit 'git status && rm x')"
+
+payload 'rm x'
+ERR=$("$HOOK" < "$WORK/in.json" 2>&1 > /dev/null)
+has "blocked-reason-command" "$ERR" "Blocked"
+has "blocked-reason-rm" "$ERR" "rm"
+
+payload 'git diff > out.txt'
+ERR=$("$HOOK" < "$WORK/in.json" 2>&1 > /dev/null)
+has "blocked-reason-redirect" "$ERR" "Blocked"
+has "blocked-reason-redirect-target" "$ERR" "out.txt"
+
+# --- (3) 参照系・スキルのスクリプトは許可 ---
+check "git-diff-allowed" "0" "$(hook_exit 'git diff HEAD~1')"
+check "collect-diff-allowed" "0" "$(hook_exit "$PLUGIN_ROOT/diff-review/scripts/collect-diff.sh manifest")"
+check "run-python-allowed" "0" "$(hook_exit "$PLUGIN_ROOT/diff-review/scripts/run-python.sh collect_conventions.py")"
+check "stderr-devnull-allowed" "0" "$(hook_exit 'git log -1 2>/dev/null')"
+check "nix-flake-check-allowed" "0" "$(hook_exit 'nix flake check')"
+
+# --- frontmatter の command(配線) ---
+if ! command -v uv > /dev/null 2>&1 && ! command -v python3 > /dev/null 2>&1; then
+    echo "SKIP: $(basename "$0")[wiring] uv も python3 も無い環境のためスキップ"
+    [ "$fail" -eq 0 ]
+    exit
+fi
+
+CMD=$("$RUN_PY" -c '
+import sys, frontmatter
+hooks = frontmatter.load(sys.argv[1])["hooks"]["PreToolUse"]
+print(next(h["command"] for m in hooks if m["matcher"] == "Bash" for h in m["hooks"]))
+' "$AGENT_MD")
+has "command-extracted" "$CMD" "validate-aggregator-bash.sh"
+
+# プレースホルダ置換に依存しない書き方であること(plugin 無効の配置では置換されず未設定のまま走る)
+case "$CMD" in
+    *'${CLAUDE_PLUGIN_ROOT}'*) check "no-placeholder-literal" "absent" "present" ;;
+    *) check "no-placeholder-literal" "absent" "absent" ;;
+esac
+
+wired() { # label expected-exit command [env 代入...] -> exit code を検査し stderr を WIRED_ERR に残す
+    local label="$1" expected="$2" cmd="$3"
+    shift 3
+    payload "$cmd"
+    WIRED_ERR=$(env -u CLAUDE_PLUGIN_ROOT "$@" sh -c "$CMD" < "$WORK/in.json" 2>&1 > /dev/null)
+    check "$label" "$expected" "$?"
+}
+
+# (a) nput 配置: $HOME/.claude/skills/review-converge/scripts/ にスクリプトがある
+HOME_OK="$WORK/home-ok"
+mkdir -p "$HOME_OK/.claude/skills/review-converge/scripts"
+cp "$HOOK" "$HOME_OK/.claude/skills/review-converge/scripts/"
+wired "home-resolves-rm" "2" 'rm x' HOME="$HOME_OK"
+has "home-resolves-reason" "$WIRED_ERR" "Blocked"
+wired "home-resolves-git-diff" "0" 'git diff' HOME="$HOME_OK"
+
+# (b) スクリプト不在: 127 で素通しにせず exit 2 で倒れる
+HOME_EMPTY="$WORK/home-empty"
+mkdir -p "$HOME_EMPTY"
+wired "missing-blocks" "2" 'git diff' HOME="$HOME_EMPTY"
+has "missing-reason" "$WIRED_ERR" "not found"
+
+# (c) plugin 配置: CLAUDE_PLUGIN_ROOT(category root)が優先して解決される
+wired "plugin-root-git-diff" "0" 'git diff' HOME="$HOME_EMPTY" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT"
+wired "plugin-root-rm" "2" 'rm x' HOME="$HOME_EMPTY" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT"
+
+[ "$fail" -eq 0 ]
