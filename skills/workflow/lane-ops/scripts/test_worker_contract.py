@@ -130,6 +130,16 @@ def test_tempfile_clause_follows_commit_granularity(mode):
     assert s.index("コミット粒度") < s.index("一時ファイル")
 
 
+@pytest.mark.parametrize("mode", ["implement", "maintain"])
+def test_tempfile_clause_warns_shared_worktree_dirs(mode):
+    # tmp_claude/ 等の gitignored ディレクトリが primary への symlink で共有され、
+    # 既定名の状態ファイルを別レーンが上書きする事故が実際に起きた。
+    s = wc.render(task(mode=mode))
+    assert "スキル既定のファイル名をそのまま使わずタスク ID を付ける" in s
+    assert "worktree 間で symlink 共有されていることがあり" in s
+    assert "見つけても消さず上書きしない" in s
+
+
 def test_tempfile_clause_kept_without_parent():
     # 報告先が無いレーンでも一時ファイルの扱いは変わらない（報告条項と独立）。
     s = wc.render(task(parent=""))
