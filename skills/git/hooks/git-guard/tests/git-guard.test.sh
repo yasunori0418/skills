@@ -13,6 +13,9 @@
 #   - 引数・検索パターン・heredoc 本文のリテラル -> 沈黙（誤検知しない）
 #   - cd 後の segment / git -C の global option / sh -c の引数 -> deny
 #   - here-string（<<<）の後続 segment       -> deny（heredoc 扱いしない）
+#   - sudo / env / command / 絶対パス git    -> deny（ラッパーを解除する）
+#   - サブシェル / ブレース群 / $(…) / `…`   -> deny（区切りとして扱う）
+#   - 二重引用符の中の `)`                    -> 沈黙（引数リテラルを割らない）
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 GUARD="$SCRIPT_DIR/../main.sh"
@@ -91,5 +94,24 @@ check "shell-c-rebase" "deny" "$(decision 'bash -c "git rebase main"')"
 
 # here-string（<<<）は heredoc ではないので後続の segment を飲み込まない -> deny
 check "here-string-not-heredoc" "deny" "$(decision "$(printf 'cat <<< x\ngit reset --hard')")"
+
+# --- 退行防止: ラッパー・サブシェル・コマンド置換の中の git も検出する ---
+# 旧実装（部分一致）が deny していた形。構造判定で素通しにしないこと
+check "wrapper-sudo" "deny" "$(decision 'sudo git reset --hard')"
+check "wrapper-env" "deny" "$(decision 'env git reset --hard')"
+check "wrapper-command" "deny" "$(decision 'command git reset --hard')"
+check "absolute-path-git" "deny" "$(decision '/usr/bin/git reset --hard')"
+check "subshell" "deny" "$(decision '(git reset --hard)')"
+check "brace-group" "deny" "$(decision '{ git reset --hard; }')"
+check "command-substitution" "deny" "$(decision 'echo $(git reset --hard)')"
+check "command-substitution-quoted" "deny" "$(decision "echo \"\$(git reset --hard)\"")"
+check "backtick-substitution" "deny" "$(decision 'echo `git reset --hard`')"
+check "shell-o-operand-then-c" "deny" "$(decision 'bash -o pipefail -c "git rebase main"')"
+
+# --- 誤爆の再発防止: 引数リテラル・検索パターンは素通しのまま ---
+check "echo-literal-silent" "" "$(raw "echo 'git reset --hard'")"
+check "grep-pattern-silent" "" "$(raw "grep -n 'reset' file.txt")"
+# 二重引用符の中の `)` は区切りではない（引数リテラルを割らない）
+check "paren-in-quoted-arg-silent" "" "$(raw "echo \"x) git reset --hard\"")"
 
 exit "$fail"
