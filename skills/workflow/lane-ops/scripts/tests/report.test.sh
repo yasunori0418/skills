@@ -59,9 +59,20 @@ bash "$REPORT" --file "$WORK/missing.txt" test-parent T4 "ブロック" > /dev/n
 check "missing-file-exit2" "2" "$rc"
 check "missing-file-no-append" "2" "$(wc -l < "$JSONL" | tr -d ' ')"
 
+# --file と位置引数の詳細の併用 -> exit 2・追記しない
+rc=0
+bash "$REPORT" --file "$WORK/detail.txt" test-parent T6 "push 完了" 余分な詳細 > /dev/null 2>&1 || rc=$?
+check "both-detail-exit2" "2" "$rc"
+check "both-detail-no-append" "2" "$(wc -l < "$JSONL" | tr -d ' ')"
+
 # 引数不足 -> exit 2
 rc=0
 bash "$REPORT" test-parent T5 > /dev/null 2>&1 || rc=$?
 check "missing-args" "2" "$rc"
+
+# --file に値が無い -> exit 2（オプション直後に引数が尽きる境界）
+rc=0
+bash "$REPORT" --file > /dev/null 2>&1 || rc=$?
+check "file-without-value" "2" "$rc"
 
 exit "$fail"
