@@ -305,6 +305,9 @@ def _report_clause(parent: str, task_id: str, milestones: str) -> str:
         "（ダイアログを出さない承認待ちは親の監視に掛からず、報告が唯一の通知になる）。"
         "コマンド名を含む報告は `report.sh --file <path>` を使う"
         "（本文を引数に載せると guard hook がコマンド名へ反応して報告自体が止まる）。"
+        f"完全形は `bash {report_script()} --file <本文ファイル> {parent} "
+        f"{task_id or '<task-id>'} <マイルストーン>` で、`--file` は先頭に置く"
+        "（末尾に置くと本文の一部として扱われ、報告は成功したまま本文が壊れる）。"
         "本文ファイルは Write ツールで書く"
         "（Bash の heredoc で書くとコマンド名が Bash 引数に載り、迂回した意味が無くなる）"
     )

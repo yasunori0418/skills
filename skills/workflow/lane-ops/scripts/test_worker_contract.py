@@ -151,6 +151,9 @@ def test_report_clause_offers_file_input_for_command_names():
     s = wc.render(task())
     assert "コマンド名を含む報告は `report.sh --file <path>` を使う" in s
     assert "本文ファイルは Write ツールで書く" in s
+    # --file を末尾に置く誤用は exit 0 のまま本文が壊れるため、先頭固定を完全形で示す。
+    assert "--file <本文ファイル> orc A <マイルストーン>" in s
+    assert "`--file` は先頭に置く" in s
 
 
 def test_report_file_guidance_omitted_without_parent():
