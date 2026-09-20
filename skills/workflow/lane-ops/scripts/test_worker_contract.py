@@ -152,7 +152,8 @@ def test_report_clause_offers_file_input_for_command_names():
     assert "コマンド名を含む報告は `report.sh --file <path>` を使う" in s
     assert "本文ファイルは Write ツールで書く" in s
     # --file を末尾に置く誤用は exit 0 のまま本文が壊れるため、先頭固定を完全形で示す。
-    assert "--file <本文ファイル> orc A <マイルストーン>" in s
+    # 完全形は先頭の `bash <report.sh の絶対パス>` まで含めて実行できる形であること。
+    assert f"`bash {wc.report_script()} --file <本文ファイル> orc A <マイルストーン>`" in s
     assert "`--file` は先頭に置く" in s
 
 
