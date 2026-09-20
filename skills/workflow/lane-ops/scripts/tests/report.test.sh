@@ -75,4 +75,11 @@ rc=0
 bash "$REPORT" --file > /dev/null 2>&1 || rc=$?
 check "file-without-value" "2" "$rc"
 
+# 位置引数の詳細に --file と一致する語が来てもフラグとして吸われない
+# （先頭判定なので本文の一部として扱う。任意位置パーサでは吸われていた）
+rc=0
+bash "$REPORT" test-parent T7 "push 完了" --file "$WORK/detail.txt" > /dev/null 2>&1 || rc=$?
+check "file-in-detail-not-flag" "0" "$rc"
+check "file-in-detail-literal" "--file $WORK/detail.txt" "$(tail -1 "$JSONL" | jq -r '.detail')"
+
 exit "$fail"
