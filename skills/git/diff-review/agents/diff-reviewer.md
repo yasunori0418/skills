@@ -8,7 +8,7 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          command: "${CLAUDE_PLUGIN_ROOT}/diff-review/scripts/validate-readonly-bash.sh"
+          command: "sh -c 'h=\"${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills}/diff-review/scripts/validate-readonly-bash.sh\"; [ -x \"$h\" ] || { echo \"Blocked (diff-reviewer is read-only): hook script not found: $h\" >&2; exit 2; }; exec \"$h\"'"
 ---
 
 あなたは読み取り専用のコードレビュアー。diff を分析し、指摘を報告することだけが仕事。
