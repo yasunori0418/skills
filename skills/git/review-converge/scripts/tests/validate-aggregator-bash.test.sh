@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Verifies validate-aggregator-bash.sh (review-aggregator の PreToolUse hook) と、その配線:
-#   - スクリプト本体: 統合報告ファイル(basename が review-converge-round-<数字>.md)への
+#   - スクリプト本体: 統合報告ファイル(basename が review-converge-round-<数字>.md)で、かつ
+#                     書き込み先が worktree 内か scratchpad 配下(`..` の遡上は不可)への
 #                     リダイレクトのみ許可。それ以外のリダイレクトと書き込み・ビルド系
 #                     コマンド(tee / cp / mv / rm / go / cargo / npm / make / nix build) -> exit 2
 #                     参照系・スキルのスクリプト(git diff / collect-diff.sh / run-python.sh) -> exit 0
@@ -37,21 +38,28 @@ has() { # label haystack needle
         fail=1
     fi
 }
-payload() { # command -> hook 入力 JSON を $WORK/in.json に書く
-    printf '{"tool_input": {"command": %s}}' "$(printf '%s' "$1" | jq -Rs .)" >| "$WORK/in.json"
+# 判定の基準となる worktree はテスト内で用意する。ソースツリーが live な git
+# チェックアウトである前提を置くと、checks.hooks の sandbox(.git を持たない
+# cp -r コピー)で成立せず許可ケースが軒並み deny に倒れる。
+WORKTREE="$WORK/repo"
+mkdir -p "$WORKTREE/tmp_claude"
+git init -q "$WORKTREE"
+
+payload() { # command [cwd] -> hook 入力 JSON を $WORK/in.json に書く
+    printf '{"tool_input": {"command": %s}, "cwd": %s}' \
+        "$(printf '%s' "$1" | jq -Rs .)" "$(printf '%s' "${2:-$WORKTREE}" | jq -Rs .)" >| "$WORK/in.json"
 }
-hook_exit() { # command -> スクリプト本体の exit code
-    payload "$1"
+hook_exit() { # command [cwd] -> スクリプト本体の exit code
+    payload "$1" "${2:-}"
     "$HOOK" < "$WORK/in.json" > /dev/null 2>&1
     echo $?
 }
-
-WORKTREE=$(cd "$SCRIPT_DIR" && git rev-parse --show-toplevel)
 
 # --- (1) 統合報告ファイルへのリダイレクトは許可 ---
 # 出力先は basename 一致に加えて worktree / scratchpad 配下であることを要求する
 check "report-redirect-allowed" "0" "$(hook_exit "cat body.md > $WORKTREE/tmp_claude/review-converge-round-1.md")"
 check "report-append-allowed" "0" "$(hook_exit "echo done >> $WORKTREE/tmp_claude/review-converge-round-12.md")"
+# 相対パスは hook 入力の cwd 基準で解決される(cwd が worktree 内なので許可)
 check "report-relative-allowed" "0" "$(hook_exit 'printf x >| review-converge-round-3.md')"
 # 実運用形: heredoc で本文を書き出す。本文に拒否語の行・markdown の引用行・バッククォートを
 # 含めても、データはコマンドとして読まれない(唯一の書き出し経路を塞ぐ退行の固定)
@@ -78,6 +86,26 @@ check "report-abs-traversal-blocked" "2" "$(hook_exit "cat a >| $WORKTREE/../rev
 payload 'cat a >| /tmp/evil/review-converge-round-1.md'
 ERR=$("$HOOK" < "$WORK/in.json" 2>&1 > /dev/null)
 has "blocked-reason-outside" "$ERR" "worktree"
+
+# scratchpad 配下は worktree 外でも許可する(統合報告の規定の出力先)
+SCRATCH="$WORK/scratch"
+mkdir -p "$SCRATCH"
+payload "cat a >| $SCRATCH/review-converge-round-1.md"
+CLAUDE_SCRATCHPAD_DIR="$SCRATCH" "$HOOK" < "$WORK/in.json" > /dev/null 2>&1
+check "report-in-scratchpad-allowed" "0" "$?"
+# 同じパスでも scratchpad の指定が無ければ worktree 外として拒否する
+check "report-scratchpad-unset-blocked" "2" "$(hook_exit "cat a >| $SCRATCH/review-converge-round-1.md")"
+
+# git リポジトリ外で走ったときは worktree を解決できず、安全側で拒否する
+check "report-outside-git-blocked" "2" "$(hook_exit "cat a >| $WORK/review-converge-round-1.md" "$WORK")"
+
+# 引用無しの変数展開も静的に解決できないので拒否する(引用付きとは通過経路が別)
+check "report-unquoted-variable-blocked" "2" "$(hook_exit 'cat body.md > $DIR/review-converge-round-1.md')"
+
+# heredoc 演算子がリダイレクトより前に来る語順でも同じく許可される
+check "report-heredoc-first-allowed" "0" "$(hook_exit "cat <<EOF > $WORKTREE/tmp_claude/review-converge-round-4.md
+- rm や nix build の説明を含む本文
+EOF")"
 
 # --- (2) それ以外のリダイレクトと書き込み・ビルド系コマンドは拒否 ---
 check "other-redirect-blocked" "2" "$(hook_exit 'git diff > out.txt')"

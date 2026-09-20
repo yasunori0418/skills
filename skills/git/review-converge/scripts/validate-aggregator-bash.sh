@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # review-aggregator の PreToolUse hook: Bash の書き込みを統合報告の出力先だけに限定する。
-# 拒否リスト方式: ファイルへのリダイレクトは basename が review-converge-round-<数字>.md の
-# ときだけ通し、書き込み・ビルド系コマンド(tee / cp / mv / rm / go / cargo / npm / make /
+# 拒否リスト方式: ファイルへのリダイレクトは basename が review-converge-round-<数字>.md で、
+# かつ書き込み先が worktree 内か scratchpad 配下(`..` の遡上は不可)のときだけ通し、
+# 書き込み・ビルド系コマンド(tee / cp / mv / rm / go / cargo / npm / make /
 # nix build)は exit 2 でブロック(stderr がエージェントに返る)。それ以外は通す
 # (diff-review スキルの実行に要る uv / python3 / git / 各スクリプトを塞がないため)。
 #
@@ -12,6 +13,10 @@ set -euo pipefail
 
 INPUT=$(cat)
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
+# 判定の基準ディレクトリは hook 入力の cwd(= Bash ツールの作業ディレクトリ)。
+# hook プロセス自身の cwd と一致する保証が無いため、git-guard/main.sh と同じ慣行に揃える。
+CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty')
+[[ -n "$CWD" && -d "$CWD" ]] || CWD="$PWD"
 [[ -z "$COMMAND" ]] && exit 0
 
 deny() {
@@ -60,7 +65,7 @@ REPORT_RE='^review-converge-round-[0-9]+\.md$'
 # 「<STATE> と同じディレクトリ」= セッションの scratchpad、無ければ worktree 内の
 # tmp_claude/ のいずれか。basename 一致だけでは任意のディレクトリへ書けるため、
 # 解決後のパスがこのどちらかの配下にあることも要求する。
-WORKTREE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+WORKTREE_ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)
 SCRATCH_ROOT="${CLAUDE_SCRATCHPAD_DIR:-}"
 
 while IFS= read -r target; do
@@ -82,11 +87,11 @@ while IFS= read -r target; do
     fi
     resolved="$target"
     if [[ "$resolved" != /* ]]; then
-        resolved="$PWD/$resolved"
+        resolved="$CWD/$resolved"
     fi
     # `//` と `/./` を畳むだけの字句正規化
     while [[ "$resolved" == *//* ]]; do resolved="${resolved//\/\//\/}"; done
-    resolved="${resolved//\/.\//\/}"
+    while [[ "$resolved" == *"/./"* ]]; do resolved="${resolved//\/.\//\/}"; done
     in_allowed=0
     if [[ -n "$WORKTREE_ROOT" && "$resolved" == "$WORKTREE_ROOT"/* ]]; then
         in_allowed=1
