@@ -175,3 +175,30 @@ def test_self_pane_excluded_by_default():
     assert we.self_pane_to_exclude(False, env) == "w1:p2"
     assert we.self_pane_to_exclude(True, env) == ""
     assert we.self_pane_to_exclude(False, {}) == ""
+
+
+def test_parse_args_ready_expands_to_idle_and_done():
+    """--ready は idle と done をまとめて張る（ターン終了は seen で idle、未 seen で done）。"""
+    opts = we.parse_args(["watch_events.py", "--ready"])
+    assert set(opts.statuses) == {"idle", "done"}
+
+
+def test_parse_args_ready_with_blocked_covers_product():
+    """--status blocked --ready で blocked/idle/done × pane の直積になる。"""
+    opts = we.parse_args(["watch_events.py", "--status", "blocked", "--ready"])
+    subs = we.build_subscriptions(list(opts.types), ["w1:p1", "w1:p2"], list(opts.statuses))
+    for pane in ("w1:p1", "w1:p2"):
+        for status in ("blocked", "idle", "done"):
+            assert {
+                "type": "pane.agent_status_changed",
+                "pane_id": pane,
+                "agent_status": status,
+            } in subs
+    assert len(subs) == 6
+
+
+def test_parse_args_ready_does_not_duplicate_status():
+    """--status で明示した状態と --ready の展開が重なっても購読は重複しない。"""
+    statuses = we.parse_args(["watch_events.py", "--status", "idle", "--ready"]).statuses
+    assert statuses.count("idle") == 1
+    assert set(statuses) == {"idle", "done"}
