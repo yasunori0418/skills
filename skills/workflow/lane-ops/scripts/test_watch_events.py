@@ -183,6 +183,12 @@ def test_parse_args_ready_expands_to_idle_and_done():
     assert set(opts.statuses) == {"idle", "done"}
 
 
+def test_parse_args_without_ready_keeps_status_as_given():
+    """--ready 無しでは statuses を足さない（CI 監視だけのレーンを blocked に絞れる）。"""
+    assert we.parse_args(["watch_events.py"]).statuses == ()
+    assert we.parse_args(["watch_events.py", "--status", "blocked"]).statuses == ("blocked",)
+
+
 def test_parse_args_ready_with_blocked_covers_product():
     """--status blocked --ready で blocked/idle/done × pane の直積になる。"""
     opts = we.parse_args(["watch_events.py", "--status", "blocked", "--ready"])
