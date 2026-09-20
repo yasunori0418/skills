@@ -12,6 +12,8 @@
 #   - --changed-lines              -> 周回ごとの変更行数の系列と増分(未指定は null)
 #   - lens 併記タグ               -> next_lenses でレンズ単位に分割
 #   - keep / suppress              -> 保持した指摘の除外(file + line または要旨)・ガード・再指摘禁止リスト
+#   - レンズ受領の申告             -> --lenses / --received 必須・欠落周回は exit 2・
+#                                     --accept-missing + --reason での明示上書き
 #   - 壊れた入力 / 語彙外 severity  -> exit 2
 # python3 が無い環境では SKIP して exit 0。
 set -uo pipefail
@@ -45,7 +47,17 @@ has() { # label haystack needle
 }
 
 # record: state findings-json [extra args...] -> stdout(判定 JSON)
+# レンズ受領の申告(--lenses / --received)は record の必須引数。判定の中身を見る
+# ケースでは全レンズ受領(欠落なし)を既定として補う。
 record() {
+    local state="$1" findings="$2"
+    shift 2
+    printf '%s' "$findings" |
+        python3 "$STATE_PY" record --state "$state" \
+            --lenses design --received design "$@" 2>&1
+}
+# record_raw: レンズ受領の申告を補わずに record を呼ぶ(受領ゲート自体のテスト用)
+record_raw() {
     local state="$1" findings="$2"
     shift 2
     printf '%s' "$findings" | python3 "$STATE_PY" record --state "$state" "$@" 2>&1
@@ -344,20 +356,69 @@ check "keep-refuses-under-stop-verdict" 2 $?
 OUT=$(keep "$S" src/a.py 11 "呼び出し元で保証済み(ユーザー裁定)" --user-confirmed)
 check "keep-accepts-under-stop-verdict-with-confirm" "converged" "$(verdict "$OUT")"
 
+# --- レンズ受領の申告(欠落周回の拒否) ---
+# レンズ欠落のまま [] を record に通すと、レビューできていない観点を「指摘なし」として
+# 収束判定に載せてしまう(偽収束)。申告を必須にし、欠落周回は入口で拒否する。
+S="$WORK/receipt-missing-args.json"
+record_raw "$S" "$F_EMPTY" --head r1 >/dev/null 2>&1
+check "receipt-requires-both-args" 2 $?
+record_raw "$S" "$F_EMPTY" --head r1 --lenses design,test >/dev/null 2>&1
+check "receipt-requires-received" 2 $?
+record_raw "$S" "$F_EMPTY" --head r1 --received design >/dev/null 2>&1
+check "receipt-requires-lenses" 2 $?
+check "receipt-no-state-on-reject" "absent" "$([ -f "$S" ] && echo present || echo absent)"
+
+# 受領が申告レンズの真部分集合 -> 欠落レンズ名を添えて exit 2
+S="$WORK/receipt-subset.json"
+OUT=$(record_raw "$S" "$F_EMPTY" --head r1 --lenses design,test,yagni --received design 2>&1)
+check "receipt-subset-exit" 2 $?
+has "receipt-subset-error" "$OUT" 'ERROR:'
+has "receipt-subset-names-missing" "$OUT" ': test, yagni。'
+
+# 欠落を明示上書きするには欠落レンズの数だけ --accept-missing + --reason が要る
+S="$WORK/receipt-accept-partial.json"
+record_raw "$S" "$F_EMPTY" --head r1 --lenses design,test,yagni --received design \
+    --accept-missing test --reason "ユーザー裁定で test を外して続行" >/dev/null 2>&1
+check "receipt-accept-must-cover-all-missing" 2 $?
+
+S="$WORK/receipt-accept.json"
+OUT=$(record_raw "$S" "$F_EMPTY" --head r1 --lenses design,test,yagni --received design \
+    --accept-missing test --reason "ユーザー裁定で test を外して続行" \
+    --accept-missing yagni --reason "ユーザー裁定で yagni を外して続行" 2>&1)
+check "receipt-accept-exit" 0 $?
+check "receipt-accept-verdict" "converged" "$(verdict "$OUT")"
+has "receipt-accept-saved-lens" "$(cat "$S")" '"lens": "test"'
+has "receipt-accept-saved-reason" "$(cat "$S")" '"reason": "ユーザー裁定で yagni を外して続行"'
+
+# --accept-missing と --reason の数が揃わない / 受領していないレンズを外そうとしない
+S="$WORK/receipt-accept-unbalanced.json"
+record_raw "$S" "$F_EMPTY" --head r1 --lenses design,test --received design \
+    --accept-missing test >/dev/null 2>&1
+check "receipt-accept-requires-reason" 2 $?
+record_raw "$S" "$F_EMPTY" --head r1 --lenses design,test --received design \
+    --accept-missing design --reason "欠落していないレンズ" >/dev/null 2>&1
+check "receipt-accept-refuses-non-missing-lens" 2 $?
+
+# 全レンズ受領なら verdict は受領ゲートの影響を受けない(従来どおり)
+S="$WORK/receipt-full.json"
+OUT=$(record_raw "$S" "$F_MUST" --head r1 --lenses design,test --received test,design)
+check "receipt-full-verdict" "continue" "$(verdict "$OUT")"
+has "receipt-full-no-missing" "$(cat "$S")" '"missing": []'
+
 # --- 入力エラー ---
 S="$WORK/bad.json"
-printf 'not json' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
+record "$S" 'not json' >/dev/null 2>&1
 check "invalid-json" 2 $?
-printf '[{"file":"a","line":1,"summary":"s","scope":"nowhere"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
+record "$S" '[{"file":"a","line":1,"summary":"s","scope":"nowhere"}]' >/dev/null 2>&1
 check "invalid-scope" 2 $?
-printf '[{"file":"a","line":1,"summary":"s","severity":"critical"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
+record "$S" '[{"file":"a","line":1,"summary":"s","severity":"critical"}]' >/dev/null 2>&1
 check "invalid-severity" 2 $?
 # 大小文字・前後空白の揺れは正規化して受ける(語彙内なら拒否しない)
 S_SEV="$WORK/sev-case.json"
 OUT=$(record "$S_SEV" '[{"file":"a","line":1,"summary":"s","severity":" Must "}]' --head r1)
 check "severity-case-normalized" "continue" "$(verdict "$OUT")"
 has "severity-stored-lowercase" "$(cat "$S_SEV")" '"severity": "must"'
-printf '[{"file":"a","line":1,"summary":"s","kind":"refactor"}]' | python3 "$STATE_PY" record --state "$S" >/dev/null 2>&1
+record "$S" '[{"file":"a","line":1,"summary":"s","kind":"refactor"}]' >/dev/null 2>&1
 check "invalid-kind" 2 $?
 
 exit $fail
