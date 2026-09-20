@@ -12,6 +12,7 @@
 #   - 複合コマンド（deny + ask 混在） -> deny 優先
 #   - 引数・検索パターン・heredoc 本文のリテラル -> 沈黙（誤検知しない）
 #   - cd 後の segment / git -C の global option / sh -c の引数 -> deny
+#   - here-string（<<<）の後続 segment       -> deny（heredoc 扱いしない）
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 GUARD="$SCRIPT_DIR/../main.sh"
@@ -87,5 +88,8 @@ check "literal-in-heredoc" "" "$(raw "$(printf 'git commit -F - <<%s\nfix: 手�
 check "compound-cd-reset" "deny" "$(decision 'cd x && git reset --hard')"
 check "git-global-option-reset" "deny" "$(decision 'git -C x reset --soft HEAD~1')"
 check "shell-c-rebase" "deny" "$(decision 'bash -c "git rebase main"')"
+
+# here-string（<<<）は heredoc ではないので後続の segment を飲み込まない -> deny
+check "here-string-not-heredoc" "deny" "$(decision "$(printf 'cat <<< x\ngit reset --hard')")"
 
 exit "$fail"
