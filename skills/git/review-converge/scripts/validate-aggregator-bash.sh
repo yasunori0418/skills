@@ -66,6 +66,12 @@ REPORT_RE='^review-converge-round-[0-9]+\.md$'
 # tmp_claude/ のいずれか。basename 一致だけでは任意のディレクトリへ書けるため、
 # 解決後のパスがこのどちらかの配下にあることも要求する。
 WORKTREE_ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)
+# scratchpad は worktree 外にある正当な書き込み先になり得るため許可枝を残す。
+# ただし現行のハーネスはそのパスを hook へ渡さない(入力 JSON に該当キーは無く、
+# CLAUDE_SCRATCHPAD_DIR も供給されない)ので、この枝は実運用では到達しない。
+# review-converge の規定も scratchpad が無ければ worktree 内 tmp_claude/ へ落ちる
+# (SKILL.md の「無ければ」フォールバック)ので、実経路は下の WORKTREE_ROOT 側。
+# 将来 scratchpad が供給される構成になったとき、正当な出力を deny しないための防御。
 SCRATCH_ROOT="${CLAUDE_SCRATCHPAD_DIR:-}"
 
 while IFS= read -r target; do

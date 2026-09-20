@@ -96,6 +96,17 @@ check "report-in-scratchpad-allowed" "0" "$?"
 # 同じパスでも scratchpad の指定が無ければ worktree 外として拒否する
 check "report-scratchpad-unset-blocked" "2" "$(hook_exit "cat a >| $SCRATCH/review-converge-round-1.md")"
 
+# 実運用の経路: worktree 内の tmp_claude が primary リポジトリへの symlink でも許可する
+# (worktree では symlink で配置される。実体を解決すると worktree 外と判定されるため、
+#  正規化は字句上で行っている)
+PRIMARY="$WORK/primary-tmp"
+mkdir -p "$PRIMARY"
+LINKED="$WORK/repo-linked"
+git init -q "$LINKED"
+ln -s "$PRIMARY" "$LINKED/tmp_claude"
+check "report-symlinked-tmp-claude-allowed" "0" \
+    "$(hook_exit "cat a >| $LINKED/tmp_claude/review-converge-round-1.md" "$LINKED")"
+
 # git リポジトリ外で走ったときは worktree を解決できず、安全側で拒否する
 check "report-outside-git-blocked" "2" "$(hook_exit "cat a >| $WORK/review-converge-round-1.md" "$WORK")"
 
