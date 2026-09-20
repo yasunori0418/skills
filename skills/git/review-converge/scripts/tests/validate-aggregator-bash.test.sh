@@ -77,7 +77,7 @@ EOF")"
 check "report-quoted-blocked" "2" "$(hook_exit "cat body.md > \"$WORKTREE/tmp_claude/review-converge-round-1.md\"")"
 check "report-variable-blocked" "2" "$(hook_exit 'cat body.md > "$REPORT"')"
 # 許可先と拒否先が 1 コマンドに混在するとき、最初の 1 件で打ち切らず全件検査する
-check "mixed-redirect-blocked" "2" "$(hook_exit 'cat a >| /tmp/review-converge-round-1.md; echo b > out.txt')"
+check "mixed-redirect-blocked" "2" "$(hook_exit "cat a >| $WORKTREE/tmp_claude/review-converge-round-1.md; echo b > out.txt")"
 # basename が一致しても書き込み先が worktree / scratchpad の外なら不可
 check "report-in-worktree-allowed" "0" "$(hook_exit "cat a >| $WORKTREE/tmp_claude/review-converge-round-1.md")"
 check "report-outside-worktree-blocked" "2" "$(hook_exit 'cat a >| /tmp/evil/review-converge-round-1.md')"

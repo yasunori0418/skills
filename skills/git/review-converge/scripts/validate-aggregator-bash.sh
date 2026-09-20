@@ -106,7 +106,7 @@ while IFS= read -r target; do
         in_allowed=1
     fi
     if (( in_allowed == 0 )); then
-        deny "書き込み先が worktree(${WORKTREE_ROOT:-不明})・scratchpad の外を指している: ${resolved}"
+        deny "書き込み先が worktree(${WORKTREE_ROOT:-不明})・scratchpad(${SCRATCH_ROOT:-未指定})の外を指している: ${resolved}"
     fi
 done < <(printf '%s' "$STRIPPED" | grep -oE '[0-9]*>>?\|?[[:space:]]*[^[:space:];|&()<>]+' | sed -E 's#^[0-9]*>>?\|?[[:space:]]*##')
 
