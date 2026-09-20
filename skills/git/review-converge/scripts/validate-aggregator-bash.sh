@@ -98,13 +98,20 @@ while IFS= read -r target; do
     # `//` と `/./` を畳むだけの字句正規化
     while [[ "$resolved" == *//* ]]; do resolved="${resolved//\/\//\/}"; done
     while [[ "$resolved" == *"/./"* ]]; do resolved="${resolved//\/.\//\/}"; done
+    # 前方一致は字句のパスで行う。worktree root より上に symlink がある配置では
+    # git rev-parse が返す実体パスと食い違うため、外れたときだけ実体でも突き合わせる
+    # (worktree の内側の symlink は辿らせない。字句判定を先に通すのはそのため)
+    resolved_real="$resolved"
+    if command -v realpath > /dev/null 2>&1; then
+        resolved_real="$(realpath -m "$resolved" 2>/dev/null || printf '%s' "$resolved")"
+    fi
     in_allowed=0
-    if [[ -n "$WORKTREE_ROOT" && "$resolved" == "$WORKTREE_ROOT"/* ]]; then
-        in_allowed=1
-    fi
-    if [[ -n "$SCRATCH_ROOT" && "$resolved" == "$SCRATCH_ROOT"/* ]]; then
-        in_allowed=1
-    fi
+    for root in "$WORKTREE_ROOT" "$SCRATCH_ROOT"; do
+        [[ -n "$root" ]] || continue
+        if [[ "$resolved" == "$root"/* || "$resolved_real" == "$root"/* ]]; then
+            in_allowed=1
+        fi
+    done
     if (( in_allowed == 0 )); then
         deny "書き込み先が worktree(${WORKTREE_ROOT:-不明})・scratchpad(${SCRATCH_ROOT:-未指定})の外を指している: ${resolved}"
     fi

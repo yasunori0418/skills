@@ -107,6 +107,15 @@ ln -s "$PRIMARY" "$LINKED/tmp_claude"
 check "report-symlinked-tmp-claude-allowed" "0" \
     "$(hook_exit "cat a >| $LINKED/tmp_claude/review-converge-round-1.md" "$LINKED")"
 
+# worktree root より上に symlink がある配置(git rev-parse は実体を返す)でも許可する
+ABOVE="$WORK/above"
+mkdir -p "$ABOVE/real"
+ln -s "$ABOVE/real" "$ABOVE/link"
+git init -q "$ABOVE/real/repo"
+mkdir -p "$ABOVE/real/repo/tmp_claude"
+check "report-symlink-above-root-allowed" "0" \
+    "$(hook_exit "cat a >| $ABOVE/link/repo/tmp_claude/review-converge-round-1.md" "$ABOVE/link/repo")"
+
 # git リポジトリ外で走ったときは worktree を解決できず、安全側で拒否する
 check "report-outside-git-blocked" "2" "$(hook_exit "cat a >| $WORK/review-converge-round-1.md" "$WORK")"
 
