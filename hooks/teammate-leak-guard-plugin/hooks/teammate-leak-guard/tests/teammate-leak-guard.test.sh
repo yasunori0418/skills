@@ -29,8 +29,8 @@ summary() { # json
 }
 
 TWO_SUBAGENTS='{"background_tasks":[
-  {"id":"a1","type":"subagent","status":"running","description":"design レンズでレビュー","agent_type":"diff-reviewer"},
-  {"id":"a2","type":"subagent","status":"running","description":"spec レンズでレビュー","agent_type":"diff-reviewer"}
+  {"id":"a1","type":"subagent","status":"idle","description":"design レンズでレビュー","agent_type":"diff-reviewer"},
+  {"id":"a2","type":"subagent","status":"idle","description":"spec レンズでレビュー","agent_type":"diff-reviewer"}
 ]}'
 check "two-subagents" "稼働中のサブエージェント/チームメイトが 2 体残っています:" "$(summary "$TWO_SUBAGENTS")"
 check "two-subagents-list" "  - design レンズでレビュー (subagent)" "$(context "$TWO_SUBAGENTS" | sed -n '2p')"
@@ -47,7 +47,7 @@ check "monitor-only" "" "$(context '{"background_tasks":[{"id":"m1","type":"moni
 # 混在時は subagent/teammate だけを数える
 MIXED='{"background_tasks":[
   {"id":"s1","type":"shell","status":"running","command":"tail -f log"},
-  {"id":"a1","type":"subagent","status":"running","description":"レビュー"}
+  {"id":"a1","type":"subagent","status":"idle","description":"レビュー"}
 ]}'
 check "mixed" "稼働中のサブエージェント/チームメイトが 1 体残っています:" "$(summary "$MIXED")"
 
@@ -57,10 +57,10 @@ check "missing-field" "" "$(context '{}')"
 check "broken-json" "" "$(printf 'not json' | "$GUARD" | jq -r 'select(.decision == "block") | .reason // empty' 2>/dev/null || true)"
 
 # stop_hook_active=true なら沈黙（同じ指摘の繰り返しで空転させない）
-ACTIVE='{"stop_hook_active":true,"background_tasks":[{"id":"a1","type":"subagent","status":"running","description":"レビュー"}]}'
+ACTIVE='{"stop_hook_active":true,"background_tasks":[{"id":"a1","type":"subagent","status":"idle","description":"レビュー"}]}'
 check "stop-hook-active" "" "$(context "$ACTIVE")"
 # false は通常どおり通知する
-NOT_ACTIVE='{"stop_hook_active":false,"background_tasks":[{"id":"a1","type":"subagent","status":"running","description":"レビュー"}]}'
+NOT_ACTIVE='{"stop_hook_active":false,"background_tasks":[{"id":"a1","type":"subagent","status":"idle","description":"レビュー"}]}'
 check "stop-hook-inactive" "稼働中のサブエージェント/チームメイトが 1 体残っています:" "$(summary "$NOT_ACTIVE")"
 
 # 説明のフォールバック: description 無し -> agent_type -> id
