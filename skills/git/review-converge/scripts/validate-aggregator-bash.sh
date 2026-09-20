@@ -65,13 +65,23 @@ REPORT_RE='^review-converge-round-[0-9]+\.md$'
 # 「<STATE> と同じディレクトリ」= セッションの scratchpad、無ければ worktree 内の
 # tmp_claude/ のいずれか。basename 一致だけでは任意のディレクトリへ書けるため、
 # 解決後のパスがこのどちらかの配下にあることも要求する。
-WORKTREE_ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)
+# root も字句で求める。`--show-toplevel` は symlink を解決した実体パスを返すため、
+# worktree root より上に symlink がある配置では字句のままの書き込み先と食い違う。
+# CWD から `--show-prefix`(root からの相対)の分を末尾から落とせば、CWD と同じ
+# 字句の系で root が得られる。
+WORKTREE_ROOT=""
+if git_prefix=$(git -C "$CWD" rev-parse --show-prefix 2>/dev/null); then
+    WORKTREE_ROOT="${CWD%/}"
+    git_prefix="${git_prefix%/}"
+    if [[ -n "$git_prefix" ]]; then
+        WORKTREE_ROOT="${WORKTREE_ROOT%/"$git_prefix"}"
+    fi
+fi
 # scratchpad は worktree 外にある正当な書き込み先になり得るため許可枝を残す。
 # ただし現行のハーネスはそのパスを hook へ渡さない(入力 JSON に該当キーは無く、
-# CLAUDE_SCRATCHPAD_DIR も供給されない)ので、この枝は実運用では到達しない。
-# review-converge の規定も scratchpad が無ければ worktree 内 tmp_claude/ へ落ちる
-# (SKILL.md の「無ければ」フォールバック)ので、実経路は下の WORKTREE_ROOT 側。
-# 将来 scratchpad が供給される構成になったとき、正当な出力を deny しないための防御。
+# CLAUDE_SCRATCHPAD_DIR も供給されない)ため、集約エージェントには worktree 内へ
+# 読み替えて書き出させている(review-aggregator.md)。この枝は将来 scratchpad が
+# 供給される構成になったとき、正当な出力を deny しないための防御。
 SCRATCH_ROOT="${CLAUDE_SCRATCHPAD_DIR:-}"
 
 while IFS= read -r target; do
@@ -98,17 +108,12 @@ while IFS= read -r target; do
     # `//` と `/./` を畳むだけの字句正規化
     while [[ "$resolved" == *//* ]]; do resolved="${resolved//\/\//\/}"; done
     while [[ "$resolved" == *"/./"* ]]; do resolved="${resolved//\/.\//\/}"; done
-    # 前方一致は字句のパスで行う。worktree root より上に symlink がある配置では
-    # git rev-parse が返す実体パスと食い違うため、外れたときだけ実体でも突き合わせる
-    # (worktree の内側の symlink は辿らせない。字句判定を先に通すのはそのため)
-    resolved_real="$resolved"
-    if command -v realpath > /dev/null 2>&1; then
-        resolved_real="$(realpath -m "$resolved" 2>/dev/null || printf '%s' "$resolved")"
-    fi
+    # 前方一致は字句同士で行う(root も CWD と同じ系で求めてある)。symlink は
+    # 辿らないので、worktree 内の tmp_claude が外を指す symlink でも許可される。
     in_allowed=0
     for root in "$WORKTREE_ROOT" "$SCRATCH_ROOT"; do
         [[ -n "$root" ]] || continue
-        if [[ "$resolved" == "$root"/* || "$resolved_real" == "$root"/* ]]; then
+        if [[ "$resolved" == "$root"/* ]]; then
             in_allowed=1
         fi
     done

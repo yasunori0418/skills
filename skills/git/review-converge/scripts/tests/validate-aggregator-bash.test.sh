@@ -97,8 +97,8 @@ check "report-in-scratchpad-allowed" "0" "$?"
 check "report-scratchpad-unset-blocked" "2" "$(hook_exit "cat a >| $SCRATCH/review-converge-round-1.md")"
 
 # 実運用の経路: worktree 内の tmp_claude が primary リポジトリへの symlink でも許可する
-# (worktree では symlink で配置される。実体を解決すると worktree 外と判定されるため、
-#  正規化は字句上で行っている)
+# (worktree では symlink で配置される。前方一致は字句同士で行い symlink を
+#  辿らないため、実体が worktree 外にあっても許可される)
 PRIMARY="$WORK/primary-tmp"
 mkdir -p "$PRIMARY"
 LINKED="$WORK/repo-linked"
@@ -112,9 +112,19 @@ ABOVE="$WORK/above"
 mkdir -p "$ABOVE/real"
 ln -s "$ABOVE/real" "$ABOVE/link"
 git init -q "$ABOVE/real/repo"
-mkdir -p "$ABOVE/real/repo/tmp_claude"
+# tmp_claude は作らない。hook はコマンド実行前に走るので出力先は未作成であり、
+# 先に作ると実在を前提にした解決でも通ってしまい退行を検知できない
 check "report-symlink-above-root-allowed" "0" \
     "$(hook_exit "cat a >| $ABOVE/link/repo/tmp_claude/review-converge-round-1.md" "$ABOVE/link/repo")"
+
+# above-root symlink と worktree 内 tmp_claude の外向き symlink が同時に成立する配置
+BOTH="$WORK/both"
+mkdir -p "$BOTH/real" "$BOTH/outside"
+ln -s "$BOTH/real" "$BOTH/link"
+git init -q "$BOTH/real/repo"
+ln -s "$BOTH/outside" "$BOTH/real/repo/tmp_claude"
+check "report-symlink-both-directions-allowed" "0" \
+    "$(hook_exit "cat a >| $BOTH/link/repo/tmp_claude/review-converge-round-1.md" "$BOTH/link/repo")"
 
 # git リポジトリ外で走ったときは worktree を解決できず、安全側で拒否する
 check "report-outside-git-blocked" "2" "$(hook_exit "cat a >| $WORK/review-converge-round-1.md" "$WORK")"
