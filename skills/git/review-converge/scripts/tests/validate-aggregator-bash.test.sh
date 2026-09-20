@@ -46,27 +46,38 @@ hook_exit() { # command -> スクリプト本体の exit code
     echo $?
 }
 
+WORKTREE=$(cd "$SCRIPT_DIR" && git rev-parse --show-toplevel)
+
 # --- (1) 統合報告ファイルへのリダイレクトは許可 ---
-check "report-redirect-allowed" "0" "$(hook_exit 'cat body.md > /tmp/x/review-converge-round-1.md')"
-check "report-append-allowed" "0" "$(hook_exit 'echo done >> /tmp/x/review-converge-round-12.md')"
+# 出力先は basename 一致に加えて worktree / scratchpad 配下であることを要求する
+check "report-redirect-allowed" "0" "$(hook_exit "cat body.md > $WORKTREE/tmp_claude/review-converge-round-1.md")"
+check "report-append-allowed" "0" "$(hook_exit "echo done >> $WORKTREE/tmp_claude/review-converge-round-12.md")"
 check "report-relative-allowed" "0" "$(hook_exit 'printf x >| review-converge-round-3.md')"
 # 実運用形: heredoc で本文を書き出す。本文に拒否語の行・markdown の引用行・バッククォートを
 # 含めても、データはコマンドとして読まれない(唯一の書き出し経路を塞ぐ退行の固定)
-check "report-heredoc-body-allowed" "0" "$(hook_exit 'cat > /tmp/x/review-converge-round-1.md <<EOF
+check "report-heredoc-body-allowed" "0" "$(hook_exit "cat > $WORKTREE/tmp_claude/review-converge-round-1.md <<EOF
 ## レビュー結果
 - rm -rf の確認ダイアログがレーンを止める
 - make test / nix build は実測検証なので行わない
 > 引用行の markdown
-`cp a b` のようなコマンド引用
-EOF')"
-check "report-heredoc-quoted-delim-allowed" "0" "$(hook_exit "cat > /tmp/x/review-converge-round-2.md <<'EOF'
+\`cp a b\` のようなコマンド引用
+EOF")"
+check "report-heredoc-quoted-delim-allowed" "0" "$(hook_exit "cat > $WORKTREE/tmp_claude/review-converge-round-2.md <<'EOF'
 - nix build の成果物を作らない
 EOF")"
 # 引用符付き・変数展開の出力先は静的に解決できないので拒否側(安全側)に倒す
-check "report-quoted-blocked" "2" "$(hook_exit 'cat body.md > "/tmp/x/review-converge-round-1.md"')"
+check "report-quoted-blocked" "2" "$(hook_exit "cat body.md > \"$WORKTREE/tmp_claude/review-converge-round-1.md\"")"
 check "report-variable-blocked" "2" "$(hook_exit 'cat body.md > "$REPORT"')"
 # 許可先と拒否先が 1 コマンドに混在するとき、最初の 1 件で打ち切らず全件検査する
 check "mixed-redirect-blocked" "2" "$(hook_exit 'cat a >| /tmp/review-converge-round-1.md; echo b > out.txt')"
+# basename が一致しても書き込み先が worktree / scratchpad の外なら不可
+check "report-in-worktree-allowed" "0" "$(hook_exit "cat a >| $WORKTREE/tmp_claude/review-converge-round-1.md")"
+check "report-outside-worktree-blocked" "2" "$(hook_exit 'cat a >| /tmp/evil/review-converge-round-1.md')"
+check "report-traversal-blocked" "2" "$(hook_exit 'cat a >| ../../review-converge-round-1.md')"
+check "report-abs-traversal-blocked" "2" "$(hook_exit "cat a >| $WORKTREE/../review-converge-round-1.md")"
+payload 'cat a >| /tmp/evil/review-converge-round-1.md'
+ERR=$("$HOOK" < "$WORK/in.json" 2>&1 > /dev/null)
+has "blocked-reason-outside" "$ERR" "worktree"
 
 # --- (2) それ以外のリダイレクトと書き込み・ビルド系コマンドは拒否 ---
 check "other-redirect-blocked" "2" "$(hook_exit 'git diff > out.txt')"

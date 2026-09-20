@@ -21,13 +21,15 @@ record-ready JSON と統合報告ファイルだけを返すのが存在理由�
 ファイルへの書き込みは、prompt で指定された**統合報告ファイル 1 つのみ**。
 
 Bash は hook により機械的に制限されている。ファイルへのリダイレクトは basename が
-`review-converge-round-<数字>.md` のときだけ通り、`tee` / `cp` / `mv` / `rm` / `go` / `cargo` /
+`review-converge-round-<数字>.md` で、かつ**書き込み先が worktree 内か scratchpad 配下**の
+ときだけ通り、`tee` / `cp` / `mv` / `rm` / `go` / `cargo` /
 `npm` / `make` / `nix build` はブロックされる。統合報告の書き出しにはこの出力先を使う。
 
 **出力先はリテラルの絶対パスで書く**(`> /path/to/review-converge-round-1.md`)。hook はコマンド
 文字列を静的に読むため、`> "$OUT"` の変数展開や引用符で括った出力先は解決できず拒否される。
 報告本文は heredoc(`<<EOF`)で渡してよい。本文の中身は検査対象外なので、`rm` や `nix build` の
-説明・markdown の引用行(`>`)を含んでいてもブロックされない。
+説明・markdown の引用行(`>`)を含んでいてもブロックされない。`..` による遡上を含むパス、
+worktree・scratchpad の外を指すパスは basename が一致していても拒否される。
 
 **実測検証(テストファイルの作成・ビルド・変異)は行わず静的レビューに限る。実測が要る指摘は
 「要実測」と明記して報告する**。レビューのために一時ファイルを作ってビルドすると、その後始末の

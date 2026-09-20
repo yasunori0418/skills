@@ -56,6 +56,13 @@ STRIPPED=$(printf '%s' "$STRIPPED" | sed -E 's#[0-9]*>>?[[:space:]]*(&[0-9]+|/de
 
 # 残ったリダイレクトの出力先を 1 つずつ検査する(> / >> / >| のいずれも対象)
 REPORT_RE='^review-converge-round-[0-9]+\.md$'
+# 書き込み先として許すディレクトリ。統合報告の置き場は review-converge の規定で
+# 「<STATE> と同じディレクトリ」= セッションの scratchpad、無ければ worktree 内の
+# tmp_claude/ のいずれか。basename 一致だけでは任意のディレクトリへ書けるため、
+# 解決後のパスがこのどちらかの配下にあることも要求する。
+WORKTREE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+SCRATCH_ROOT="${CLAUDE_SCRATCHPAD_DIR:-}"
+
 while IFS= read -r target; do
     [[ -z "$target" ]] && continue
     # 引用の中身は 2) で落ちているため、引用符付き・変数展開の出力先は空文字などになり
@@ -65,6 +72,30 @@ while IFS= read -r target; do
     fi
     if ! [[ "$(basename -- "$target")" =~ $REPORT_RE ]]; then
         deny "統合報告(review-converge-round-<数字>.md)以外への書き込みは不可: ${target}"
+    fi
+
+    # `..` による遡上を拒否する。正規化はシンボリックリンクを辿らず字句上で行う
+    # (worktree 内の tmp_claude は primary リポジトリへの symlink であり、実体を
+    #  解決すると規定の出力先が worktree 外と判定されるため)
+    if [[ "$target" == *'..'* ]]; then
+        deny "相対パスの遡上(..)を含む書き込み先は不可: ${target}"
+    fi
+    resolved="$target"
+    if [[ "$resolved" != /* ]]; then
+        resolved="$PWD/$resolved"
+    fi
+    # `//` と `/./` を畳むだけの字句正規化
+    while [[ "$resolved" == *//* ]]; do resolved="${resolved//\/\//\/}"; done
+    resolved="${resolved//\/.\//\/}"
+    in_allowed=0
+    if [[ -n "$WORKTREE_ROOT" && "$resolved" == "$WORKTREE_ROOT"/* ]]; then
+        in_allowed=1
+    fi
+    if [[ -n "$SCRATCH_ROOT" && "$resolved" == "$SCRATCH_ROOT"/* ]]; then
+        in_allowed=1
+    fi
+    if (( in_allowed == 0 )); then
+        deny "書き込み先が worktree(${WORKTREE_ROOT:-不明})・scratchpad の外を指している: ${resolved}"
     fi
 done < <(printf '%s' "$STRIPPED" | grep -oE '[0-9]*>>?\|?[[:space:]]*[^[:space:];|&()<>]+' | sed -E 's#^[0-9]*>>?\|?[[:space:]]*##')
 
