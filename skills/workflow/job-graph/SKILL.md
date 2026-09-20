@@ -30,7 +30,7 @@ AI の責務は計画ファイル・issue から「タスクと依存辺・境�
 
 スクリプトは Python プロジェクト（`pyproject.toml` + `uv.lock`）。venv はスキルディレクトリ外へ逃がすため、実行時は必ず `UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/job-graph"` を付ける。以下、スキル本体のパスを `<SKILL>` と表記する。
 
-- **`scripts/preflight.sh`**（read-only）: HERDR_ENV・ツール有無・既定ブランチ・`permissions.ask` の git 系ルール（レーンでは自動 deny になる）・未コミット変更・名前衝突を収集。`WARNING` を解消してから進む。
+- **`scripts/preflight.sh`**（read-only）: HERDR_ENV・ツール有無・既定ブランチ・`permissions.ask` の git 系ルール（レーンでは確認ダイアログになり blocked。親が lane-ops の承認代行の判定基準で捌くため `NOTE` 扱い）・未コミット変更・名前衝突を収集。`WARNING` を解消してから進む。
 - **`scripts/plan_orchestration.py`**: JSON spec を入力に、循環検出・base 解決・ウェーブ算出・レーン割当・ワーカープロンプトのファイル書き出し・wt/herdr コマンド列生成を行う:
 
   ```bash
