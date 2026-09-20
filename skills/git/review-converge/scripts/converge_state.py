@@ -7,9 +7,21 @@ diff-review の周回ごとの指摘一覧を状態ファイルへ記録し、�
 
 サブコマンド:
 
-    converge_state.py record --state <path> [--head <sha>] [--threshold want]
+    converge_state.py record --state <path> --lenses <a,b,c> --received <a,b>
+                             [--accept-missing <lens> --reason <text>]...
+                             [--head <sha>] [--threshold want]
                              [--max-rounds 5] [--changed-lines N] < findings.json
         1 周回分の指摘を記録し、判定結果を JSON で stdout に出す。
+        --lenses はこの周回で起動したレンズ、--received は報告を受領したレンズ
+        (どちらもカンマ区切り。両方必須)。受領が申告レンズに満たない周回は
+        指摘が不完全なので、欠落レンズ名を stderr に出して exit 2 で拒否する
+        (欠落したまま [] を記録すると、レビューできていない観点を「指摘なし」として
+        収束判定に通してしまう = 偽収束)。
+        欠落したまま記録するには、欠落レンズ 1 つにつき
+        --accept-missing <lens> --reason <text> を対で渡す(数が揃わない・
+        欠落していないレンズを指定する場合は拒否する)。これはワーカーが自分の判断で
+        使うものではなく、ユーザーの裁定を記録するための引数。
+        受け入れた欠落はその周回の "missing"(lens と reason の配列)に保存する。
         --changed-lines は対象範囲の変更行数(挿入 + 削除。任意)。周回ごとに保存し、
         出力の "changed_lines"(周回ごとの系列。未指定は null)と
         "changed_lines_delta"(最初と最後の非 null の差。2 点無ければ null)で
@@ -440,6 +452,48 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def parse_lens_receipt(
+    lenses: str,
+    received: str,
+    accept_missing: list[str],
+    reasons: list[str],
+) -> list[dict[str, str]]:
+    """レンズ受領の申告を検証し、受け入れた欠落(lens / reason)の一覧を返す。
+
+    申告レンズに満たない受領はその周回の指摘が不完全であることを意味するので、
+    明示的な受け入れが無い限り ValueError で拒否する。
+    """
+    declared = [x.strip() for x in lenses.split(",") if x.strip()]
+    got = {x.strip() for x in received.split(",") if x.strip()}
+    if not declared:
+        raise ValueError("--lenses が空。この周回で起動したレンズを列挙すること")
+    unknown = sorted(got - set(declared))
+    if unknown:
+        raise ValueError(f"--received に --lenses に無いレンズがある: {', '.join(unknown)}")
+    missing = [lens for lens in declared if lens not in got]
+
+    if len(accept_missing) != len(reasons):
+        raise ValueError("--accept-missing と --reason は同数を対で渡すこと")
+    accepted: list[dict[str, str]] = []
+    for lens, reason in zip(accept_missing, reasons):
+        lens = lens.strip()
+        if lens not in missing:
+            raise ValueError(f"--accept-missing は欠落レンズにだけ使える: {lens!r}")
+        if not reason.strip():
+            raise ValueError(f"--reason が空: {lens!r}")
+        accepted.append({"lens": lens, "reason": reason.strip()})
+
+    unaccepted = [lens for lens in missing if lens not in {a["lens"] for a in accepted}]
+    if unaccepted:
+        raise ValueError(
+            "レンズ報告が欠落した周回は記録できない(欠落を指摘ゼロと解釈すると偽収束になる): "
+            f"{', '.join(unaccepted)}。"
+            "ユーザーへエスカレーションし、裁定を得たうえで欠落レンズごとに "
+            "--accept-missing <lens> --reason <裁定> を付けて再実行すること"
+        )
+    return accepted
+
+
 def cmd_record(args: argparse.Namespace) -> int:
     raw = sys.stdin.read().strip()
     if not raw:
@@ -450,13 +504,27 @@ def cmd_record(args: argparse.Namespace) -> int:
         print(f"ERROR: 指摘 JSON の解析に失敗: {e}", file=sys.stderr)
         return 2
 
+    try:
+        missing = parse_lens_receipt(
+            args.lenses, args.received, args.accept_missing, args.reason
+        )
+    except ValueError as e:
+        print(f"ERROR: レンズ受領の申告が不正: {e}", file=sys.stderr)
+        return 2
+
     path = Path(args.state)
     state = load_state(path)
     state["version"] = STATE_VERSION
     state["threshold"] = args.threshold
     state["max_rounds"] = args.max_rounds
     state["rounds"].append(
-        {"head": args.head, "changed_lines": args.changed_lines, "findings": findings}
+        {
+            "head": args.head,
+            "changed_lines": args.changed_lines,
+            "lenses": [x.strip() for x in args.lenses.split(",") if x.strip()],
+            "missing": missing,
+            "findings": findings,
+        }
     )
 
     result = evaluate(state)
@@ -575,6 +643,30 @@ def main(argv: list[str] | None = None) -> int:
     p_record = sub.add_parser("record", help="1 周回分の指摘を記録して判定する")
     p_record.add_argument("--state", required=True, help="状態ファイルのパス(JSON)")
     p_record.add_argument("--head", default=None, help="この周回の head sha")
+    p_record.add_argument(
+        "--lenses",
+        required=True,
+        help="この周回で起動したレンズ(カンマ区切り)",
+    )
+    p_record.add_argument(
+        "--received",
+        required=True,
+        help="報告を受領したレンズ(カンマ区切り)。--lenses に満たなければ拒否する",
+    )
+    p_record.add_argument(
+        "--accept-missing",
+        action="append",
+        default=[],
+        metavar="LENS",
+        help="欠落レンズを明示的に受け入れる(ユーザー裁定の記録用。--reason と対で渡す)",
+    )
+    p_record.add_argument(
+        "--reason",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help="直前の --accept-missing の根拠(ユーザー裁定の内容)",
+    )
     p_record.add_argument(
         "--threshold",
         default=DEFAULT_THRESHOLD,
