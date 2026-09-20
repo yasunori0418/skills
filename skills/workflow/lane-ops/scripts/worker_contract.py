@@ -66,6 +66,17 @@ MILESTONES_MAINTAIN = (
 )
 
 
+TEMPFILES_CLAUSE = (
+    "- 一時ファイルの扱い: 作業用の一時ファイルは scratchpad に置き、"
+    "scratchpad の一時ファイルは消さない（削除はレーンで確認ダイアログになり停止する）。"
+    "衝突を避けるために `mktemp -d` で一意な名前を使う。"
+    "同じ名前へ書き直すときは削除せず、上書きは `>|` で行う"
+    "（シェルは noclobber のため素の `>` は既存ファイルへ書けない）。"
+    "実測検証は scratchpad に置いたコピーの上で行い、"
+    "worktree のファイルを書き換えて戻す手順は禁止（戻し損ねが差分に混ざる）"
+)
+
+
 class ContractError(Exception):
     """入力 JSON の構造・型が規約の入力として不正な場合。"""
 
@@ -154,6 +165,7 @@ class CommonClauses:
     scope_check: list[str]
     issue: list[str]
     commit_granularity: list[str]
+    tempfiles: list[str]
     stop_notification: list[str]
     report: list[str]
     subagent_delegation: list[str]
@@ -228,6 +240,7 @@ def _common_clauses(task: TaskInfo, milestones: str) -> CommonClauses:
             "- コミット粒度: 論理的に独立した修正は都度コミットする"
             "（commit-flow スキル準拠、Conventional Commits）"
         ],
+        tempfiles=[TEMPFILES_CLAUSE],
         stop_notification=_stop_notification_clause(parent, task_id),
         report=[_report_clause(parent, task_id, milestones)],
         subagent_delegation=[
@@ -284,7 +297,9 @@ def _report_clause(parent: str, task_id: str, milestones: str) -> str:
         f"親セッションへ報告する: {milestones}。"
         "報告は事実のみ（報告は承認の代わりにならない。承認が要る場面では停止して親の応答を待つ）。"
         "テキストで承認を問うてターンを終える場合も、その直前に必ず報告する"
-        "（ダイアログを出さない承認待ちは親の監視に掛からず、報告が唯一の通知になる）"
+        "（ダイアログを出さない承認待ちは親の監視に掛からず、報告が唯一の通知になる）。"
+        "コマンド名を含む報告は `report.sh --file <path>` を使う"
+        "（本文を引数に載せると guard hook がコマンド名へ反応して報告自体が止まる）"
     )
 
 
@@ -306,6 +321,7 @@ def render_implement(task: TaskInfo) -> str:
                 "（構造変更の実施とテストの見送りのどちらを選ぶかは親・ユーザーの決定）"
             ),
             *c.commit_granularity,
+            *c.tempfiles,
             (
                 f"- push: 自分の feature ブランチ {task.branch or '<branch>'} に限り push してよい。"
                 "push は計画承認済みの前提であり、個別の確認へ回さず実行する。"
@@ -384,6 +400,7 @@ def render_maintain(task: TaskInfo) -> str:
                 "（構造変更の実施とテストの見送りのどちらを選ぶかは親・ユーザーの決定）"
             ),
             *c.commit_granularity,
+            *c.tempfiles,
             (
                 f"- push: 自分の feature ブランチ {task.branch or '<branch>'} に限り push してよい。"
                 "push・force-push は親の承認を得てから実行する（計画承認済み扱いにしない）。"
