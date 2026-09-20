@@ -13,6 +13,7 @@
 #   - lens 併記タグ               -> next_lenses でレンズ単位に分割
 #   - keep / suppress              -> 保持した指摘の除外(file + line または要旨)・ガード・再指摘禁止リスト
 #   - レンズ受領の申告             -> --lenses / --received 必須・欠落周回は exit 2・
+#                                     申告外レンズの受領も exit 2・
 #                                     --accept-missing + --reason での明示上書き
 #   - 壊れた入力 / 語彙外 severity  -> exit 2
 # python3 が無い環境では SKIP して exit 0。
@@ -379,6 +380,18 @@ has "receipt-subset-error" "$OUT" 'ERROR:'
 has "receipt-subset-names-missing" "$OUT" ': test, yagni。'
 # 拒否した周回を state に残さない(欠落周回が記録されると次周回の判定を汚染する)
 check "receipt-subset-no-state" "absent" "$([ -f "$S" ] && echo present || echo absent)"
+
+# 申告に無いレンズの受領は入口で拒否する(タイプミスが「欠落」に倒れると、ワーカーが
+# 使えない --accept-missing を要求される側に落ちて無駄な親裁定になる)
+# ガードを削ると tets は missing 判定(declared の test が got に無い)へ落ちて同じ exit 2 に
+# なるため、exit code・ERROR: の有無・state 不在では変異を検出できない。
+# レンズ名の表示を見る receipt-unknown-names-lens だけがこのガードの変異を殺す。
+S="$WORK/receipt-unknown.json"
+OUT=$(record_raw "$S" "$F_EMPTY" --head r1 --lenses design,test --received design,tets 2>&1)
+check "receipt-unknown-exit" 2 $?
+has "receipt-unknown-error" "$OUT" 'ERROR:'
+has "receipt-unknown-names-lens" "$OUT" 'tets'
+check "receipt-unknown-no-state" "absent" "$([ -f "$S" ] && echo present || echo absent)"
 
 # 欠落を明示上書きするには欠落レンズの数だけ --accept-missing + --reason が要る
 S="$WORK/receipt-accept-partial.json"
