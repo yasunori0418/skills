@@ -25,11 +25,180 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
 [ -n "$cmd" ] || exit 0
 
-# 対象操作の検出（旧 cchook 構成の command_contains と同じ部分一致基準）
+# 対象操作の検出。コマンド文字列全体への部分一致だと、報告コマンドの引数・検索
+# パターン・heredoc 本文に載ったリテラルにまで反応する（実行されないテキストを
+# 履歴書き換えと誤認する）。そのためコマンドを引用符・heredoc を解した上で
+# segment（; | & 改行 区切り）へ分解し、各 segment の先頭語と git 名で判定する。
+# 引用符は外して中身を残すので、sh -c "…" の payload も語として見える。
+found_rebase=0
+found_reset=0
+found_push=0
+
+# 語の中の部分一致で検出する（sh -c / eval / xargs の payload 用。裁定により
+# これらの引数内だけは従来の部分一致基準を残す）。
+scan_payload() { # <text...>
+    local text="$*"
+    case "$text" in *"git rebase"* | *"pull --rebase"* | *"git pull -r"*) found_rebase=1 ;; esac
+    case "$text" in *"git reset"*) found_reset=1 ;; esac
+    case "$text" in *"git push"*) found_push=1 ;; esac
+}
+
+# 1 segment の語列を分類する。
+classify_segment() {
+    local -a w=("$@")
+    local i=0 sub="" arg
+    # 先頭の環境変数代入は読み飛ばす（FOO=bar git reset …）
+    while [ "$i" -lt "${#w[@]}" ]; do
+        case "${w[i]}" in
+            [A-Za-z_]*=*) i=$((i + 1)) ;;
+            *) break ;;
+        esac
+    done
+    [ "$i" -lt "${#w[@]}" ] || return 0
+
+    case "${w[i]}" in
+        git)
+            i=$((i + 1))
+            # global option を読み飛ばす。値を次の語に取る形式はまとめて捨てる
+            while [ "$i" -lt "${#w[@]}" ]; do
+                case "${w[i]}" in
+                    -C | -c | --git-dir | --work-tree | --namespace) i=$((i + 2)) ;;
+                    -*) i=$((i + 1)) ;;
+                    *) break ;;
+                esac
+            done
+            [ "$i" -lt "${#w[@]}" ] || return 0
+            sub="${w[i]}"
+            case "$sub" in
+                rebase) found_rebase=1 ;;
+                reset) found_reset=1 ;;
+                push) found_push=1 ;;
+                pull)
+                    for arg in "${w[@]:i}"; do
+                        case "$arg" in
+                            --rebase | --rebase=* | -r) found_rebase=1 ;;
+                        esac
+                    done
+                    ;;
+            esac
+            ;;
+        sh | bash | zsh | dash)
+            # -c より前に operand が来たらスクリプト実行なので payload は見ない
+            i=$((i + 1))
+            while [ "$i" -lt "${#w[@]}" ]; do
+                case "${w[i]}" in
+                    --)
+                        i=$((i + 1))
+                        break
+                        ;;
+                    -*c*)
+                        i=$((i + 1))
+                        scan_payload "${w[@]:i}"
+                        return 0
+                        ;;
+                    -*) i=$((i + 1)) ;;
+                    *) break ;;
+                esac
+            done
+            ;;
+        eval | xargs) scan_payload "${w[@]:i+1}" ;;
+    esac
+}
+
+# $cmd を 1 文字ずつ走査して引用符・heredoc を解し、segment 単位で classify する。
+split_and_classify() {
+    local n=${#cmd} i=0 ch word="" quote="" delim="" strip_tabs=0 line
+    local -a words=()
+    finish_word() { [ -n "$word" ] && {
+        words+=("$word")
+        word=""
+    } || true; }
+    finish_segment() {
+        finish_word
+        [ "${#words[@]}" -gt 0 ] && classify_segment "${words[@]}"
+        words=()
+    }
+    while [ "$i" -lt "$n" ]; do
+        ch="${cmd:i:1}"
+        i=$((i + 1))
+        if [ "$quote" = "'" ]; then
+            [ "$ch" = "'" ] && quote="" || word+="$ch"
+            continue
+        fi
+        if [ "$quote" = '"' ]; then
+            if [ "$ch" = '"' ]; then
+                quote=""
+            elif [ "$ch" = '\' ] && [ "$i" -lt "$n" ]; then
+                word+="${cmd:i:1}"
+                i=$((i + 1))
+            else
+                word+="$ch"
+            fi
+            continue
+        fi
+        case "$ch" in
+            "'" | '"') quote="$ch" ;;
+            '\')
+                if [ "$i" -lt "$n" ]; then
+                    [ "${cmd:i:1}" = $'\n' ] || word+="${cmd:i:1}"
+                    i=$((i + 1))
+                fi
+                ;;
+            ' ' | $'\t') finish_word ;;
+            ';' | '|' | '&') finish_segment ;;
+            $'\n')
+                finish_segment
+                # 直前に heredoc が宣言されていれば、本文を delimiter まで捨てる
+                if [ -n "$delim" ]; then
+                    while [ "$i" -lt "$n" ]; do
+                        line="${cmd:i}"
+                        line="${line%%$'\n'*}"
+                        i=$((i + ${#line}))
+                        [ "$i" -lt "$n" ] && i=$((i + 1))
+                        [ "$strip_tabs" = 1 ] && line="${line#"${line%%[!$'\t']*}"}"
+                        [ "$line" = "$delim" ] && break
+                    done
+                    delim=""
+                    strip_tabs=0
+                fi
+                ;;
+            '<')
+                if [ "${cmd:i:1}" = '<' ] && [ "${cmd:i+1:1}" != '<' ]; then
+                    i=$((i + 1))
+                    strip_tabs=0
+                    if [ "${cmd:i:1}" = '-' ]; then
+                        strip_tabs=1
+                        i=$((i + 1))
+                    fi
+                    while [ "$i" -lt "$n" ] && { [ "${cmd:i:1}" = ' ' ] || [ "${cmd:i:1}" = $'\t' ]; }; do
+                        i=$((i + 1))
+                    done
+                    delim=""
+                    while [ "$i" -lt "$n" ]; do
+                        ch="${cmd:i:1}"
+                        case "$ch" in
+                            ' ' | $'\t' | $'\n' | ';' | '|' | '&' | '<' | '>') break ;;
+                            "'" | '"') ;;
+                            *) delim+="$ch" ;;
+                        esac
+                        i=$((i + 1))
+                    done
+                fi
+                ;;
+            *) word+="$ch" ;;
+        esac
+    done
+    finish_segment
+}
+
+split_and_classify
+
+# ops の順序は従来どおり rebase → reset → push で固定する（PASS_REASON の採用順と
+# 複合コマンドの挙動を変えないため）
 ops=""
-case "$cmd" in *"git rebase"* | *"pull --rebase"* | *"git pull -r"*) ops="$ops rebase" ;; esac
-case "$cmd" in *"git reset"*) ops="$ops reset" ;; esac
-case "$cmd" in *"git push"*) ops="$ops push" ;; esac
+[ "$found_rebase" = 1 ] && ops="$ops rebase"
+[ "$found_reset" = 1 ] && ops="$ops reset"
+[ "$found_push" = 1 ] && ops="$ops push"
 [ -n "$ops" ] || exit 0
 
 DENY_REASON=""
