@@ -31,6 +31,8 @@ cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
 # segment（; | & 改行 区切り）へ分解し、各 segment の先頭語と git の
 # サブコマンド名で判定する。
 # 引用符は外して中身を残すので、sh -c "…" の payload も語として見える。
+# ラッパー（sudo / env / command）と絶対パスは解除し、サブシェル・ブレース群・
+# コマンド置換は区切りとして扱って中の segment も判定する。
 found_rebase=0
 found_reset=0
 found_push=0
@@ -48,17 +50,18 @@ scan_payload() { # <text...>
 classify_segment() {
     local -a w=("$@")
     local i=0 sub="" arg
-    # 先頭の環境変数代入は読み飛ばす（FOO=bar git reset …）
+    # 先頭の環境変数代入とラッパー（sudo / env / command とそのオプション）は
+    # 読み飛ばす。旧実装は部分一致だったのでこれらの後ろの git も deny していた
     while [ "$i" -lt "${#w[@]}" ]; do
         case "${w[i]}" in
-            [A-Za-z_]*=*) i=$((i + 1)) ;;
+            [A-Za-z_]*=* | -* | sudo | env | command) i=$((i + 1)) ;;
             *) break ;;
         esac
     done
     [ "$i" -lt "${#w[@]}" ] || return 0
 
     case "${w[i]}" in
-        git)
+        git | */git)
             i=$((i + 1))
             # global option を読み飛ばす。値を次の語に取る形式はまとめて捨てる
             while [ "$i" -lt "${#w[@]}" ]; do
@@ -92,6 +95,7 @@ classify_segment() {
                         i=$((i + 1))
                         break
                         ;;
+                    -o) i=$((i + 2)) ;;
                     -*c*)
                         i=$((i + 1))
                         scan_payload "${w[@]:i}"
@@ -112,7 +116,7 @@ split_and_classify() {
     # 多く含む長いコマンドで O(n^2) の遅延になる。区切り文字はすべて ASCII で、
     # 多バイト文字は語の中身として持つだけなので、バイト添字に固定して走査する。
     local LC_ALL=C
-    local n=${#cmd} i=0 ch word="" quote="" delim="" strip_tabs=0 line
+    local n=${#cmd} i=0 ch word="" quote="" delim="" strip_tabs=0 line dq_depth=0
     local -a words=()
     finish_word() { [ -n "$word" ] && {
         words+=("$word")
@@ -131,7 +135,13 @@ split_and_classify() {
             continue
         fi
         if [ "$quote" = '"' ]; then
-            if [ "$ch" = '"' ]; then
+            if [ "$ch" = '$' ] && [ "${cmd:i:1}" = '(' ]; then
+                # "$(…)" の中は引用符の外と同じに扱う。閉じ括弧で引用符へ戻す
+                finish_segment
+                quote=""
+                dq_depth=1
+                i=$((i + 1))
+            elif [ "$ch" = '"' ]; then
                 quote=""
             elif [ "$ch" = '\' ] && [ "$i" -lt "$n" ]; then
                 word+="${cmd:i:1}"
@@ -150,7 +160,18 @@ split_and_classify() {
                 fi
                 ;;
             ' ' | $'\t') finish_word ;;
-            ';' | '|' | '&') finish_segment ;;
+            ';' | '|' | '&' | '(' | ')' | '{' | '}' | '`')
+                # サブシェル・ブレース群・コマンド置換・バックティックの中も
+                # 独立した segment として判定する（$( は ( で切れる）
+                finish_segment
+                [ "$dq_depth" -gt 0 ] && case "$ch" in
+                    '(') dq_depth=$((dq_depth + 1)) ;;
+                    ')')
+                        dq_depth=$((dq_depth - 1))
+                        [ "$dq_depth" = 0 ] && quote='"'
+                        ;;
+                esac
+                ;;
             $'\n')
                 finish_segment
                 # 直前に heredoc が宣言されていれば、本文を delimiter まで捨てる
