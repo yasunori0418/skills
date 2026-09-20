@@ -10,6 +10,8 @@
 #   - git push（force なし）          -> ask
 #   - git push --force / -f           -> deny
 #   - 複合コマンド（deny + ask 混在） -> deny 優先
+#   - 引数・検索パターン・heredoc 本文のリテラル -> 沈黙（誤検知しない）
+#   - cd 後の segment / git -C の global option / sh -c の引数 -> deny
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 GUARD="$SCRIPT_DIR/../main.sh"
@@ -65,5 +67,25 @@ check "push-f" "deny" "$(decision 'git push -f origin feature')"
 
 # 複合コマンド: reset(deny) + push(ask) -> deny 優先
 check "compound-deny-wins" "deny" "$(decision 'git reset --hard HEAD~1 && git push origin feature')"
+
+# --- 検出はコマンド構造で行う: 引数・検索パターン・heredoc 本文のリテラルは素通し ---
+raw() { # command -> hook の生出力
+    printf '{"cwd": %s, "tool_input": {"command": %s}}' \
+        "$(printf '%s' "$REPO" | jq -Rs .)" "$(printf '%s' "$1" | jq -Rs .)" | "$GUARD"
+}
+
+# 報告コマンドの引数に載ったリテラル -> 沈黙
+check "literal-in-argument" "" "$(raw 'bash report.sh parent T1 "停止" "git rebase の計画を提示"')"
+
+# 検索パターン内のリテラル -> 沈黙
+check "literal-in-grep-pattern" "" "$(raw "grep -n -E 'git reset|Ask rule' file")"
+
+# heredoc 本文のリテラル -> 沈黙
+check "literal-in-heredoc" "" "$(raw "$(printf 'git commit -F - <<%s\nfix: 手順を改める\n\ngit reset の記述を削除した\nEOF' "'EOF'")")"
+
+# 実コマンドは segment ごとに検出する -> deny
+check "compound-cd-reset" "deny" "$(decision 'cd x && git reset --hard')"
+check "git-global-option-reset" "deny" "$(decision 'git -C x reset --soft HEAD~1')"
+check "shell-c-rebase" "deny" "$(decision 'bash -c "git rebase main"')"
 
 exit "$fail"
