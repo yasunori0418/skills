@@ -50,11 +50,15 @@ scan_payload() { # <text...>
 classify_segment() {
     local -a w=("$@")
     local i=0 sub="" arg
-    # 先頭の環境変数代入とラッパー（sudo / env / command とそのオプション）は
-    # 読み飛ばす。旧実装は部分一致だったのでこれらの後ろの git も deny していた
+    # 先頭の環境変数代入・ラッパー・制御構文のキーワードは読み飛ばす。旧実装は
+    # 部分一致だったので `sudo git reset` や `if …; then git reset` のような形も
+    # deny していた。値を次の語に取るラッパーオプション（-u root 等）は 2 語消費する
     while [ "$i" -lt "${#w[@]}" ]; do
         case "${w[i]}" in
+            -u | -C | -g | -p | -H | --chdir | --unset) i=$((i + 2)) ;;
             [A-Za-z_]*=* | -* | sudo | env | command) i=$((i + 1)) ;;
+            if | then | elif | else | while | until | do | in | '!') i=$((i + 1)) ;;
+            exec | time | nohup | nice | stdbuf) i=$((i + 1)) ;;
             *) break ;;
         esac
     done
@@ -95,7 +99,13 @@ classify_segment() {
                         i=$((i + 1))
                         break
                         ;;
-                    -o) i=$((i + 2)) ;;
+                    -*o*)
+                        # -o / -euo など、クラスタ末尾が o なら次の語は operand
+                        case "${w[i]}" in
+                            *o) i=$((i + 2)) ;;
+                            *) i=$((i + 1)) ;;
+                        esac
+                        ;;
                     -*c*)
                         i=$((i + 1))
                         scan_payload "${w[@]:i}"
@@ -116,7 +126,7 @@ split_and_classify() {
     # 多く含む長いコマンドで O(n^2) の遅延になる。区切り文字はすべて ASCII で、
     # 多バイト文字は語の中身として持つだけなので、バイト添字に固定して走査する。
     local LC_ALL=C
-    local n=${#cmd} i=0 ch word="" quote="" delim="" strip_tabs=0 line dq_depth=0
+    local n=${#cmd} i=0 ch word="" quote="" delim="" strip_tabs=0 line dq_depth=0 dq_tail=0
     local -a words=()
     finish_word() { [ -n "$word" ] && {
         words+=("$word")
@@ -134,6 +144,18 @@ split_and_classify() {
             [ "$ch" = "'" ] && quote="" || word+="$ch"
             continue
         fi
+        if [ "$quote" = '`' ]; then
+            # "`…`" の中身。閉じバックティックで二重引用符の状態へ戻す
+            if [ "$ch" = '`' ]; then
+                finish_segment
+                quote='"'
+            elif [ "$ch" = ' ' ] || [ "$ch" = $'\t' ]; then
+                finish_word
+            else
+                word+="$ch"
+            fi
+            continue
+        fi
         if [ "$quote" = '"' ]; then
             if [ "$ch" = '$' ] && [ "${cmd:i:1}" = '(' ]; then
                 # "$(…)" の中は引用符の外と同じに扱う。閉じ括弧で引用符へ戻す
@@ -141,8 +163,16 @@ split_and_classify() {
                 quote=""
                 dq_depth=1
                 i=$((i + 1))
+            elif [ "$ch" = '`' ]; then
+                # "`…`" も同じ。閉じバックティックまでを引用符の外として扱う
+                finish_segment
+                quote='`'
             elif [ "$ch" = '"' ]; then
                 quote=""
+                dq_tail=0
+            elif [ "$dq_tail" = 1 ] && { [ "$ch" = ' ' ] || [ "$ch" = $'\t' ]; }; then
+                # "$(…) の後ろ" は置換結果に続くコマンドになり得るので語を切る
+                finish_word
             elif [ "$ch" = '\' ] && [ "$i" -lt "$n" ]; then
                 word+="${cmd:i:1}"
                 i=$((i + 1))
@@ -168,7 +198,12 @@ split_and_classify() {
                     '(') dq_depth=$((dq_depth + 1)) ;;
                     ')')
                         dq_depth=$((dq_depth - 1))
-                        [ "$dq_depth" = 0 ] && quote='"'
+                        # 閉じたら二重引用符へ戻すが、続きも語として拾うため
+                        # 引用符の中でも空白区切りを効かせる（dq_tail）
+                        [ "$dq_depth" = 0 ] && {
+                            quote='"'
+                            dq_tail=1
+                        }
                         ;;
                 esac
                 ;;
