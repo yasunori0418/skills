@@ -108,6 +108,10 @@ classify_segment() {
 
 # $cmd を 1 文字ずつ走査して引用符・heredoc を解し、segment 単位で classify する。
 split_and_classify() {
+    # 1 文字ずつの ${cmd:i:1} は多バイト文字だと先頭からの走査になり、日本語を
+    # 多く含む長いコマンドで O(n^2) の遅延になる。区切り文字はすべて ASCII で、
+    # 多バイト文字は語の中身として持つだけなので、バイト添字に固定して走査する。
+    local LC_ALL=C
     local n=${#cmd} i=0 ch word="" quote="" delim="" strip_tabs=0 line
     local -a words=()
     finish_word() { [ -n "$word" ] && {
