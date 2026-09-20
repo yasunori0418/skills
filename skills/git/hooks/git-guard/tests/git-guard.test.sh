@@ -16,6 +16,9 @@
 #   - sudo / env / command / 絶対パス git    -> deny（ラッパーを解除する）
 #   - サブシェル / ブレース群 / $(…) / `…`   -> deny（区切りとして扱う）
 #   - 二重引用符の中の `)`                    -> 沈黙（引数リテラルを割らない）
+#   - 制御構文キーワード / 前置コマンドの後   -> deny（if / then / do / else / exec 等）
+#   - ラッパーの値取りオプションの後          -> deny（-u root 等を 2 語消費する）
+#   - 二重引用符の中のバックティック・置換後  -> deny
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 GUARD="$SCRIPT_DIR/../main.sh"
@@ -113,5 +116,25 @@ check "echo-literal-silent" "" "$(raw "echo 'git reset --hard'")"
 check "grep-pattern-silent" "" "$(raw "grep -n 'reset' file.txt")"
 # 二重引用符の中の `)` は区切りではない（引数リテラルを割らない）
 check "paren-in-quoted-arg-silent" "" "$(raw "echo \"x) git reset --hard\"")"
+
+# --- 退行防止: ラッパーの値取りオプション・制御構文・前置コマンド ---
+check "wrapper-sudo-value-opt" "deny" "$(decision 'sudo -u root git reset --hard')"
+check "wrapper-env-value-opt" "deny" "$(decision 'env -u VAR git reset --hard')"
+check "keyword-if" "deny" "$(decision 'if git rebase main; then echo x; fi')"
+check "keyword-then" "deny" "$(decision 'if true; then git reset --hard; fi')"
+check "keyword-do" "deny" "$(decision 'for x in a b; do git reset --hard; done')"
+check "keyword-else" "deny" "$(decision 'if false; then echo x; else git reset --hard; fi')"
+check "keyword-while" "deny" "$(decision 'while git reset; do :; done')"
+check "negation" "deny" "$(decision '! git reset --hard')"
+check "prefix-exec" "deny" "$(decision 'exec git reset --hard')"
+check "prefix-time" "deny" "$(decision 'time git reset --hard')"
+check "prefix-nohup" "deny" "$(decision 'nohup git push --force origin x')"
+check "shell-opt-cluster-with-o" "deny" "$(decision 'bash -euo pipefail -c "git reset --hard"')"
+check "backtick-in-quotes" "deny" "$(decision "echo \"\`git reset --hard\`\"")"
+check "after-substitution-in-quotes" "deny" "$(decision "echo \"\$(true) git reset --hard\"")"
+
+# キーワードのリテラルは素通しのまま（誤爆の再発防止）
+check "keyword-literal-silent" "" "$(raw 'echo then do else in')"
+check "keyword-in-quoted-literal-silent" "" "$(raw "echo 'if x; then git reset; fi'")"
 
 exit "$fail"
