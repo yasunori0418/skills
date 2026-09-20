@@ -46,24 +46,36 @@ check "file-exit0" "0" "$rc"
 check "file-detail" "本文の 1 行目" "$(tail -1 "$JSONL" | jq -r '.detail')"
 check "file-appends" "2" "$(wc -l < "$JSONL" | tr -d ' ')"
 
+# --file の本文が複数行 -> 全行が detail に入り JSONL は 1 行だけ増える
+printf '%s\n' '1 行目' '2 行目' '3 行目' > "$WORK/multi.txt"
+before=$(wc -l < "$JSONL" | tr -d ' ')
+rc=0
+bash "$REPORT" --file "$WORK/multi.txt" test-parent T8 "収束" > /dev/null 2>&1 || rc=$?
+check "multiline-exit0" "0" "$rc"
+check "multiline-detail" "$(printf '%s\n%s\n%s' '1 行目' '2 行目' '3 行目')" \
+    "$(tail -1 "$JSONL" | jq -r '.detail')"
+check "multiline-one-record" "$((before + 1))" "$(wc -l < "$JSONL" | tr -d ' ')"
+
 # --file が空 -> exit 2・追記しない
 : > "$WORK/empty.txt"
+before=$(wc -l < "$JSONL" | tr -d ' ')
 rc=0
 bash "$REPORT" --file "$WORK/empty.txt" test-parent T3 "ブロック" > /dev/null 2>&1 || rc=$?
 check "empty-file-exit2" "2" "$rc"
-check "empty-file-no-append" "2" "$(wc -l < "$JSONL" | tr -d ' ')"
+check "empty-file-no-append" "$before" "$(wc -l < "$JSONL" | tr -d ' ')"
 
 # --file が不在 -> exit 2・追記しない
 rc=0
 bash "$REPORT" --file "$WORK/missing.txt" test-parent T4 "ブロック" > /dev/null 2>&1 || rc=$?
 check "missing-file-exit2" "2" "$rc"
-check "missing-file-no-append" "2" "$(wc -l < "$JSONL" | tr -d ' ')"
+check "missing-file-no-append" "$before" "$(wc -l < "$JSONL" | tr -d ' ')"
 
 # --file と位置引数の詳細の併用 -> exit 2・追記しない
+before=$(wc -l < "$JSONL" | tr -d ' ')
 rc=0
 bash "$REPORT" --file "$WORK/detail.txt" test-parent T6 "push 完了" 余分な詳細 > /dev/null 2>&1 || rc=$?
 check "both-detail-exit2" "2" "$rc"
-check "both-detail-no-append" "2" "$(wc -l < "$JSONL" | tr -d ' ')"
+check "both-detail-no-append" "$before" "$(wc -l < "$JSONL" | tr -d ' ')"
 
 # 引数不足 -> exit 2
 rc=0
