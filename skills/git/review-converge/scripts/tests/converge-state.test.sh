@@ -366,6 +366,9 @@ record_raw "$S" "$F_EMPTY" --head r1 --lenses design,test >/dev/null 2>&1
 check "receipt-requires-received" 2 $?
 record_raw "$S" "$F_EMPTY" --head r1 --received design >/dev/null 2>&1
 check "receipt-requires-lenses" 2 $?
+# 空文字の申告はゲートを素通りさせない(空なら欠落も算出できず全レンズ欠落と区別が付かない)
+record_raw "$S" "$F_EMPTY" --head r1 --lenses "" --received "" >/dev/null 2>&1
+check "receipt-refuses-empty-lenses" 2 $?
 check "receipt-no-state-on-reject" "absent" "$([ -f "$S" ] && echo present || echo absent)"
 
 # 受領が申告レンズの真部分集合 -> 欠落レンズ名を添えて exit 2
@@ -374,6 +377,8 @@ OUT=$(record_raw "$S" "$F_EMPTY" --head r1 --lenses design,test,yagni --received
 check "receipt-subset-exit" 2 $?
 has "receipt-subset-error" "$OUT" 'ERROR:'
 has "receipt-subset-names-missing" "$OUT" ': test, yagni。'
+# 拒否した周回を state に残さない(欠落周回が記録されると次周回の判定を汚染する)
+check "receipt-subset-no-state" "absent" "$([ -f "$S" ] && echo present || echo absent)"
 
 # 欠落を明示上書きするには欠落レンズの数だけ --accept-missing + --reason が要る
 S="$WORK/receipt-accept-partial.json"
@@ -387,8 +392,12 @@ OUT=$(record_raw "$S" "$F_EMPTY" --head r1 --lenses design,test,yagni --received
     --accept-missing yagni --reason "ユーザー裁定で yagni を外して続行" 2>&1)
 check "receipt-accept-exit" 0 $?
 check "receipt-accept-verdict" "converged" "$(verdict "$OUT")"
-has "receipt-accept-saved-lens" "$(cat "$S")" '"lens": "test"'
-has "receipt-accept-saved-reason" "$(cat "$S")" '"reason": "ユーザー裁定で yagni を外して続行"'
+# lens と reason の対応・順序・格納先(当該周回の missing)をまとめて固定する
+check "receipt-accept-saved-missing" \
+    "test=ユーザー裁定で test を外して続行;yagni=ユーザー裁定で yagni を外して続行" \
+    "$(python3 -c 'import json,sys
+r = json.load(open(sys.argv[1]))["rounds"][0]["missing"]
+print(";".join(m["lens"] + "=" + m["reason"] for m in r))' "$S")"
 
 # --accept-missing と --reason の数が揃わない / 受領していないレンズを外そうとしない
 S="$WORK/receipt-accept-unbalanced.json"
@@ -398,6 +407,10 @@ check "receipt-accept-requires-reason" 2 $?
 record_raw "$S" "$F_EMPTY" --head r1 --lenses design,test --received design \
     --accept-missing design --reason "欠落していないレンズ" >/dev/null 2>&1
 check "receipt-accept-refuses-non-missing-lens" 2 $?
+# 空白だけの裁定内容は記録の用を成さない(keep の理由必須と同じ扱い)
+record_raw "$S" "$F_EMPTY" --head r1 --lenses design,test --received design \
+    --accept-missing test --reason "   " >/dev/null 2>&1
+check "receipt-accept-refuses-blank-reason" 2 $?
 
 # 全レンズ受領なら verdict は受領ゲートの影響を受けない(従来どおり)
 S="$WORK/receipt-full.json"

@@ -178,6 +178,48 @@ def parse_findings(payload: Any) -> list[dict[str, Any]]:
     return out
 
 
+def parse_lens_receipt(
+    lenses: str,
+    received: str,
+    accept_missing: list[str],
+    reasons: list[str],
+) -> list[dict[str, str]]:
+    """レンズ受領の申告を検証し、受け入れた欠落(lens / reason)の一覧を返す。
+
+    申告レンズに満たない受領はその周回の指摘が不完全であることを意味するので、
+    明示的な受け入れが無い限り ValueError で拒否する。
+    """
+    declared = [x.strip() for x in lenses.split(",") if x.strip()]
+    got = {x.strip() for x in received.split(",") if x.strip()}
+    if not declared:
+        raise ValueError("--lenses が空。この周回で起動したレンズを列挙すること")
+    unknown = sorted(got - set(declared))
+    if unknown:
+        raise ValueError(f"--received に --lenses に無いレンズがある: {', '.join(unknown)}")
+    missing = [lens for lens in declared if lens not in got]
+
+    if len(accept_missing) != len(reasons):
+        raise ValueError("--accept-missing と --reason は同数を対で渡すこと")
+    accepted: list[dict[str, str]] = []
+    for lens, reason in zip(accept_missing, reasons):
+        lens = lens.strip()
+        if lens not in missing:
+            raise ValueError(f"--accept-missing は欠落レンズにだけ使える: {lens!r}")
+        if not reason.strip():
+            raise ValueError(f"--reason が空: {lens!r}")
+        accepted.append({"lens": lens, "reason": reason.strip()})
+
+    unaccepted = [lens for lens in missing if lens not in {a["lens"] for a in accepted}]
+    if unaccepted:
+        raise ValueError(
+            "レンズ報告が欠落した周回は記録できない(欠落を指摘ゼロと解釈すると偽収束になる): "
+            f"{', '.join(unaccepted)}。"
+            "ユーザーへエスカレーションし、裁定を得たうえで欠落レンズごとに "
+            "--accept-missing <lens> --reason <裁定> を付けて再実行すること"
+        )
+    return accepted
+
+
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"version": STATE_VERSION, "rounds": []}
@@ -452,49 +494,17 @@ def evaluate(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def parse_lens_receipt(
-    lenses: str,
-    received: str,
-    accept_missing: list[str],
-    reasons: list[str],
-) -> list[dict[str, str]]:
-    """レンズ受領の申告を検証し、受け入れた欠落(lens / reason)の一覧を返す。
-
-    申告レンズに満たない受領はその周回の指摘が不完全であることを意味するので、
-    明示的な受け入れが無い限り ValueError で拒否する。
-    """
-    declared = [x.strip() for x in lenses.split(",") if x.strip()]
-    got = {x.strip() for x in received.split(",") if x.strip()}
-    if not declared:
-        raise ValueError("--lenses が空。この周回で起動したレンズを列挙すること")
-    unknown = sorted(got - set(declared))
-    if unknown:
-        raise ValueError(f"--received に --lenses に無いレンズがある: {', '.join(unknown)}")
-    missing = [lens for lens in declared if lens not in got]
-
-    if len(accept_missing) != len(reasons):
-        raise ValueError("--accept-missing と --reason は同数を対で渡すこと")
-    accepted: list[dict[str, str]] = []
-    for lens, reason in zip(accept_missing, reasons):
-        lens = lens.strip()
-        if lens not in missing:
-            raise ValueError(f"--accept-missing は欠落レンズにだけ使える: {lens!r}")
-        if not reason.strip():
-            raise ValueError(f"--reason が空: {lens!r}")
-        accepted.append({"lens": lens, "reason": reason.strip()})
-
-    unaccepted = [lens for lens in missing if lens not in {a["lens"] for a in accepted}]
-    if unaccepted:
-        raise ValueError(
-            "レンズ報告が欠落した周回は記録できない(欠落を指摘ゼロと解釈すると偽収束になる): "
-            f"{', '.join(unaccepted)}。"
-            "ユーザーへエスカレーションし、裁定を得たうえで欠落レンズごとに "
-            "--accept-missing <lens> --reason <裁定> を付けて再実行すること"
-        )
-    return accepted
-
-
 def cmd_record(args: argparse.Namespace) -> int:
+    # 受領ゲートは引数だけで判定できるので stdin を読む前に通す
+    # (JSON が壊れていてレンズも欠落している呼び出しを 2 回に分けて直させない)。
+    try:
+        accepted_missing = parse_lens_receipt(
+            args.lenses, args.received, args.accept_missing, args.reason
+        )
+    except ValueError as e:
+        print(f"ERROR: レンズ受領の申告が不正: {e}", file=sys.stderr)
+        return 2
+
     raw = sys.stdin.read().strip()
     if not raw:
         raw = "[]"
@@ -502,14 +512,6 @@ def cmd_record(args: argparse.Namespace) -> int:
         findings = parse_findings(json.loads(raw))
     except (json.JSONDecodeError, ValueError) as e:
         print(f"ERROR: 指摘 JSON の解析に失敗: {e}", file=sys.stderr)
-        return 2
-
-    try:
-        missing = parse_lens_receipt(
-            args.lenses, args.received, args.accept_missing, args.reason
-        )
-    except ValueError as e:
-        print(f"ERROR: レンズ受領の申告が不正: {e}", file=sys.stderr)
         return 2
 
     path = Path(args.state)
@@ -521,8 +523,7 @@ def cmd_record(args: argparse.Namespace) -> int:
         {
             "head": args.head,
             "changed_lines": args.changed_lines,
-            "lenses": [x.strip() for x in args.lenses.split(",") if x.strip()],
-            "missing": missing,
+            "missing": accepted_missing,
             "findings": findings,
         }
     )
