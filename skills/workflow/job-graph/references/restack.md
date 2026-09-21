@@ -20,12 +20,12 @@ amend / rebase による履歴書き換えだけでなく、**下段へのコミ
 - 起動後に base のずれを見つけたら、コミット前なら `git switch -C <branch> <正しい親>` で付け替えられる（reset 不要・guard に掛からない）
 - PR の完了判定・base 確認は `gh pr list --head <branch>` で行う（`gh pr view` に `--head` は無い）
 
-## 役割分担: rebase はワーカー、reset は親
+## 役割分担: rebase も reset もワーカー、親は承認代行
 
 | 操作 | 実行者 | 理由 |
 | --- | --- | --- |
 | `git rebase` | 対象レーンのワーカー自身（rebase-flow スキル経由。lane-ops の `send_instruction.sh` で指示） | backup 作成 + 解錠が要り、git-guard hook が素の rebase を deny する。ワーカーの cwd が worktree なので marker がそのまま効く |
-| `git reset`（`permissions.ask` 対象） | **親が `git -C <worktree> reset ...` で代行**（reset-flow スキル経由で arm してから） | レーン（非対話 pane）では ask の承認プロンプトが誰にも届かず自動 deny される（preflight の PERMISSIONS 節で事前に検出） |
+| `git reset`（`permissions.ask` 対象） | **通常は対象レーンのワーカー自身**（reset-flow スキル経由で arm。ask の確認ダイアログは親が承認代行する） | レーンは対話 TUI なのでダイアログが出て親が捌ける。親の `git -C <worktree> reset ...` 代行（reset-flow で arm してから）は、レーンが非対話でダイアログを出せないときのフォールバックに限る |
 
-- 親が別 worktree を操作するときは **`git -C <worktree>`** を使う。`cd <worktree> && git reset ...` の複合コマンドは git-guard が arm marker を見つけられず deny する（実測）。EnterWorktree でセッションの cwd を移す方法は、親の cwd（spec・handoff・prompt-dir の相対参照）を壊すので使わない
-- 親の代行後はワーカーへ「base を載せ替えたので `git log --oneline -5` で確認し、該当ファイルを読み直してから再開」と `send_instruction.sh` で伝える
+- フォールバックで親が別 worktree を操作するときは **`git -C <worktree>`** を使う。`cd <worktree> && git reset ...` の複合コマンドは git-guard が arm marker を見つけられず deny する（実測）。EnterWorktree でセッションの cwd を移す方法は、親の cwd（spec・handoff・prompt-dir の相対参照）を壊すので使わない
+- 親がフォールバックで代行したあとはワーカーへ「base を載せ替えたので `git log --oneline -5` で確認し、該当ファイルを読み直してから再開」と `send_instruction.sh` で伝える
