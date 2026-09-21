@@ -889,7 +889,9 @@ def test_render_maintain_monitor_section_is_push_approval():
 def test_render_monitor_section_points_to_lane_ops():
     out = rendered([task("B"), task("A")])
     monitor = out.split("=== MONITOR")[1]
-    assert f"python3 {po.LANE_OPS_SCRIPTS / 'watch_events.py'} --once --status blocked --status idle" in monitor
+    assert f"python3 {po.LANE_OPS_SCRIPTS / 'watch_events.py'} --once --status blocked --ready" in monitor
+    # --ready（idle + done）へ置き換えたので --status idle は出さない（併記だと緑のまま退行する）
+    assert "--status idle" not in monitor
     # 自レーンの pane に限定（id 順に列挙）
     assert '--pane "$PANE_A" --pane "$PANE_B"' in monitor
     assert "agent get <pane>" in monitor
