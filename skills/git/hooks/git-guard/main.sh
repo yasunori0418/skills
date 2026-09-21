@@ -25,11 +25,245 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
 [ -n "$cmd" ] || exit 0
 
-# 対象操作の検出（旧 cchook 構成の command_contains と同じ部分一致基準）
+# 対象操作の検出。コマンド文字列全体への部分一致だと、報告コマンドの引数・検索
+# パターン・heredoc 本文に載ったリテラルにまで反応する（実行されないテキストを
+# 履歴書き換えと誤認する）。そのためコマンドを引用符・heredoc を解した上で
+# segment（; | & 改行 区切り）へ分解し、各 segment の先頭語と git の
+# サブコマンド名で判定する。
+# 引用符は外して中身を残すので、sh -c "…" の payload も語として見える。
+# ラッパー（sudo / env / command）と絶対パスは解除し、サブシェル・ブレース群・
+# コマンド置換は区切りとして扱って中の segment も判定する。
+found_rebase=0
+found_reset=0
+found_push=0
+
+# 語の中の部分一致で検出する（sh -c / eval / xargs の payload 用。裁定により
+# これらの引数内だけは従来の部分一致基準を残す）。
+scan_payload() { # <text...>
+    local text="$*"
+    case "$text" in *"git rebase"* | *"pull --rebase"* | *"git pull -r"*) found_rebase=1 ;; esac
+    case "$text" in *"git reset"*) found_reset=1 ;; esac
+    case "$text" in *"git push"*) found_push=1 ;; esac
+}
+
+# 1 segment の語列を分類する。
+classify_segment() {
+    local -a w=("$@")
+    local i=0 sub="" arg
+    # 先頭の環境変数代入・ラッパー・制御構文のキーワードは読み飛ばす。旧実装は
+    # 部分一致だったので `sudo git reset` や `if …; then git reset` のような形も
+    # deny していた。値を次の語に取るラッパーオプション（-u root 等）は 2 語消費する
+    while [ "$i" -lt "${#w[@]}" ]; do
+        case "${w[i]}" in
+            -u | -C | -g | -p | -H | --chdir | --unset) i=$((i + 2)) ;;
+            [A-Za-z_]*=* | -* | sudo | env | command) i=$((i + 1)) ;;
+            if | then | elif | else | while | until | do | in | '!') i=$((i + 1)) ;;
+            exec | time | nohup | nice | stdbuf) i=$((i + 1)) ;;
+            *) break ;;
+        esac
+    done
+    [ "$i" -lt "${#w[@]}" ] || return 0
+
+    case "${w[i]}" in
+        git | */git)
+            i=$((i + 1))
+            # global option を読み飛ばす。値を次の語に取る形式はまとめて捨てる
+            while [ "$i" -lt "${#w[@]}" ]; do
+                case "${w[i]}" in
+                    -C | -c | --git-dir | --work-tree | --namespace) i=$((i + 2)) ;;
+                    -*) i=$((i + 1)) ;;
+                    *) break ;;
+                esac
+            done
+            [ "$i" -lt "${#w[@]}" ] || return 0
+            sub="${w[i]}"
+            case "$sub" in
+                rebase) found_rebase=1 ;;
+                reset) found_reset=1 ;;
+                push) found_push=1 ;;
+                pull)
+                    for arg in "${w[@]:i}"; do
+                        case "$arg" in
+                            --rebase | --rebase=* | -r) found_rebase=1 ;;
+                        esac
+                    done
+                    ;;
+            esac
+            ;;
+        sh | bash | zsh | dash)
+            # -c より前に operand が来たらスクリプト実行なので payload は見ない
+            i=$((i + 1))
+            while [ "$i" -lt "${#w[@]}" ]; do
+                case "${w[i]}" in
+                    --)
+                        i=$((i + 1))
+                        break
+                        ;;
+                    -*o*)
+                        # -o / -euo など、クラスタ末尾が o なら次の語は operand
+                        case "${w[i]}" in
+                            *o) i=$((i + 2)) ;;
+                            *) i=$((i + 1)) ;;
+                        esac
+                        ;;
+                    -*c*)
+                        i=$((i + 1))
+                        scan_payload "${w[@]:i}"
+                        return 0
+                        ;;
+                    -*) i=$((i + 1)) ;;
+                    *) break ;;
+                esac
+            done
+            ;;
+        eval | xargs) scan_payload "${w[@]:i+1}" ;;
+    esac
+}
+
+# $cmd を 1 文字ずつ走査して引用符・heredoc を解し、segment 単位で classify する。
+split_and_classify() {
+    # 1 文字ずつの ${cmd:i:1} は多バイト文字だと先頭からの走査になり、日本語を
+    # 多く含む長いコマンドで O(n^2) の遅延になる。区切り文字はすべて ASCII で、
+    # 多バイト文字は語の中身として持つだけなので、バイト添字に固定して走査する。
+    local LC_ALL=C
+    local n=${#cmd} i=0 ch word="" quote="" delim="" strip_tabs=0 line dq_depth=0 dq_tail=0
+    local -a words=()
+    finish_word() { [ -n "$word" ] && {
+        words+=("$word")
+        word=""
+    } || true; }
+    finish_segment() {
+        finish_word
+        [ "${#words[@]}" -gt 0 ] && classify_segment "${words[@]}"
+        words=()
+    }
+    while [ "$i" -lt "$n" ]; do
+        ch="${cmd:i:1}"
+        i=$((i + 1))
+        if [ "$quote" = "'" ]; then
+            [ "$ch" = "'" ] && quote="" || word+="$ch"
+            continue
+        fi
+        if [ "$quote" = '`' ]; then
+            # "`…`" の中身。閉じバックティックで二重引用符の状態へ戻す
+            if [ "$ch" = '`' ]; then
+                finish_segment
+                quote='"'
+            elif [ "$ch" = ' ' ] || [ "$ch" = $'\t' ]; then
+                finish_word
+            else
+                word+="$ch"
+            fi
+            continue
+        fi
+        if [ "$quote" = '"' ]; then
+            if [ "$ch" = '$' ] && [ "${cmd:i:1}" = '(' ]; then
+                # "$(…)" の中は引用符の外と同じに扱う。閉じ括弧で引用符へ戻す
+                finish_segment
+                quote=""
+                dq_depth=1
+                i=$((i + 1))
+            elif [ "$ch" = '`' ]; then
+                # "`…`" も同じ。閉じバックティックまでを引用符の外として扱う
+                finish_segment
+                quote='`'
+            elif [ "$ch" = '"' ]; then
+                quote=""
+                dq_tail=0
+            elif [ "$dq_tail" = 1 ] && { [ "$ch" = ' ' ] || [ "$ch" = $'\t' ]; }; then
+                # "$(…) の後ろ" は置換結果に続くコマンドになり得るので語を切る
+                finish_word
+            elif [ "$ch" = '\' ] && [ "$i" -lt "$n" ]; then
+                word+="${cmd:i:1}"
+                i=$((i + 1))
+            else
+                word+="$ch"
+            fi
+            continue
+        fi
+        case "$ch" in
+            "'" | '"') quote="$ch" ;;
+            '\')
+                if [ "$i" -lt "$n" ]; then
+                    [ "${cmd:i:1}" = $'\n' ] || word+="${cmd:i:1}"
+                    i=$((i + 1))
+                fi
+                ;;
+            ' ' | $'\t') finish_word ;;
+            ';' | '|' | '&' | '(' | ')' | '{' | '}' | '`')
+                # サブシェル・ブレース群・コマンド置換・バックティックの中も
+                # 独立した segment として判定する（$( は ( で切れる）
+                finish_segment
+                [ "$dq_depth" -gt 0 ] && case "$ch" in
+                    '(') dq_depth=$((dq_depth + 1)) ;;
+                    ')')
+                        dq_depth=$((dq_depth - 1))
+                        # 閉じたら二重引用符へ戻すが、続きも語として拾うため
+                        # 引用符の中でも空白区切りを効かせる（dq_tail）
+                        [ "$dq_depth" = 0 ] && {
+                            quote='"'
+                            dq_tail=1
+                        }
+                        ;;
+                esac
+                ;;
+            $'\n')
+                finish_segment
+                # 直前に heredoc が宣言されていれば、本文を delimiter まで捨てる
+                if [ -n "$delim" ]; then
+                    while [ "$i" -lt "$n" ]; do
+                        line="${cmd:i}"
+                        line="${line%%$'\n'*}"
+                        i=$((i + ${#line}))
+                        [ "$i" -lt "$n" ] && i=$((i + 1))
+                        [ "$strip_tabs" = 1 ] && line="${line#"${line%%[!$'\t']*}"}"
+                        [ "$line" = "$delim" ] && break
+                    done
+                    delim=""
+                    strip_tabs=0
+                fi
+                ;;
+            '<')
+                if [ "${cmd:i:1}" = '<' ] && [ "${cmd:i+1:1}" = '<' ]; then
+                    # <<< は here-string（データ）。演算子だけ読み飛ばして
+                    # heredoc として扱わない（後続の segment を飲み込まないため）
+                    i=$((i + 2))
+                elif [ "${cmd:i:1}" = '<' ]; then
+                    i=$((i + 1))
+                    strip_tabs=0
+                    if [ "${cmd:i:1}" = '-' ]; then
+                        strip_tabs=1
+                        i=$((i + 1))
+                    fi
+                    while [ "$i" -lt "$n" ] && { [ "${cmd:i:1}" = ' ' ] || [ "${cmd:i:1}" = $'\t' ]; }; do
+                        i=$((i + 1))
+                    done
+                    delim=""
+                    while [ "$i" -lt "$n" ]; do
+                        ch="${cmd:i:1}"
+                        case "$ch" in
+                            ' ' | $'\t' | $'\n' | ';' | '|' | '&' | '<' | '>') break ;;
+                            "'" | '"') ;;
+                            *) delim+="$ch" ;;
+                        esac
+                        i=$((i + 1))
+                    done
+                fi
+                ;;
+            *) word+="$ch" ;;
+        esac
+    done
+    finish_segment
+}
+
+split_and_classify
+
+# ops の順序は従来どおり rebase → reset → push で固定する（PASS_REASON の採用順と
+# 複合コマンドの挙動を変えないため）
 ops=""
-case "$cmd" in *"git rebase"* | *"pull --rebase"* | *"git pull -r"*) ops="$ops rebase" ;; esac
-case "$cmd" in *"git reset"*) ops="$ops reset" ;; esac
-case "$cmd" in *"git push"*) ops="$ops push" ;; esac
+[ "$found_rebase" = 1 ] && ops="$ops rebase"
+[ "$found_reset" = 1 ] && ops="$ops reset"
+[ "$found_push" = 1 ] && ops="$ops push"
 [ -n "$ops" ] || exit 0
 
 DENY_REASON=""
