@@ -36,12 +36,15 @@ input=$(cat)
 active=$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null || echo false)
 [ "$active" = "true" ] && exit 0
 
-# 稼働中のサブエージェント/チームメイトを "  - <説明> (<type>)" の行に整形する。
+# 差し戻し対象のサブエージェント/チームメイトを "  - <説明> (<type>)" の行に整形する。
+# status が running のものは成果物をまだ返しておらず、停止を促すと回収前に打ち切らせる
+# ことになるため除外する。status の欠落・未知の値は安全側に倒して対象に含める
+# （jq では null != "running" が true になるので、追加の分岐は要らない）。
 # 説明は description → agent_type → id の順に取れたものを使う（description は
 # 最大 1000 文字で切り詰められうるので、行が膨らまないよう 80 文字で丸める）。
 leaked=$(printf '%s' "$input" | jq -r '
     (.background_tasks // [])
-    | map(select(.type == "subagent" or .type == "teammate"))
+    | map(select((.type == "subagent" or .type == "teammate") and .status != "running"))
     | map("  - " + ((.description // .agent_type // .id // "(unnamed)") | .[0:80]) + " (" + (.type // "?") + ")")
     | .[]
 ' 2>/dev/null || true)

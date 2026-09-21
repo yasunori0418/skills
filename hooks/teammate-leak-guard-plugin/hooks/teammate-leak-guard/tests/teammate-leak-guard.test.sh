@@ -29,8 +29,8 @@ summary() { # json
 }
 
 TWO_SUBAGENTS='{"background_tasks":[
-  {"id":"a1","type":"subagent","status":"running","description":"design レンズでレビュー","agent_type":"diff-reviewer"},
-  {"id":"a2","type":"subagent","status":"running","description":"spec レンズでレビュー","agent_type":"diff-reviewer"}
+  {"id":"a1","type":"subagent","status":"idle","description":"design レンズでレビュー","agent_type":"diff-reviewer"},
+  {"id":"a2","type":"subagent","status":"idle","description":"spec レンズでレビュー","agent_type":"diff-reviewer"}
 ]}'
 check "two-subagents" "稼働中のサブエージェント/チームメイトが 2 体残っています:" "$(summary "$TWO_SUBAGENTS")"
 check "two-subagents-list" "  - design レンズでレビュー (subagent)" "$(context "$TWO_SUBAGENTS" | sed -n '2p')"
@@ -47,7 +47,7 @@ check "monitor-only" "" "$(context '{"background_tasks":[{"id":"m1","type":"moni
 # 混在時は subagent/teammate だけを数える
 MIXED='{"background_tasks":[
   {"id":"s1","type":"shell","status":"running","command":"tail -f log"},
-  {"id":"a1","type":"subagent","status":"running","description":"レビュー"}
+  {"id":"a1","type":"subagent","status":"idle","description":"レビュー"}
 ]}'
 check "mixed" "稼働中のサブエージェント/チームメイトが 1 体残っています:" "$(summary "$MIXED")"
 
@@ -57,10 +57,10 @@ check "missing-field" "" "$(context '{}')"
 check "broken-json" "" "$(printf 'not json' | "$GUARD" | jq -r 'select(.decision == "block") | .reason // empty' 2>/dev/null || true)"
 
 # stop_hook_active=true なら沈黙（同じ指摘の繰り返しで空転させない）
-ACTIVE='{"stop_hook_active":true,"background_tasks":[{"id":"a1","type":"subagent","status":"running","description":"レビュー"}]}'
+ACTIVE='{"stop_hook_active":true,"background_tasks":[{"id":"a1","type":"subagent","status":"idle","description":"レビュー"}]}'
 check "stop-hook-active" "" "$(context "$ACTIVE")"
 # false は通常どおり通知する
-NOT_ACTIVE='{"stop_hook_active":false,"background_tasks":[{"id":"a1","type":"subagent","status":"running","description":"レビュー"}]}'
+NOT_ACTIVE='{"stop_hook_active":false,"background_tasks":[{"id":"a1","type":"subagent","status":"idle","description":"レビュー"}]}'
 check "stop-hook-inactive" "稼働中のサブエージェント/チームメイトが 1 体残っています:" "$(summary "$NOT_ACTIVE")"
 
 # 説明のフォールバック: description 無し -> agent_type -> id
@@ -74,5 +74,48 @@ check "fallback-id" "  - a1 (subagent)" \
 # decision/reason だけを出すことを固定する。
 SHAPE=$(printf '%s' "$TEAMMATE" | "$GUARD" | jq -r '[(.decision // "-"), (if has("hookSpecificOutput") then "has-hso" else "no-hso" end)] | join(",")')
 check "output-shape" "block,no-hso" "$SHAPE"
+
+# --- status による絞り込み ---------------------------------------------------
+# running（稼働中）は成果物をまだ返していない。ここで差し戻すと回収前の停止を促して
+# しまうため対象外にする。差し戻すのは idle（空いて待機中）以降のもの。
+
+# 終了コードも併せて見る（check は引数内のコマンド置換なので exit を拾わない）
+silent_rc() { # json -> "<出力>|<終了コード>"
+    local out rc=0
+    out=$(printf '%s' "$1" | "$GUARD") || rc=$?
+    printf '%s|%s' "$out" "$rc"
+}
+
+RUNNING_ONLY='{"background_tasks":[
+  {"id":"a1","type":"subagent","status":"running","description":"design レンズでレビュー"},
+  {"id":"a2","type":"subagent","status":"running","description":"spec レンズでレビュー"}
+]}'
+check "running-only-silent" "|0" "$(silent_rc "$RUNNING_ONLY")"
+
+IDLE_TEAMMATE='{"background_tasks":[
+  {"id":"t1","type":"teammate","status":"idle","description":"rcfix-e"}
+]}'
+check "idle-blocks" "稼働中のサブエージェント/チームメイトが 1 体残っています:" "$(summary "$IDLE_TEAMMATE")"
+
+# 混在: idle のものだけが数にも一覧にも載る
+RUNNING_AND_IDLE='{"background_tasks":[
+  {"id":"a1","type":"subagent","status":"running","description":"まだレビュー中"},
+  {"id":"t1","type":"teammate","status":"idle","description":"回収済みレーン"}
+]}'
+check "mixed-status-summary" "稼働中のサブエージェント/チームメイトが 1 体残っています:" "$(summary "$RUNNING_AND_IDLE")"
+check "mixed-status-list" "  - 回収済みレーン (teammate)" "$(context "$RUNNING_AND_IDLE" | sed -n '2p')"
+# running のものが一覧のどこにも出ないことを件数で固定する
+check "mixed-status-count" "1" "$(context "$RUNNING_AND_IDLE" | grep -c '^  - ' || true)"
+
+# status で絞ったあとも type の絞り込みが効いていること。idle の shell は
+# status 条項を素通りするので、type 条項が消えたらここが落ちる。
+check "idle-shell-silent" "" \
+    "$(context '{"background_tasks":[{"id":"s1","type":"shell","status":"idle","command":"tail -f log"}]}')"
+
+# status の欠落・未知の値は従来どおり差し戻す（安全側）
+check "missing-status-blocks" "稼働中のサブエージェント/チームメイトが 1 体残っています:" \
+    "$(summary '{"background_tasks":[{"id":"a1","type":"subagent","description":"status 無し"}]}')"
+check "unknown-status-blocks" "稼働中のサブエージェント/チームメイトが 1 体残っています:" \
+    "$(summary '{"background_tasks":[{"id":"a1","type":"subagent","status":"pending","description":"未知の状態"}]}')"
 
 exit "$fail"
