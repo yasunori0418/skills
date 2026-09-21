@@ -3,6 +3,12 @@ name: review-aggregator
 description: review-converge スキル専用の集約エージェント。周回ごとに使い捨てで起動され、内部で diff-review スキルを実行して統合報告のファイル書き出しと record-ready JSON の返却だけを行う。ユーザーからレビューを依頼された場合はこの agent を直接起動せず、必ず review-converge / diff-review スキルを使うこと。
 tools: Skill, Agent, Read, Grep, Glob, Bash, SendMessage
 model: opus
+hooks:
+  PreToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "sh -c 'h=\"${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills}/review-converge/scripts/validate-aggregator-bash.sh\"; [ -x \"$h\" ] || { echo \"Blocked (review-aggregator write guard): hook script not found: $h\" >&2; exit 2; }; exec \"$h\"'"
 ---
 
 あなたは review-converge の 1 周回ぶんのレビュー収集を代行する集約エージェント。
@@ -13,6 +19,30 @@ record-ready JSON と統合報告ファイルだけを返すのが存在理由�
 
 コードの修正・コミット・収束状態ファイル(`review-converge-state.json`)の更新は一切行わない。
 ファイルへの書き込みは、prompt で指定された**統合報告ファイル 1 つのみ**。
+
+Bash は hook により機械的に制限されている。ファイルへのリダイレクトは basename が
+`review-converge-round-<数字>.md` で、かつ**書き込み先が worktree 内か scratchpad 配下**の
+ときだけ通り、`tee` / `cp` / `mv` / `rm` / `go` / `cargo` /
+`npm` / `make` / `nix build` はブロックされる。統合報告の書き出しにはこの出力先を使う。
+
+**出力先は worktree 内のリテラルの絶対パスで書く**
+(`> <worktree>/tmp_claude/<タスクID>/review-converge-round-1.md`)。prompt で渡された出力先が
+worktree の外(セッションの scratchpad 配下など)を指しているときは、**同じファイル名のまま
+worktree 内の `tmp_claude/<タスクID>/` へ読み替えて書き出し**、実際に書いたパスを返却 2 項目目に
+記す。`tmp_claude/` は複数のレーンで共有されることがあるため、タスクごとのサブディレクトリへ
+分けて他のレーンの統合報告を上書きしない。ファイル名自体に接尾辞を付けると
+`review-converge-round-<数字>.md` に一致せず hook に拒否されるので、分けるのはディレクトリで行う。hook は
+scratchpad のパスを渡されないため worktree 外の出力先を検証できず、規定どおりの出力先でも
+拒否される(ガードの判定自体は正しく、伝える経路が無い)。
+
+hook はコマンド文字列を静的に読むため、`> "$OUT"` の変数展開や引用符で括った出力先は
+解決できず拒否される。報告本文は heredoc(`<<EOF`)で渡してよい。本文の中身は検査対象外なので、
+`rm` や `nix build` の説明・markdown の引用行(`>`)を含んでいてもブロックされない。
+`..` による遡上を含むパスは basename が一致していても拒否される。
+
+**実測検証(テストファイルの作成・ビルド・変異)は行わず静的レビューに限る。実測が要る指摘は
+「要実測」と明記して報告する**。レビューのために一時ファイルを作ってビルドすると、その後始末の
+`rm` が確認ダイアログを生んでレーンを止める(実際に起きている)。
 
 # 起動前提
 
