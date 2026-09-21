@@ -29,6 +29,7 @@ worktree のパスは `wt` の設定で決まり事前に確定できないた�
 - bootstrap は `set -e` の **fail-closed**。境界の無い状態でガードレール無しに claude を起動するより、起動せず pane に失敗を残す方が安全（hook 側の fail-open とは役割が逆）
 - 既存の境界ファイルがあれば（`mode: "maintain"` が既存 worktree へ入るとき）上書きせず、`allow` を既存 ∪ 宣言の和集合にして**マージ**する（`task_id` / `branch` は宣言が正、契約外のキーは既存側を保持）。実装フェーズ中に `widen_boundary.sh` で広げた glob はこのマージで保たれる（`maintain.md`）
 - 既存ファイルが空・不正 JSON・境界の書式でない（object でない / `allow` が配列でない）ときは上書きせず**起動を中止する**（`widen_boundary.sh` の空 stdin 事故跡などを消さない）
+- 境界ファイルの親（`.claude`）が symlink のときも**起動を中止する**。worktree 作成フックが gitignored なディレクトリを別 worktree への symlink に置き換えると全レーンが同一の境界ファイルを共有し、bootstrap が書いたつもりで他レーンの宣言を上書きするため。検査は `mkdir -p` より前に置く（`mkdir -p` は symlink 越しでも成功し、続く存在検査が共有ファイルを拾ってマージ経路へ入る）
 
 ## deny 後のフロー（境界の拡張）
 

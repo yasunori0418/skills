@@ -124,7 +124,10 @@ cat <worktree>/.claude/task-boundary.json
 pane に `ERROR: 既存の境界ファイルが空・不正 JSON・境界の書式でない` が残る）。
 **消す前に `cat` で中身を見る**: widen 分の glob が入っていれば控えてから直す（消して起動し直すと
 widen 分は宣言側にしか残らない）。pane のエラーが `ERROR: jq が無いため既存の境界ファイルと
-マージできない` なら境界ファイルは壊れていない — jq を入れて起動し直す。起動失敗は「worktree が
+マージできない` なら境界ファイルは壊れていない — jq を入れて起動し直す。
+pane のエラーが `ERROR: 境界ファイルの親ディレクトリが symlink` なら、worktree 作成フックが
+gitignored な `.claude` を別 worktree への symlink に置き換えている（全レーンが同一の境界ファイルを
+共有する状態）。この worktree の `.claude` を実ディレクトリにしてから起動し直す。起動失敗は「worktree が
 消えている・使えない場合」と同じく全 pane を直接見て拾う。境界を宣言していない task はこの問題を持たない（境界ファイルを
 生成せず、hook も沈黙する）。
 
