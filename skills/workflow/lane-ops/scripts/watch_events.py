@@ -9,10 +9,13 @@ herdr の socket（NDJSON over Unix domain socket）へ `events.subscribe` を�
 
 使い方:
     python3 watch_events.py [--pane <pane_id>]... [--status <status>]... \
-        [--type <event_type>]... [--include-self] [--once]
+        [--ready] [--type <event_type>]... [--include-self] [--once]
 
 - --type 省略時は pane.agent_status_changed を購読する
 - --status を付けるとその状態に絞る（省略 = 全状態）
+- --ready は --status idle --status done と等価。ワーカーのターン終了は、その
+  pane を親がまだ見ていなければ done、見た後なら idle として届くため、
+  「手が空いた」を取りこぼさないには両方を張る必要がある
 - --once はマッチしたイベントを 1 行出力した時点で exit 0 する。Monitor が無い
   セッションでは常駐 watch は push 通知にならない（バックグラウンド Bash は
   完了時にしか親を起こさない）ため、--once の完了通知を push 通知として使い、
@@ -207,6 +210,8 @@ class ErrorResponse(TypedDict):
 
 
 DEFAULT_TYPE = "pane.agent_status_changed"
+READY_STATUSES: tuple[AgentStatus, ...] = ("idle", "done")
+"""--ready が張る状態。ターン終了は未 seen の pane で done、seen なら idle。"""
 SUB_ID = "lane-ops-watch"
 PANE_LIST_ID = "lane-ops-pane-list"
 AGENT_DETECTED_EVENT = "pane_agent_detected"
@@ -242,6 +247,8 @@ def parse_args(argv: list[str]) -> Options:
     """コマンドライン引数 -> Options（純粋: パースのみ）。
 
     --status は AgentStatus の値だけを受け付ける（不正値はサーバ往復前に弾く）。
+    --ready は READY_STATUSES を --status へ足す糖衣で、--status と重なっても
+    statuses は重複しない（重複購読は同じイベントを二重に流すため）。
     """
     parser = argparse.ArgumentParser(
         prog="watch_events.py", description="herdr socket API イベント購読フィルタ"
@@ -254,13 +261,17 @@ def parse_args(argv: list[str]) -> Options:
         metavar="STATUS",
         choices=agent_statuses(),
     )
+    parser.add_argument("--ready", action="store_true")
     parser.add_argument("--type", action="append", default=[], metavar="EVENT_TYPE")
     parser.add_argument("--include-self", action="store_true")
     parser.add_argument("--once", action="store_true")
     ns = parser.parse_args(argv[1:])
+    statuses: list[AgentStatus] = list(ns.status)
+    if ns.ready:
+        statuses.extend(READY_STATUSES)
     return Options(
         panes=tuple(ns.pane),
-        statuses=tuple(ns.status),
+        statuses=tuple(dict.fromkeys(statuses)),
         types=tuple(ns.type) or (DEFAULT_TYPE,),
         include_self=ns.include_self,
         once=ns.once,
