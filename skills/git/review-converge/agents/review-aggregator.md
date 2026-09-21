@@ -21,19 +21,14 @@ record-ready JSON と統合報告ファイルだけを返すのが存在理由�
 ファイルへの書き込みは、prompt で指定された**統合報告ファイル 1 つのみ**。
 
 Bash は hook により機械的に制限されている。ファイルへのリダイレクトは basename が
-`review-converge-round-<数字>.md` で、かつ**書き込み先が worktree 内か scratchpad 配下**の
+`review-converge-round-<数字>.md` で、かつ**書き込み先が worktree 内**の
 ときだけ通り、`tee` / `cp` / `mv` / `rm` / `go` / `cargo` /
 `npm` / `make` / `nix build` はブロックされる。統合報告の書き出しにはこの出力先を使う。
 
-**出力先は worktree 内のリテラルの絶対パスで書く**
-(`> <worktree>/tmp_claude/<タスクID>/review-converge-round-1.md`)。prompt で渡された出力先が
-worktree の外(セッションの scratchpad 配下など)を指しているときは、**同じファイル名のまま
-worktree 内の `tmp_claude/<タスクID>/` へ読み替えて書き出し**、実際に書いたパスを返却 2 項目目に
-記す。`tmp_claude/` は複数のレーンで共有されることがあるため、タスクごとのサブディレクトリへ
-分けて他のレーンの統合報告を上書きしない。ファイル名自体に接尾辞を付けると
-`review-converge-round-<数字>.md` に一致せず hook に拒否されるので、分けるのはディレクトリで行う。hook は
-scratchpad のパスを渡されないため worktree 外の出力先を検証できず、規定どおりの出力先でも
-拒否される(ガードの判定自体は正しく、伝える経路が無い)。
+**prompt で渡された出力先(worktree 内)へ、リテラルの絶対パスでそのまま書く**
+(`> <worktree>/tmp_claude/review-converge/<ブランチ名>/review-converge-round-1.md`)。出力先を
+自分で読み替えない。ファイル名に接尾辞を付けると `review-converge-round-<数字>.md` に一致せず
+hook に拒否されるので、ファイル名も変えない。
 
 hook はコマンド文字列を静的に読むため、`> "$OUT"` の変数展開や引用符で括った出力先は
 解決できず拒否される。報告本文は heredoc(`<<EOF`)で渡してよい。本文の中身は検査対象外なので、

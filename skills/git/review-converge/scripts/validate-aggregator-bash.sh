@@ -62,9 +62,9 @@ STRIPPED=$(printf '%s' "$STRIPPED" | sed -E 's#[0-9]*>>?[[:space:]]*(&[0-9]+|/de
 # 残ったリダイレクトの出力先を 1 つずつ検査する(> / >> / >| のいずれも対象)
 REPORT_RE='^review-converge-round-[0-9]+\.md$'
 # 書き込み先として許すディレクトリ。統合報告の置き場は review-converge の規定で
-# 「<STATE> と同じディレクトリ」= セッションの scratchpad、無ければ worktree 内の
-# tmp_claude/ のいずれか。basename 一致だけでは任意のディレクトリへ書けるため、
-# 解決後のパスがこのどちらかの配下にあることも要求する。
+# 「<STATE> と同じディレクトリ」= worktree 内の
+# tmp_claude/review-converge/<ブランチ名>/。basename 一致だけでは任意のディレクトリへ書けるため、
+# 解決後のパスが許可ディレクトリの配下にあることも要求する。
 # root も字句で求める。`--show-toplevel` は symlink を解決した実体パスを返すため、
 # worktree root より上に symlink がある配置では字句のままの書き込み先と食い違う。
 # CWD から `--show-prefix`(root からの相対)の分を末尾から落とせば、CWD と同じ
@@ -79,8 +79,8 @@ if git_prefix=$(git -C "$CWD" rev-parse --show-prefix 2>/dev/null); then
 fi
 # scratchpad は worktree 外にある正当な書き込み先になり得るため許可枝を残す。
 # ただし現行のハーネスはそのパスを hook へ渡さない(入力 JSON に該当キーは無く、
-# CLAUDE_SCRATCHPAD_DIR も供給されない)ため、集約エージェントには worktree 内へ
-# 読み替えて書き出させている(review-aggregator.md)。この枝は将来 scratchpad が
+# CLAUDE_SCRATCHPAD_DIR も供給されない)ため、review-converge の規定自体を
+# worktree 内へ一本化してある(SKILL.md 事前準備 2)。この枝は将来 scratchpad が
 # 供給される構成になったとき、正当な出力を deny しないための防御。
 SCRATCH_ROOT="${CLAUDE_SCRATCHPAD_DIR:-}"
 

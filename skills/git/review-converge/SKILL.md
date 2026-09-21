@@ -32,9 +32,12 @@ diff-review の責務で、こちらはその read-only 単発設計に手を触
 1. **起動ゲート(モデル判断で起動したときのみ)**: このループは**修正コミットを伴い複数周回する**ため、
    1 周目に入る前に「対象範囲(base-ref)・適用閾値・上限周回数(既定 5)・レンズ」を提示して
    ユーザーの承認を取る。`/review-converge` で明示起動された場合はこのゲートを省略してよい
-2. 状態ファイルのパスを決める。セッションの scratchpad ディレクトリ配下(無ければ
-   `$(git rev-parse --show-toplevel)/tmp_claude/`)に `review-converge-state.json` を置く。
-   以降 `<STATE>` と呼ぶ
+2. 状態ファイルのパスを決める。
+   `$(git rev-parse --show-toplevel)/tmp_claude/review-converge/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')/review-converge-state.json`
+   に置く。以降 `<STATE>` と呼ぶ。ブランチ名のサブディレクトリで分けるのは、`tmp_claude/` が
+   worktree 間で symlink 共有されうるためで、分けないとレーン間で状態ファイルと統合報告が衝突する。
+   **セッションの scratchpad は使わない**(集約エージェントの書き込みガードが出力先を worktree 内に
+   拘束しており、hook へ scratchpad のパスを伝える経路が無いため、統合報告の書き出しが拒否される)
 3. 途中から再開ではなく新規に回す場合、既存の状態を消す:
    `python3 <SKILL_DIR>/scripts/converge_state.py reset --state <STATE>`
 4. **グラウンドトゥルースと規約の確定(1 周目の前に本体で行い、全周回で固定する)**: 集約エージェントは
@@ -325,7 +328,8 @@ python3 <SKILL_DIR>/scripts/converge_state.py keep --state <STATE> \
 
 **状態ファイルの永続化**: 見送りの有無に関わらず、ループが止まったら `<STATE>` を見送りファイルと
 同じディレクトリへ `YYYYMMDD_review_converge_state.json` として複写する(`cp <STATE> <出力先>`。
-同名があれば `_2` 等の連番を付ける)。scratchpad は セッション終了で消えるため、周回ごとの
+同名があれば `_2` 等の連番を付ける)。`<STATE>` は次に新規で回したときの `reset`(事前準備 3)で
+消えるため、複写しないと周回ごとの
 指摘(lens / kind / severity / scope)・保持・差分推移が後から追えなくなる。スキルの改善効果を
 測る唯一の一次資料であり、複写しないと次の分析ができない(state が偶然残っていたから
 分析できた実例)。
