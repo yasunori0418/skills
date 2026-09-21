@@ -34,7 +34,9 @@ diff-review の責務で、こちらはその read-only 単発設計に手を触
    ユーザーの承認を取る。`/review-converge` で明示起動された場合はこのゲートを省略してよい
 2. 状態ファイルのパスを決める。
    `$(git rev-parse --show-toplevel)/tmp_claude/review-converge/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')/review-converge-state.json`
-   に置く。以降 `<STATE>` と呼ぶ。ブランチ名のサブディレクトリで分けるのは、`tmp_claude/` が
+   に置く。以降 `<STATE>` と呼ぶ。**親ディレクトリは `mkdir -p` で先に作る**(手順 3 の `reset` は
+   ファイルを消すだけで、ディレクトリを作る `record` より先に集約エージェントの統合報告の
+   書き出しが走るため、作っておかないと 1 周目の書き出しが失敗する)。ブランチ名のサブディレクトリで分けるのは、`tmp_claude/` が
    worktree 間で symlink 共有されうるためで、分けないとレーン間で状態ファイルと統合報告が衝突する。
    **セッションの scratchpad は使わない**(集約エージェントの書き込みガードが出力先を worktree 内に
    拘束しており、hook へ scratchpad のパスを伝える経路が無いため、統合報告の書き出しが拒否される)

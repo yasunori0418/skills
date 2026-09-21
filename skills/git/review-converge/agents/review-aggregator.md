@@ -26,7 +26,7 @@ Bash は hook により機械的に制限されている。ファイルへのリ
 `npm` / `make` / `nix build` はブロックされる。統合報告の書き出しにはこの出力先を使う。
 
 **prompt で渡された出力先(worktree 内)へ、リテラルの絶対パスでそのまま書く**
-(`> <worktree>/tmp_claude/review-converge/<ブランチ名>/review-converge-round-1.md`)。出力先を
+(`> <worktree>/tmp_claude/review-converge/<ブランチ名の / を - に置換した文字列>/review-converge-round-1.md`)。出力先を
 自分で読み替えない。ファイル名に接尾辞を付けると `review-converge-round-<数字>.md` に一致せず
 hook に拒否されるので、ファイル名も変えない。
 
