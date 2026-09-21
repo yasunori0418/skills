@@ -106,6 +106,62 @@ def test_scope_forbids_convention_overextension():
     assert "既存の適用範囲を超えて新しい種類の対象へ拡張適用しない" in s
 
 
+# ------------------------------------------------------------
+# 一時ファイル（rm を発生させない運用）
+# ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["implement", "maintain"])
+def test_tempfile_clause_in_both_modes(mode):
+    s = wc.render(task(mode=mode))
+    assert "一時ファイル" in s
+    assert "scratchpad の一時ファイルは消さない" in s
+    assert "`mktemp -d` で一意な名前を使う" in s
+    assert "上書きは `>|` で行う" in s
+    assert (
+        "実測検証は scratchpad に置いたコピーの上で行い、"
+        "worktree のファイルを書き換えて戻す手順は禁止" in s
+    )
+
+
+@pytest.mark.parametrize("mode", ["implement", "maintain"])
+def test_tempfile_clause_follows_commit_granularity(mode):
+    s = wc.render(task(mode=mode))
+    assert s.index("コミット粒度") < s.index("一時ファイルの扱い") < s.index("- push:")
+
+
+@pytest.mark.parametrize("mode", ["implement", "maintain"])
+def test_tempfile_clause_warns_shared_worktree_dirs(mode):
+    # tmp_claude/ 等の gitignored ディレクトリが primary への symlink で共有され、
+    # 既定名の状態ファイルを別レーンが上書きする事故が実際に起きた。
+    s = wc.render(task(mode=mode))
+    assert "`tmp_claude/` などリポジトリ内の gitignore されたディレクトリ" in s
+    assert "scratchpad と違い他レーンと実体を共有する" in s
+    assert "スキルが既定名を決めているファイルは他レーンのものかもしれない" in s
+    assert "見つけても消さず上書きしない" in s
+
+
+def test_tempfile_clause_kept_without_parent():
+    # 報告先が無いレーンでも一時ファイルの扱いは変わらない（報告条項と独立）。
+    s = wc.render(task(parent=""))
+    assert "scratchpad の一時ファイルは消さない" in s
+
+
+def test_report_clause_offers_file_input_for_command_names():
+    s = wc.render(task())
+    assert "コマンド名を含む報告は `report.sh --file <path>` を使う" in s
+    assert "本文ファイルは Write ツールで書く" in s
+    # --file を末尾に置く誤用は exit 0 のまま本文が壊れるため、先頭固定を完全形で示す。
+    # 完全形は先頭の `bash <report.sh の絶対パス>` まで含めて実行できる形であること。
+    assert f"`bash {wc.report_script()} --file <本文ファイル> orc A <マイルストーン>`" in s
+    assert "`--file` は先頭に置く" in s
+
+
+def test_report_file_guidance_omitted_without_parent():
+    s = wc.render(task(parent=""))
+    assert "--file" not in s
+
+
 def test_subagent_liveness_management():
     s = wc.render(task())
     assert "サブエージェントの生存管理" in s
