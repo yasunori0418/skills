@@ -616,9 +616,19 @@ BOUNDARY_FILE = ".claude/task-boundary.json"
 # jq が失敗して set -e で止まり、空出力は結果検査で止まるので、fail-closed の性質は同じ。
 # jq は COMMANDS 側で既に必須。jq の入力は必ずリダイレクトで渡す（positional に混ぜると
 # stdin 読みになる）。jq が失敗すれば set -e で止まり、一時ファイルは trap で消す。
+# 境界ファイルの親（.claude）が symlink なら何も書かずに止める。worktree 作成フックが
+# gitignored なディレクトリを別 worktree への symlink に置き換えると、全レーンが同一の
+# 境界ファイルを共有して互いの宣言を上書きする（書いたつもりで他レーンを壊す）。検査は
+# mkdir -p より前に置く: mkdir -p は symlink 越しでも成功し、続く [ -e "$bf" ] が共有
+# ファイルを拾ってマージ経路へ入るため、後ろに置くと検出前に書き込みが起きる。
 BOUNDARY_BOOTSTRAP = (
     "set -e; "
-    f"mkdir -p {shlex.quote(BOUNDARY_FILE.rsplit('/', 1)[0])}; "
+    f"bd={shlex.quote(BOUNDARY_FILE.rsplit('/', 1)[0])}; "
+    'if [ -L "$bd" ]; then '
+    '  echo "ERROR: 境界ファイルの親ディレクトリが symlink（worktree 作成フックが gitignored なディレクトリを symlink 化した可能性）。他レーンの境界ファイルを上書きするため起動を中止する。実ディレクトリにしてから起動し直す: $bd" >&2; '
+    "  exit 1; "
+    "fi; "
+    'mkdir -p "$bd"; '
     f"bf={shlex.quote(BOUNDARY_FILE)}; "
     'if [ -e "$bf" ]; then '
     # jq 不在を書式検査の失敗（2>/dev/null が command not found を飲む）と誤診させない。

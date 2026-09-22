@@ -756,6 +756,25 @@ def test_bootstrap_fails_closed_without_jq_and_names_the_cause(tmp_path):
     assert boundary_file(repo).read_text() == good
 
 
+def test_bootstrap_fails_closed_when_boundary_dir_is_a_symlink(tmp_path):
+    # worktree 作成フックが gitignored な .claude を別 worktree への symlink に置き換えると、
+    # 全レーンが同一の境界ファイルを共有して互いの宣言を上書きする。symlink なら他レーンの
+    # 実体へ 1 バイトも書かずに止める（マージ経路へ入る前に検出する）。
+    repo = git_repo(tmp_path)
+    other = tmp_path / "other" / boundary_file(repo).parent.name
+    other.mkdir(parents=True)
+    shared = other / boundary_file(repo).name
+    shared.write_text(json.dumps({"task_id": "D2", "branch": "br-D2", "allow": ["docs/**"]}))
+    before = shared.read_bytes()
+    boundary_file(repo).parent.symlink_to(other, target_is_directory=True)
+    t = spec([task("A", boundary=["src/**"])]).tasks[0]
+    proc = run_bootstrap(repo, po.boundary_json(t))
+    assert proc.returncode != 0
+    assert "symlink" in proc.stderr
+    assert shared.read_bytes() == before
+    assert "ARGC=" not in proc.stdout
+
+
 def test_render_lanes_section():
     out = rendered([task("A"), task("B", deps=["A"]), task("C")])
     assert "=== LANES" in out
