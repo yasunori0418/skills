@@ -3,7 +3,7 @@
 #   - スクリプト本体: 書き込み系(rm / cp / go test / ファイルへのリダイレクト) -> exit 2
 #                     参照系(git diff / rg / stderr の /dev/null 捨て)        -> exit 0
 #   - diff-reviewer.md の frontmatter にある hook の command 文字列を抽出して実行:
-#       (a) CLAUDE_PLUGIN_ROOT 未設定 + $HOME/.claude/skills に配置(nput 配置) -> 解決でき rm が exit 2
+#       (a) CLAUDE_PLUGIN_ROOT 未設定 + $HOME/.claude/skills に配置(layat 配置) -> 解決でき rm が exit 2
 #       (b) CLAUDE_PLUGIN_ROOT 未設定 + $HOME が空(スクリプト不在)             -> exit 2 + not found
 #       (c) CLAUDE_PLUGIN_ROOT=<repo>/skills/git(plugin 配置)                  -> 解決でき git diff が exit 0
 #     不在時に exit 127(非ブロック扱い)で素通しになる退行を固定する。
@@ -87,7 +87,7 @@ wired() { # label expected-exit command [env 代入...] -> exit code を検査�
     check "$label" "$expected" "$?"
 }
 
-# (a) nput 配置: $HOME/.claude/skills/diff-review/scripts/ にスクリプトがある
+# (a) layat 配置: $HOME/.claude/skills/diff-review/scripts/ にスクリプトがある
 HOME_OK="$WORK/home-ok"
 mkdir -p "$HOME_OK/.claude/skills/diff-review/scripts"
 cp "$HOOK" "$HOME_OK/.claude/skills/diff-review/scripts/"

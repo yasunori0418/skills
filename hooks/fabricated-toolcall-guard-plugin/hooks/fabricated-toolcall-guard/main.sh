@@ -53,7 +53,7 @@
 #   上記 2 つの検出（走査範囲の切り出しを含む）は jq フィルタ detect.jq に置き、
 #   本ファイルは stdin/stdout・パスの実在確認・reason の組み立て・エスカレーション
 #   判定だけを持つ。detect.jq は main.sh と同一ディレクトリに置くこと
-#   （nput 配置・plugin 直のどちらでもディレクトリ単位で並ぶ）。
+#   （layat 配置・plugin 直のどちらでもディレクトリ単位で並ぶ）。
 #   読めない場合は jq が失敗し、fail-open で黙って通る。
 #
 # 出力形式に decision/reason を使う理由（hookSpecificOutput ではなく）:
@@ -70,7 +70,7 @@
 set -euo pipefail
 
 # jq フィルタは detect.jq に分離しているので、自身の位置から解決する。
-# nput/plugin どちらの配置でも main.sh と detect.jq は同一ディレクトリに並ぶ。
+# layat/plugin どちらの配置でも main.sh と detect.jq は同一ディレクトリに並ぶ。
 # symlink 経由で起動されうるため実体パスを辿る。
 SCRIPT_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 
