@@ -9,12 +9,12 @@
     # OK: reuse root's treefmt formatter via inputs'.root.formatter.
 
     # Places curated external skills under .claude/skills/ (project mode, dev-only concern).
-    nput = {
-      url = "github:yasunori0418/nput";
+    layat = {
+      url = "github:yasunori0418/layat";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Claude Code 用スキル集（mattpocock/skills）。nput の project mode で
+    # Claude Code 用スキル集（mattpocock/skills）。layat の project mode で
     # .claude/skills/ へ配置するため flake=false。flake.lock が rev を pin する。
     matt-skills = {
       url = "github:mattpocock/skills";
@@ -45,8 +45,8 @@
         "x86_64-darwin"
       ];
       imports = [
-        inputs.nput.flakeModules.default
-        ./nput.nix
+        inputs.layat.flakeModules.default
+        ./layat.nix
       ];
       perSystem =
         { inputs', pkgs, ... }:
@@ -60,7 +60,7 @@
                   cclens = inputs'.cclens.packages.default;
                   formatter = inputs'.root.formatter;
                   skills-ref = inputs'.root.packages.skills-ref;
-                  nput = inputs'.nput.packages.nput;
+                  layat = inputs'.layat.packages.layat;
                 in
                 [
                   # Nix
@@ -89,14 +89,14 @@
                   fd
 
                   # 外部スキル（mattpocock/mizchi/anthropics）を .claude/skills/ へ配置する
-                  # nput（project mode 用に pin）
-                  nput
+                  # layat（project mode 用に pin）
+                  layat
 
                   cclens
                 ];
               shellHook = ''
                 export REPO_ROOT=$(git rev-parse --show-superproject-working-tree --show-toplevel)
-                nput apply skills -f "$REPO_ROOT/dev" --no-wait
+                layat apply skills -f "$REPO_ROOT/dev" --no-wait
               '';
             };
 

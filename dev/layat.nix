@@ -1,4 +1,4 @@
-# nput（project mode）の配置 config をまとめる flake-parts module。
+# layat（project mode）の配置 config をまとめる flake-parts module。
 # dev/flake.nix の imports が読む。root = projectRoot（git toplevel）なので
 # 配置先は repo root 配下（.claude/skills/<name>）。配置物は .gitignore 済みの ephemeral。
 #
@@ -9,7 +9,7 @@
 # ため対象外。
 { inputs, ... }:
 let
-  nputLib = inputs.nput.lib;
+  layatLib = inputs.layat.lib;
 
   # { src, subpath } を明示列挙する。リポジトリごとにツリー構造が異なるため
   # （mattpocock/skills・anthropics/skills は skills/<name>、mizchi/skills は
@@ -72,10 +72,10 @@ in
   perSystem =
     { pkgs, ... }:
     {
-      # perSystem.nput.skills → flake.nput.<system>.skills へ自動転置される（nput flakeModule）。
-      nput.skills = nputLib.mkManifest {
+      # perSystem.layat.skills → flake.layat.<system>.skills へ自動転置される（layat flakeModule）。
+      layat.skills = layatLib.mkManifest {
         inherit pkgs;
-        root = nputLib.projectRoot;
+        root = layatLib.projectRoot;
         entries = skillEntries;
       };
     };
