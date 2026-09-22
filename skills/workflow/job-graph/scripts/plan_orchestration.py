@@ -1043,7 +1043,7 @@ def render(
     )
     out.append(
         f"#   python3 {shlex.quote(str(LANE_OPS_SCRIPTS / 'watch_events.py'))}"
-        f" --once --status blocked --status idle{pane_args}"
+        f" --once --status blocked --ready{pane_args}"
     )
     out.append(
         "# イベント処理後は watch を再起動し、直後に"
