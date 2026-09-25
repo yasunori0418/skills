@@ -23,7 +23,7 @@ worktree ルートの `.claude/task-boundary.json`（hook の公開契約書式�
 
 ## 生成方式（`wt switch -x bash` の bootstrap 経由）
 
-worktree のパスは `wt` の設定で決まり事前に確定できないため、`boundary` ありの task は起動コマンドが `-x claude` ではなく `-x bash` の bootstrap 経由になる。bootstrap は **worktree 生成後・claude 起動前**に境界ファイルを置き、`exec claude "$@"` へ繋ぐ。
+worktree のパスは `wt` の設定で決まり事前に確定できないため、`boundary` ありの task は起動コマンドが `-x bash` の bootstrap 経由になる。bootstrap は **worktree 生成後・claude 起動前**に境界ファイルを置き、境界宣言なしと共通の起動末尾（`tmp_claude/` の symlink 解決先を `--add-dir` で足して `exec claude "$@"`。`launch.md` 参照）へ繋ぐ。
 
 - 境界ファイルは gitignored にする（`git rev-parse --git-path info/exclude` へ 1 行追記）。linked worktree からでも common dir へ正しく解決され、追跡ファイルを汚さず、冪等で、`wt remove` で worktree ごと消える
 - bootstrap は `set -e` の **fail-closed**。境界の無い状態でガードレール無しに claude を起動するより、起動せず pane に失敗を残す方が安全（hook 側の fail-open とは役割が逆）

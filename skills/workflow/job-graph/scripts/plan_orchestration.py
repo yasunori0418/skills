@@ -25,7 +25,7 @@ AI の責務は spec（特に depends_on の意味的判定と boundary の範�
   （`--create` を付けると Path occupied で失敗する）
 - ワーカープロンプトは herdr pane へ流し込める長さに限界があるためファイル渡し
   （--prompt-dir 配下に <task-id>.md を書き出し、起動コマンドは "$(cat <path>)" で読む）
-- 起動コマンド自体（env -u ... wt switch ... -x claude ...）も 1 行で数百文字になり、
+- 起動コマンド自体（env -u ... wt switch ... -x bash ...）も 1 行で数百文字になり、
   pane run への長文注入で「入力されたまま未実行」「途中で切れる」事故が起きた実績がある。
   そのため起動コマンドは --prompt-dir 配下の launch_<task-id>.sh へ書き出し、
   pane run には `bash <path>` の短いコマンドだけを流す
@@ -33,6 +33,9 @@ AI の責務は spec（特に depends_on の意味的判定と boundary の範�
   本スクリプトはタスク情報 JSON を渡して規約セクションを取得し、prompt へ連結する
 - boundary を宣言した task には `tmp_claude/**` を自動で追加する（PR 本文ドラフト等の
   一時出力先が境界と衝突して詰まる事故の防止）
+- worktree の `tmp_claude/` が symlink（worktree 作成フックが primary worktree の実体へ
+  張る）なら、その解決先を claude に `--add-dir` で渡す（作業ディレクトリ外として
+  書き込みのたびに確認ダイアログが出てレーンが止まる事故の防止）
 
 実行（cwd 非依存。uv が skill 直下の pyproject.toml から .venv を構築し、その中で実行）:
     uv run --project "<skill-dir>" python "<skill-dir>/scripts/plan_orchestration.py" \
@@ -595,6 +598,24 @@ ENV_STRIP_PREFIX = "env" + "".join(f" -u {v}" for v in INHERITED_SESSION_VARS)
 
 BOUNDARY_FILE = ".claude/task-boundary.json"
 
+# worktree 内で claude を起動する末尾（境界あり・なしの両経路で共有）。
+# worktree 作成フック（worktrunk の symlink-ignored 等）が gitignored な tmp_claude/ を
+# primary worktree の実体への symlink に置き換えると、claude の組み込み安全チェックは
+# symlink の解決先を作業ディレクトリ外とみなし、tmp_claude/ への書き込みのたびに確認
+# ダイアログを出す（ask ルール由来ではないので settings の permissions では消せない）。
+# 解決先を --add-dir で渡して作業ディレクトリに含める。解決先は安全チェックが見るものと
+# 同じ readlink -f の結果を使う（primary worktree の特定を別経路でやると食い違い得る）。
+# symlink でなければ作業ディレクトリ内なので何も足さない。解決先が無い（壊れた symlink）
+# ときも足さずに起動する（確認ダイアログは止まるだけだが、起動失敗はレーンが立たない）。
+# --add-dir は可変長引数なので `--add-dir=<dir>` の 1 引数形で渡す（空白区切りだと
+# 起動フラグが無いときに後続のプロンプトまでディレクトリとして食われる）。
+CLAUDE_EXEC = (
+    'if [ -L tmp_claude ] && td="$(readlink -f tmp_claude)" && [ -d "$td" ]; then '
+    '  set -- "--add-dir=$td" "$@"; '
+    "fi; "
+    'exec claude "$@"'
+)
+
 # 境界ファイルを worktree ローカルかつ gitignored に置くための bootstrap。
 # 引数は $1=境界 JSON 本文（1 行）。cwd は wt switch 後の worktree ルート。
 # 新規生成と info/exclude 登録の方式・選定理由は references/boundary.md 参照。
@@ -654,7 +675,7 @@ BOUNDARY_BOOTSTRAP = (
     f"pat='/{BOUNDARY_FILE}'; "
     'grep -qxF "$pat" "$ex" 2>/dev/null || printf \'%s\\n\' "$pat" >> "$ex"; '
     "shift; "
-    'exec claude "$@"'
+    + CLAUDE_EXEC
 )
 
 
@@ -794,11 +815,11 @@ def wt_switch(task: Task, base: str, mode: Mode) -> str:
 def launch_script(
     task: Task, base: str, plan: Plan, launch: Launch, prompt_dir: str
 ) -> LaunchScript:
-    """task の起動コマンド（env -u ... wt switch ... -x claude|bash ...）を
+    """task の起動コマンド（env -u ... wt switch ... -x bash -- -c ...）を
     スクリプト本文として組む（純粋）。
 
-    claude 引数列: 起動フラグ -> --remote-control（オプトイン）-> プロンプト（ファイルから
-    読む）。プロンプトは複数行のため直接埋め込まず "$(cat <path>)" で bash に展開させる
+    claude 引数列: --add-dir=<tmp_claude の解決先>（symlink のときだけ。CLAUDE_EXEC 参照）->
+    起動フラグ -> --remote-control（オプトイン）-> プロンプト（ファイルから読む）。プロンプトは複数行のため直接埋め込まず "$(cat <path>)" で bash に展開させる
     （wt は EXECUTE_ARGS を shell-escape して exec するので安全）。
     親セッション固有のマーカーは wt より前で断ち切る（ENV_STRIP_PREFIX 参照）。
     """
@@ -817,9 +838,12 @@ def launch_script(
             f"{flags_str}{rc_args} {prompt_ref}"
         )
     else:
+        # 境界宣言なしも -x bash 経由（tmp_claude の symlink 解決は worktree 内でしか
+        # できないため。CLAUDE_EXEC 参照）。
         cmd = (
             f"{ENV_STRIP_PREFIX} {switch}"
-            f" -x claude --{flags_str}{rc_args} {prompt_ref}"
+            f" -x bash -- -c {shlex.quote(CLAUDE_EXEC)} {shlex.quote('wt-launch-' + task.id)}"
+            f"{flags_str}{rc_args} {prompt_ref}"
         )
     where = "既存 worktree へ switch" if plan.mode.uses_existing_worktree else f"base={base}"
     body = "\n".join(
@@ -853,14 +877,14 @@ def render(
 
     COMMANDS は herdr の JSON 応答から ID を掴む shell ブロックで出力する（jq 必須）。
     implement では、レーン先頭の workspace 作成 / 後続段の tab 作成 → root pane への
-    `wt switch --create ... -x claude` 流し込み、stacked の PR 作成ゲート、
+    `wt switch --create ... -x bash` 流し込み、stacked の PR 作成ゲート、
     プロンプトのファイル渡しまでを列挙する。後続段の workspace ID はラベルから
     `herdr workspace list` で再解決する（wave 間で shell が変わっても動くように）。
     herdr 呼び出しは全て `--session "$HSESSION"` を明示し、COMMANDS を別 shell へ
     コピペしても親と同じセッションへレーンが並ぶようにする。
 
     maintain では全 task が独立レーンなので tab 作成も PR 作成ゲートも出さず、流し込みは
-    `wt switch ... -x claude`（--create なし）になる。PR / VERIFY 節も出力しない
+    `wt switch ... -x bash`（--create なし）になる。PR / VERIFY 節も出力しない
     （SCHEDULE / LANES / BOUNDARY / MONITOR は mode ごとに文言が変わる）。
     代わりに LANES の直後へ STACK 節を出し、レーン割当から落ちた spec の stack 関係
     （どの PR がどの PR の上に載るか）を表示だけする。
