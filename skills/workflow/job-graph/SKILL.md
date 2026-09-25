@@ -89,7 +89,7 @@ job-plan は同一プラグインの兄弟スキルとして配置される前�
 
 `mode: "maintain"`（Phase 4.5）では `PR` / `VERIFY` が出力されないため、上記のうち **PR 戦略と計画突合の基準だけを差し替える**（起動ウェーブとレーン割当・コミット計画・承認代行の宣言はそのまま含める。ただし承認代行の宣言は maintain では**対話ゲートへの応答だけ**に掛かる — push は都度親が承認し、PR 作成はワーカー規約が禁じているので対象が無い）。差し替え先は「どのレビュー指摘へ対応するか」と「push は都度親が承認する」ことの明記（詳細は `references/maintain.md`）。
 
-承認なしで worktree 生成・エージェント起動に進まない（maintain も同じ。plan 承認は取る）。親自身の permission mode に注意: `auto` では classifier が `send_instruction.sh` 等の指示送信を止めて運用が停滞した実績がある（恒久策は dotfiles#341）。親は `acceptEdits` 等の明示モードで動かす。
+承認なしで worktree 生成・エージェント起動に進まない（maintain も同じ。plan 承認は取る）。親・レーンの permission mode は `auto` でよい。auto で classifier が判定するのは allow の効かない Bash だけで、`send_instruction.sh` 等の指示送信は 2026-09-20〜22 の 3 ジョブで拒否 0 件（素の形は dotfiles#341 で allow 済み）。拒否されたら別経路で迂回せず、ユーザーに確認して同じ形の狭い allow（`Bash(bash */lane-ops/scripts/<name> *)`）を足す。レーンを止めるのは permission mode ではなく `permissions.ask` の確認ダイアログで、ask は auto でも classifier より先に評価されるため `acceptEdits` にしても減らない（Phase 3 の承認代行で捌く）。レーンへ `bypassPermissions` / `dontAsk` は渡さない（`bypassPermissions` は承認ゲートの無いエージェントの起動として auto の既定ルール「Create Unsafe Agents」に当たり、起動自体が拒否されうる。`dontAsk` は事前許可の無い操作を確認なしで拒否するため、ask 対象の push 等でレーンが進めなくなる）。
 
 ### Phase 2: worktree 作成・レーン起動
 
