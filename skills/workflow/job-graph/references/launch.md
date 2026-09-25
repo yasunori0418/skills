@@ -65,7 +65,7 @@ exec env -u CLAUDE_CODE_CHILD_SESSION -u … wt switch feat-a -x claude -- "$(ca
 
 ## 起動オプション
 
-`--model` / `--permission-mode` / `--effort` / `--remote-control` は `-x claude --` の後・プロンプトより前に置かれる。解決順は spec の task 個別指定 > CLI フラグ（グローバル既定）> 未指定（claude 自身のデフォルト）。`--remote-control <名前>` を付けると起動した claude へ claude.ai 等からリモート接続できる。
+`--model` / `--permission-mode` / `--effort` / `--remote-control` は `-x claude --` の後・プロンプトより前に置かれる。解決順は spec の task 個別指定 > CLI フラグ（グローバル既定）> 未指定（claude 自身のデフォルト。permission mode はユーザー設定の `defaultMode` に従う）。permission mode は `auto` が既定の推奨で、`bypassPermissions` / `dontAsk` は指定しない（SKILL.md Phase 1 末尾の注意を参照）。`--remote-control <名前>` を付けると起動した claude へ claude.ai 等からリモート接続できる。
 
 ## 起動確認
 
