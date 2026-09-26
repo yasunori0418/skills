@@ -87,7 +87,7 @@ UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/session-insights" uv run --project
 - `UV_PROJECT_ENVIRONMENT` は必ず付ける。スキルディレクトリは read-only（nix store / plugin cache）に配置され得るため、venv をスキル配下に作れない
 - `CLAUDE_CONFIG_DIR` はスクリプトが自動で解決する。手で `~/.claude` をハードコードしない
 - サブコマンドは `paths` / `sessions` / `prompts` / `cost` / `search` / `transcript` の 6 つだけ。横断集計を求められたら cclens へ回す
-- `search` はヒットした位置（セッション ID・JSONL の行番号・スニペット）を返すだけの横断照会。本文を読む深掘りは従来どおり `transcript` で 3〜5 件に絞る。既定の上限は `--limit 40` / `--per-session 3` / `--context 80` で、切られても `total_hits` と `by_session`（ヒットの多いセッション上位 30 件）で全体量が分かる
+- `search` はヒットした位置（セッション ID・JSONL の行番号・スニペット）を返すだけの横断照会。本文を読む深掘りは従来どおり `transcript` で 3〜5 件に絞る。`--tool` だけを指定すると、検索対象はツールの入出力（`tool-input` / `tool-result`）に絞られる。既定の上限は `--limit 40` / `--per-session 3` / `--context 80` で、切られても `total_hits` と `by_session`（ヒットの多いセッション上位 30 件）で全体量が分かる
 - `cost` は ccusage への薄い移譲（`ccusage claude daily|session --json --timezone Asia/Tokyo`）。ccusage が無ければ理由を返して停止するので、その観点だけ落として分析は続ける
 - 各サブコマンドの limit / max-chars 既定値はコンテキスト保護のための意図的な制約。
   - 外すときは範囲を十分絞ってから
@@ -138,7 +138,7 @@ UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/session-insights" uv run --project
 ```
 
 - `--include-tools` はツール名と説明（`brief`）だけ。実行したコマンドと結果（`status` / `exit_code` / stdout・stderr の抜粋）まで読むときは `--tool-detail` を使う
-- `--tool-detail` の上限: 入力 `--input-chars 300`、結果 `--result-chars 600`（先頭と末尾を残す）、セッション全体 `--detail-budget 30000`（超えた分は `brief` に戻り、件数が `detail_omitted` に出る）。`--tail` と組み合わせて範囲を絞ってから使う
+- `--tool-detail` の上限: 入力 `--input-chars 300`、結果 `--result-chars 600`（先頭と末尾を残す）、セッション全体 `--detail-budget 30000`（既定の上限でおよそ 30 ツール分。超えた分は `brief` に戻り、件数が `detail_omitted` に出る）。予算は古いターンから順に消費するので、末尾を詳しく読むときは `--tail` で範囲を絞ってから使う
 - 成功した Bash の `exit_code` は `null`（transcript に記録が無い）。`status: ok` を成功と読む
 
 深掘りは**仮説の検証に必要なセッションに絞る**（目安: 1観点あたり3〜5件まで）。
