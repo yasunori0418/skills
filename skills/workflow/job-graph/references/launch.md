@@ -13,7 +13,7 @@
 
 ## 起動スクリプト方式（pane run には `bash <path>` だけを流す）
 
-起動コマンド本体（`env -u … wt switch … -x claude|bash …`）は `plan_orchestration.py` が `<prompt-dir>/launch_<task-id>.sh` へ書き出し、pane には `bash <path>` の短い 1 行だけを流す。
+起動コマンド本体（`env -u … wt switch … -x bash -- -c …`）は `plan_orchestration.py` が `<prompt-dir>/launch_<task-id>.sh` へ書き出し、pane には `bash <path>` の短い 1 行だけを流す。
 
 起動コマンドは 1 行で数百文字（境界 bootstrap を含むと 1000 文字超）になり、`pane run` への長文注入で **pane に入力されたまま実行されない**・**途中で切れて壊れたコマンドが走る** 事故が実運用で起きた。スクリプト化すれば pane へ渡す文字列は短く一定になり、起動コマンドの完全形がファイルとして残る（handoff からの再投入も `bash <path>` で済む）。スクリプトの中身は下記の解説どおりで、**手で書き換えない**（spec を直して再生成する）。
 
@@ -29,11 +29,12 @@ PANE_A=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
 herdr --session "$HSESSION" pane run "$PANE_A" 'bash <prompt-dir>/launch_A.sh'
 ```
 
-`launch_A.sh` の中身（`exec env -u CLAUDE_CODE_CHILD_SESSION -u … wt switch --create refactor-logger --base main -x claude -- "$(cat <prompt-dir>/A.md)"`）について:
+`launch_A.sh` の中身（`exec env -u CLAUDE_CODE_CHILD_SESSION -u … wt switch --create refactor-logger --base main -x bash -- -c '<起動末尾>' wt-launch-A "$(cat <prompt-dir>/A.md)"`）について:
 
 - workspace のラベルはレーン先頭のブランチ名。並列レーンは workspace が並ぶ
 - `--no-focus` でユーザーの現在フォーカスを奪わない。ID は JSON 応答から jq で掴む（予測しない）
-- `wt switch --create` が worktree を作り、`-x claude` で wt プロセスが claude に置き換わる。herdr は pane 内の claude をエージェントとして自動認識する（スクリプトは `exec` で wt に置き換わるので bash は残らない）
+- `wt switch --create` が worktree を作り、`-x bash` の起動末尾が worktree 内で `exec claude` する。herdr は pane 内の claude をエージェントとして自動認識する（スクリプト・起動末尾とも `exec` で置き換わるので bash は残らない）
+- 起動末尾は、worktree の `tmp_claude/` が symlink（worktree 作成フックが primary worktree の実体へ張る）ならその解決先を `--add-dir=<解決先>` で claude に渡す。渡さないと claude の組み込み安全チェックが解決先を作業ディレクトリ外とみなし、`tmp_claude/` への書き込みのたびに確認ダイアログでレーンが止まる（ask ルール由来ではないので settings の permissions では消せない）。symlink の解決は worktree 内でしかできないため、境界宣言の有無に関わらず `-x bash` 経由になる。境界宣言ありは起動末尾の前に境界ファイルの bootstrap が入る（`boundary.md`）
 - **`--base` は常に明示**される。省略すると wt はリポジトリの default branch から切るため、spec の意図と食い違う事故が起きる（**`mode: "maintain"` を除く**。下記「maintain の起動」参照）
 - プロンプトは複数行のためファイル渡し。`"$(cat <path>)"` はスクリプトを実行する bash が展開し、wt が EXECUTE_ARGS として shell-escape して claude に 1 引数で渡す
 
@@ -55,17 +56,17 @@ PANE_B=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id')
 
 ```bash
 # launch_A.sh の中身（maintain）
-exec env -u CLAUDE_CODE_CHILD_SESSION -u … wt switch feat-a -x claude -- "$(cat <prompt-dir>/A.md)"
+exec env -u CLAUDE_CODE_CHILD_SESSION -u … wt switch feat-a -x bash -- -c '<起動末尾>' wt-launch-A "$(cat <prompt-dir>/A.md)"
 ```
 
 - **`--create` を既存 worktree に付けると `Path occupied` で失敗する**。`--create` なしの `wt switch` は既存 worktree があればそこへ入るだけで冪等
 - base の指定は無い。既存ブランチへ入るだけなので base は関与しない（worktree が消えていた場合だけ `wt switch` が新規作成し、そのときは既存ブランチの tip から復元される）
-- `-x claude` / `-x bash --`（境界宣言あり）の使い分けは implement と同じ
+- 起動末尾・境界 bootstrap の有無は implement と同じ
 - 既存 worktree への switch では `pre-start` / `post-start` フックが**走らない**（`direnv allow`・`.env` コピー等は worktree 作成時のみ）。環境が整っている前提で起動する
 
 ## 起動オプション
 
-`--model` / `--permission-mode` / `--effort` / `--remote-control` は `-x claude --` の後・プロンプトより前に置かれる。解決順は spec の task 個別指定 > CLI フラグ（グローバル既定）> 未指定（claude 自身のデフォルト。permission mode はユーザー設定の `defaultMode` に従う）。permission mode は `auto` が既定の推奨で、`bypassPermissions` / `dontAsk` は指定しない（SKILL.md Phase 1 末尾の注意を参照）。`--remote-control <名前>` を付けると起動した claude へ claude.ai 等からリモート接続できる。
+`--model` / `--permission-mode` / `--effort` / `--remote-control` は `-x bash -- -c '<起動末尾>' <$0>` の後・プロンプトより前に置かれ、起動末尾がそのまま claude へ渡す。解決順は spec の task 個別指定 > CLI フラグ（グローバル既定）> 未指定（claude 自身のデフォルト。permission mode はユーザー設定の `defaultMode` に従う）。permission mode は `auto` が既定の推奨で、`bypassPermissions` / `dontAsk` は指定しない（SKILL.md Phase 1 末尾の注意を参照）。`--remote-control <名前>` を付けると起動した claude へ claude.ai 等からリモート接続できる。
 
 ## 起動確認
 

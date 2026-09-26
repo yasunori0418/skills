@@ -323,18 +323,25 @@ python3 <SKILL_DIR>/scripts/converge_state.py keep --state <STATE> \
 
 - 出力先はセッション・プロジェクトの一時出力規約があればそれに従い、無ければ
   `$(git rev-parse --show-toplevel)/tmp_claude/` に置く。ファイル名は
-  `YYYYMMDD_review_converge_deferred.md`。セッションの scratchpad は使わない
+  `YYYYMMDD_review_converge_deferred_<ブランチ>.md`(`<ブランチ>` は `<STATE>` のサブディレクトリ名と
+  同じ `git rev-parse --abbrev-ref HEAD | tr '/' '-'`)。セッションの scratchpad は使わない
   (セッション終了で消え、後続の転記素材にならない)
 - ファイル冒頭に「PR 本文の見送り節、または別 issue へ転記して出口を作ること」を明記する
   (PR 本文への反映自体は PR 作成時の作業で、このスキルの範囲外)
 
 **状態ファイルの永続化**: 見送りの有無に関わらず、ループが止まったら `<STATE>` を見送りファイルと
-同じディレクトリへ `YYYYMMDD_review_converge_state.json` として複写する(`cp <STATE> <出力先>`。
+同じディレクトリへ `YYYYMMDD_review_converge_state_<ブランチ>.json` として複写する(`cp -n <STATE> <出力先>`。
 同名があれば `_2` 等の連番を付ける)。`<STATE>` は次に新規で回したときの `reset`(事前準備 3)で
 消えるため、複写しないと周回ごとの
 指摘(lens / kind / severity / scope)・保持・差分推移が後から追えなくなる。スキルの改善効果を
 測る唯一の一次資料であり、複写しないと次の分析ができない(state が偶然残っていたから
 分析できた実例)。
+
+見送りファイル・状態ファイルの複写は**最終的な名前へ 1 回で書く**。ファイル名に `<ブランチ>` を
+含めるのは、`tmp_claude/` が worktree 間で symlink 共有されうるため(並列レーンで同じ日に回すと
+固定名では衝突する)。一時出力規約などで別の接尾辞を付けたいときも、その名前を先に決めてから
+直接書く。固定名で書いてから改名・`rm` で片付ける手順は取らない(`rm` は確認ダイアログになり、
+並列レーンではそこで止まる)。
 
 ## 制約
 

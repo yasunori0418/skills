@@ -479,7 +479,8 @@ def test_launch_script_uses_wt_and_prompt_file():
     script = po.launch_script(plan.tasks[0], "main", plan, po.Launch(), "/tmp/jg-prompts")
     assert script.path == "/tmp/jg-prompts/launch_A.sh"
     assert script.body.startswith("#!/usr/bin/env bash\n")
-    assert "wt switch --create br-A --base main -x claude --" in script.body
+    assert "wt switch --create br-A --base main -x bash --" in script.body
+    assert "wt-launch-A" in script.body
     assert "$(cat /tmp/jg-prompts/A.md)" in script.body
     assert "\nexec env -u" in script.body
 
@@ -490,7 +491,7 @@ def test_launch_script_maintain_switches_into_existing_worktree():
     # default_base を既定から変えて、base の値そのものが漏れないことまで見る
     # （既定の "main" のままだと「落ちている」のか「たまたま一致」なのか区別できない）。
     body = launch_body([task("A")], default_base="develop", mode="maintain")["A"]
-    assert "wt switch br-A -x claude --" in body
+    assert "wt switch br-A -x bash --" in body
     assert "--create" not in body
     assert "--base" not in body
     assert "develop" not in body
@@ -509,7 +510,7 @@ def test_launch_script_maintain_keeps_boundary_bootstrap():
 def test_launch_script_implement_keeps_create_and_base():
     # implement 側は従来どおり --create と解決済み base を明示する（退行検知）。
     bodies = launch_body([task("A"), task("A2", boundary=["src/**"])])
-    assert "wt switch --create br-A --base main -x claude --" in bodies["A"]
+    assert "wt switch --create br-A --base main -x bash --" in bodies["A"]
     assert "wt switch --create br-A2 --base main -x bash --" in bodies["A2"]
 
 
@@ -538,7 +539,7 @@ def test_render_pane_run_only_references_launch_script():
 def test_launch_script_strips_parent_session_markers():
     # 各レーンは独立したセッションなので、親セッション固有のマーカーを wt より前で
     # 断ち切る（放置するとレーンが親の子と誤認され transcript 保存が切られる）。
-    # 境界あり（-x bash bootstrap）・境界なし（-x claude）の両経路が対象。
+    # 境界あり（bootstrap）・境界なし（起動末尾のみ）の両経路が対象。
     bodies = launch_body([task("A"), task("B", boundary=["pkg/**"])])
     assert len(bodies) == 2
     for body in bodies.values():
@@ -775,6 +776,72 @@ def test_bootstrap_fails_closed_when_boundary_dir_is_a_symlink(tmp_path):
     assert "ARGC=" not in proc.stdout
 
 
+
+# ------------------------------------------------------------
+# CLAUDE_EXEC（統合: tmp_claude の symlink 解決先を --add-dir で渡す）
+# ------------------------------------------------------------
+#
+# worktree 作成フックが tmp_claude/ を primary worktree の実体への symlink にすると、
+# claude の安全チェックは解決先を作業ディレクトリ外とみなして書き込みごとに確認を出す。
+# 境界あり（bootstrap 経由）・境界なし（CLAUDE_EXEC 単体）の両経路で実行して確かめる。
+
+EXEC_PROBE = po.CLAUDE_EXEC.replace(
+    'exec claude "$@"', 'printf "ARGC=%s\\n" "$#"; printf "ARG=%s\\n" "$@"'
+)
+
+
+def run_exec(cwd, *claude_args):
+    return subprocess.run(
+        ["bash", "-c", EXEC_PROBE, "argv0", *claude_args],
+        cwd=cwd, capture_output=True, text=True,
+    )
+
+
+def shared_tmp_claude(tmp_path, repo):
+    primary = tmp_path / "primary" / "tmp_claude"
+    primary.mkdir(parents=True)
+    (repo / "tmp_claude").symlink_to(primary, target_is_directory=True)
+    return primary.resolve()
+
+
+def test_bootstrap_adds_symlinked_tmp_claude_as_add_dir(tmp_path):
+    repo = git_repo(tmp_path)
+    target = shared_tmp_claude(tmp_path, repo)
+    t = spec([task("A", boundary=["src/**"])]).tasks[0]
+    proc = run_bootstrap(repo, po.boundary_json(t), "--model", "opus", "the prompt")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == [
+        "ARGC=4", f"ARG=--add-dir={target}", "ARG=--model", "ARG=opus", "ARG=the prompt",
+    ]
+
+
+def test_claude_exec_adds_symlinked_tmp_claude_without_flags(tmp_path):
+    # 境界なし・起動フラグなし: --add-dir は 1 引数形なので、直後のプロンプトが
+    # ディレクトリとして食われない位置関係（プロンプトが末尾の独立した引数）を保つ。
+    repo = git_repo(tmp_path)
+    target = shared_tmp_claude(tmp_path, repo)
+    proc = run_exec(repo, "the prompt")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == ["ARGC=2", f"ARG=--add-dir={target}", "ARG=the prompt"]
+
+
+def test_claude_exec_leaves_args_when_tmp_claude_is_not_a_symlink(tmp_path):
+    # 実ディレクトリ（作業ディレクトリ内）・不在のどちらも何も足さない。
+    repo = git_repo(tmp_path)
+    assert run_exec(repo, "the prompt").stdout.splitlines() == ["ARGC=1", "ARG=the prompt"]
+    (repo / "tmp_claude").mkdir()
+    assert run_exec(repo, "the prompt").stdout.splitlines() == ["ARGC=1", "ARG=the prompt"]
+
+
+def test_claude_exec_still_launches_on_dangling_symlink(tmp_path):
+    # 解決先が無い symlink でも起動は止めない（確認ダイアログは止まるだけだが、
+    # 起動失敗はレーンが立たない）。
+    repo = git_repo(tmp_path)
+    (repo / "tmp_claude").symlink_to(tmp_path / "missing", target_is_directory=True)
+    proc = run_exec(repo, "the prompt")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == ["ARGC=1", "ARG=the prompt"]
+
 def test_render_lanes_section():
     out = rendered([task("A"), task("B", deps=["A"]), task("C")])
     assert "=== LANES" in out
@@ -966,7 +1033,7 @@ def test_write_prompts_and_main_maintain(tmp_path):
     assert rc == 0
     for tid, branch in (("A", "br-A"), ("B", "br-B")):
         body = (pdir / f"launch_{tid}.sh").read_text(encoding="utf-8")
-        assert f"wt switch {branch} -x claude --" in body
+        assert f"wt switch {branch} -x bash --" in body
         assert "--create" not in body and "--base" not in body
     # maintain 規約が連結されていること（implement の規約と取り違えていない）。
     assert "`/review-converge`・`/pr-create` は実行しない" in (pdir / "A.md").read_text(encoding="utf-8")

@@ -79,8 +79,8 @@ issue 番号は実装フェーズと同じものを使い続ける）。
 
 ```sh
 grep -n 'wt switch' tmp_claude/<job>/job-graph/prompts/launch_*.sh
-# => exec env -u ... wt switch <branch> -x claude -- "$(cat .../<id>.md)"
-#    境界宣言のある task は -x claude ではなく -x bash -- の bootstrap 形になる
+# => exec env -u ... wt switch <branch> -x bash -- -c '...' wt-launch-<id> "$(cat .../<id>.md)"
+#    境界宣言のある task は $0 が wt-boundary-<id> の bootstrap 形になる
 #    どちらの形でも `wt switch` の直後に --create / --base が現れないこと
 ```
 
