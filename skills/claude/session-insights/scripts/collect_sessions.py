@@ -32,7 +32,7 @@ Claude Code のセッション JSONL を機械的に読み出して JSON で標�
 サブコマンド:
   paths       設定ディレクトリの解決結果とデータ配置の一覧
   sessions    セッション一覧（メタデータ + セッション単位の集計値）
-  prompts     ユーザープロンプトの抽出（本文つき）
+  prompts     ユーザープロンプトの抽出（本文つき。--grep でキーワード絞り込み）
   cost        トークン消費と金額（USD）を ccusage から取得
   search      全セッションの本文（プロンプト・応答・ツールの入出力）を横断検索
   transcript  単一セッションの会話を時系列で抽出（--tool-detail でツールの入力と結果も）
@@ -726,29 +726,44 @@ def sessions_report(stats: list, filters: SessionFilters, limit: int) -> dict:
     }
 
 
-def prompts_report(stats: list, filters: SessionFilters, limit: int, max_chars: int) -> dict:
+def prompts_report(
+    stats: list,
+    filters: SessionFilters,
+    limit: int,
+    max_chars: int,
+    matcher: Matcher | None = None,
+) -> dict:
+    """matcher 指定時は一致したプロンプトだけを、一致箇所を中心に切り詰めて返す。"""
     items = []
     total = 0
+    matched = 0
     for s in stats:
         for p in s.prompts:
             total += 1
+            if matcher is not None and matcher.search(p.text) is None:
+                continue
+            matched += 1
             if limit > 0 and len(items) >= limit:
                 continue
+            text = clip(p.text, max_chars) if matcher is None else clip_around(p.text, matcher, max_chars)
             items.append(
                 {
                     "ts": jst_str(p.ts),
                     "session_id": s.session_id[:8],
                     "project": s.project,
                     "chars": len(p.text),
-                    "text": clip(p.text, max_chars),
+                    "text": text,
                 }
             )
-    return {
-        "filters": filters.as_dict(),
-        "total_prompts": total,
-        "shown": len(items),
-        "prompts": items,
-    }
+    out = {"filters": filters.as_dict()}
+    if matcher is not None:
+        out["query"] = matcher.as_dict()
+    out["total_prompts"] = total
+    if matcher is not None:
+        out["matched"] = matched
+    out["shown"] = len(items)
+    out["prompts"] = items
+    return out
 
 
 def tool_detail_entry(block: dict, result: ToolResult | None, opts: ToolDetailOptions) -> dict:
@@ -1020,6 +1035,25 @@ def search_report(
     }
 
 
+def clip_around(text: str, matcher: Matcher, max_chars: int) -> str:
+    """伏せ字後の本文を、一致箇所が max_chars の窓に入るよう切り詰める。
+
+    省いた側には `…(+N字)` を付ける。一致箇所が伏せ字の中なら先頭から切り詰める。
+    """
+    red = redact(text)
+    if max_chars <= 0 or len(red) <= max_chars:
+        return red
+    m = matcher.search(red)
+    if m is None:
+        return truncate(red, max_chars)
+    start = m.start() - (max_chars - (m.end() - m.start())) // 2
+    start = max(0, min(start, len(red) - max_chars))
+    end = start + max_chars
+    head = f"(+{start}字)…" if start > 0 else ""
+    tail = f"…(+{len(red) - end}字)" if end < len(red) else ""
+    return head + red[start:end] + tail
+
+
 def ccusage_argv(since: str | None, until: str | None, session: str | None) -> list:
     """フィルタ条件から ccusage の引数列を組み立てる（純粋）。
 
@@ -1261,8 +1295,9 @@ def cmd_sessions(config_dir: Path, args) -> None:
 
 def cmd_prompts(config_dir: Path, args) -> None:
     filters = SessionFilters.from_args(args)
+    matcher = build_matcher(args) if args.grep else None
     stats = load_sessions(config_dir, filters)
-    emit(prompts_report(stats, filters, args.limit, args.max_chars))
+    emit(prompts_report(stats, filters, args.limit, args.max_chars, matcher))
 
 
 def cmd_cost(config_dir: Path, args) -> None:
@@ -1300,11 +1335,15 @@ def split_csv(value: str | None) -> tuple:
 
 
 def build_matcher(args) -> Matcher:
-    """CLI 引数から Matcher を作る。不正な正規表現はエラーを出して終了する。"""
+    """CLI 引数から Matcher を作る（search は pattern、prompts は --grep）。
+
+    不正な正規表現はエラーを出して終了する。
+    """
+    pattern = getattr(args, "pattern", None) or args.grep
     try:
-        return Matcher(args.pattern, regex=args.regex, case_sensitive=args.case_sensitive)
+        return Matcher(pattern, regex=args.regex, case_sensitive=args.case_sensitive)
     except re.error as e:
-        emit({"error": f"正規表現が不正: {e}", "pattern": args.pattern})
+        emit({"error": f"正規表現が不正: {e}", "pattern": pattern})
         sys.exit(1)
 
 
@@ -1404,6 +1443,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "--max-chars", type=int, default=240, help="本文の切り詰め文字数（既定240、0で無制限）"
     )
+    sp.add_argument("--grep", help="本文にこの語を含むプロンプトだけを出す（一致箇所を中心に切り詰める）")
+    sp.add_argument("--regex", action="store_true", help="--grep を正規表現として扱う")
+    sp.add_argument("--case-sensitive", action="store_true", help="--grep で大文字小文字を区別する")
 
     sp = sub.add_parser("cost", help="トークン消費と金額（USD）を ccusage から取得")
     sp.add_argument("--since", help="JST日付 YYYY-MM-DD")

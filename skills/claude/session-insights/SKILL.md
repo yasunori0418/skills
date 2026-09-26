@@ -112,7 +112,7 @@ command -v cclens; command -v ccusage   # 使える道具の確認
 |---|---|
 | コンテキスト効率・compact 多発・トークン消費 | cclens `overhead` / `usage`（`--by day` 等）+ script `sessions` の `peak_context`/`compactions` |
 | コスト（USD） | script `cost` |
-| プロンプトの書き方・依頼の傾向・手戻り | cclens `prompts`（種別の分布）+ script `prompts`（本文）、深掘りは script `transcript` |
+| プロンプトの書き方・依頼の傾向・手戻り | cclens `prompts`（種別の分布）+ script `prompts`（本文。特定の言い回しは `--grep`）、深掘りは script `transcript` |
 | スキル・コマンドの活用度（死にスキル検出） | cclens `usage` + `inventory` + `waste` |
 | ツール運用（MCP・サブエージェント・並列化） | cclens `sql`（`events` の `agent_spawn` 等）+ script `sessions` の `agents`/`subagent_files` |
 | 設定の妥当性（permissions・hooks・モデル選択） | cclens `inventory` / `overhead` + script `sessions` の `models`/`permission_modes` |

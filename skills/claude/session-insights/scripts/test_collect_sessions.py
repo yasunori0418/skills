@@ -647,6 +647,40 @@ class TestSearch(unittest.TestCase):
         self.assertEqual(rep["by_session"][0]["hits"], 5)
 
 
+class TestPromptsGrep(unittest.TestCase):
+    def setUp(self):
+        recs = [
+            user_rec("前置き" * 50 + " tmp_claude を ignore して " + "後書き" * 50),
+            user_rec("関係ない依頼"),
+        ]
+        self.stats = [cs.reduce_session("abcdef12-3456", "-home-u-proj", recs)]
+
+    def test_filters_and_counts(self):
+        rep = cs.prompts_report(self.stats, cs.SessionFilters(), 10, 40, cs.Matcher("TMP_CLAUDE"))
+        self.assertEqual((rep["total_prompts"], rep["matched"], rep["shown"]), (2, 1, 1))
+        self.assertEqual(rep["query"]["pattern"], "TMP_CLAUDE")
+
+    def test_clips_around_match(self):
+        rep = cs.prompts_report(self.stats, cs.SessionFilters(), 10, 40, cs.Matcher("tmp_claude"))
+        text = rep["prompts"][0]["text"]
+        self.assertIn("tmp_claude", text)
+        self.assertRegex(text, r"^\(\+\d+字\)…")
+        self.assertRegex(text, r"…\(\+\d+字\)$")
+
+    def test_without_matcher_is_unchanged(self):
+        rep = cs.prompts_report(self.stats, cs.SessionFilters(), 10, 240)
+        self.assertNotIn("matched", rep)
+        self.assertNotIn("query", rep)
+        self.assertEqual(rep["shown"], 2)
+
+    def test_clip_around_edges(self):
+        m = cs.Matcher("x")
+        self.assertEqual(cs.clip_around("abc x", m, 0), "abc x")
+        self.assertEqual(cs.clip_around("x" + "a" * 20, m, 5), "xaaaa…(+16字)")
+        token = "ghp_" + "x" * 36
+        self.assertNotIn("xxxx", cs.clip_around(token + " tail", cs.Matcher("xxxx"), 10))
+
+
 class TestCcusageArgv(unittest.TestCase):
     def test_daily_with_range(self):
         argv = cs.ccusage_argv("2026-07-01", "2026-07-08", None)
@@ -777,8 +811,14 @@ class TestCli(unittest.TestCase):
         # Agent 起動由来（bbbb2222）は既定で走査対象外
         self.assertEqual(rep["scanned_sessions"], 2)
 
+    def test_prompts_grep(self):
+        rep = self.run_cli("prompts", "--grep", "最初")
+        self.assertEqual(rep["matched"], 1)
+        self.assertEqual(rep["prompts"][0]["text"], "最初の依頼")
+        self.assertEqual(self.run_cli("prompts", "--grep", "存在しない語")["shown"], 0)
+
     def test_search_rejects_bad_input(self):
-        for argv in (["search", "(", "--regex"], ["search", "x", "--in", "bogus"]):
+        for argv in (["search", "(", "--regex"], ["search", "x", "--in", "bogus"], ["prompts", "--grep", "(", "--regex"]):
             with self.subTest(argv=argv):
                 buf = io.StringIO()
                 with redirect_stdout(buf), self.assertRaises(SystemExit) as cm:
