@@ -13,6 +13,18 @@ description: ユーザーからのファイル出力依頼（分析結果・調�
 2. **優先順位**: ただし、プロジェクト固有のClaude Codeの機能（プロジェクトCLAUDE.md／スキル等）によって出力先が指定された場合は、指定された出力先に出力する
 3. 依頼内容や出力される作業内容に基づいて、適切な名前をつけたファイルを出力する
 
+## git の ignore 保証（`tmp-agents/` へ書き出す前に必須）
+
+`tmp-agents/` へ最初に書き出す前に、プロジェクトルートで次を実行する。ignore の有無を推測で判断しない。
+
+```bash
+bash <skill-dir>/scripts/ensure-ignored.sh
+```
+
+- `already-ignored`（`.gitignore`・`.git/info/exclude`・全体設定のいずれかで ignore 済み）/ `added: <path>`（`.git/info/exclude` へ追記した）/ `skip: not a git repository` のいずれも、そのまま書き出してよい
+- exit 1 のときは書き出さず、stderr の理由をユーザーへ報告する（`.gitignore` の否定パターンなど）
+- **`.gitignore` は編集しない**。ignore の追加はスクリプトが `.git/info/exclude` へ行い、コミット対象を汚さない
+
 ## ファイル名の命名規則
 
 - 説明的で短い名前（例：`nvim_config_analysis.md`、`lua_syntax_errors.txt`）
