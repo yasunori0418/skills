@@ -65,8 +65,8 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 | `git-skills`                                 | `./skills/git`                        | commit-flow / commit-plan / diff-review / rebase-flow / reset-flow / review-converge + git-guard hook |
 | `github-skills`                              | `./skills/github`                     | gh-ci-investigate / gh-fetch / gh-push / pr-create           |
 | `nix-skills`                                 | `./skills/nix`                        | nix-cache-check / nix-devenv / nix-store-lookup              |
-| `claude-skills`                              | `./skills/claude`                     | Claude Code 固有: response-format / session-insights / tmp-output / project-session |
-| `workflow-skills`                            | `./skills/workflow`                   | エージェント非依存: external-writes / job-graph / job-plan / lane-ops / test-targeted |
+| `claude-skills`                              | `./skills/claude`                     | Claude Code 固有: response-format / session-insights / project-session |
+| `workflow-skills`                            | `./skills/workflow`                   | エージェント非依存: external-writes / job-graph / job-plan / lane-ops / test-targeted / tmp-output |
 | `product-skills`                             | `./skills/product`                    | basic-design / biz-translate / def-done / feature-spec / product-spec |
 | `testing-skills`                             | `./skills/testing`                    | ISTQB/JSTQB テストプロセス: test-plan / test-monitor / test-analyze / test-design / test-implement / test-execute / test-report / test-review |
 | `learning-skills`                            | `./skills/learning`                   | 学習・理解支援: quizzing / tutoring / navigating(AI 利用で生じた理解負債の返済) |
