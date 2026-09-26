@@ -50,8 +50,8 @@ def test_judge_unexpected_file_fails():
     assert res.scale_limit == 0  # 規模照合なし
 
 
-def test_judge_excludes_tmp_claude():
-    changed = (fc("src/a.py", 5, 0), fc("tmp_claude/x/pr-body.md", 500, 0))
+def test_judge_excludes_tmp_agents():
+    changed = (fc("src/a.py", 5, 0), fc("tmp-agents/x/pr-body.md", 500, 0))
     res = cs.judge(changed, cs.Expectation(files=("src/a.py",), scale=5))
     assert res.verdict is cs.Verdict.PASS
     assert res.changed == (fc("src/a.py", 5, 0),)

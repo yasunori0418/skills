@@ -141,17 +141,17 @@ def test_check_plan_file_reports_missing(tmp_path):
     assert po.check_plan_file(po.Plan(default_base="main", tasks=())) == []
 
 
-def test_boundary_auto_adds_tmp_claude():
+def test_boundary_auto_adds_tmp_agents():
     plan = spec([task("A", boundary=["src/**"]), task("B")])
-    assert "tmp_claude/**" in plan.tasks[0].boundary
+    assert "tmp-agents/**" in plan.tasks[0].boundary
     assert "src/**" in plan.tasks[0].boundary
     # 未宣言の task には足さない（境界ファイル自体を生成しない従来動作の維持）
     assert plan.tasks[1].boundary == ()
 
 
 def test_boundary_auto_add_is_idempotent():
-    plan = spec([task("A", boundary=["src/**", "tmp_claude/**"])])
-    assert plan.tasks[0].boundary.count("tmp_claude/**") == 1
+    plan = spec([task("A", boundary=["src/**", "tmp-agents/**"])])
+    assert plan.tasks[0].boundary.count("tmp-agents/**") == 1
 
 
 # ------------------------------------------------------------
@@ -310,7 +310,7 @@ def test_boundary_json_single_line_contract():
     data = json.loads(po.boundary_json(t))
     assert data["task_id"] == "B2"
     assert data["branch"] == "feat-b2"
-    assert "src/x/**" in data["allow"] and "tmp_claude/**" in data["allow"]
+    assert "src/x/**" in data["allow"] and "tmp-agents/**" in data["allow"]
     assert "\n" not in po.boundary_json(t)
 
 
@@ -343,13 +343,13 @@ def test_contract_payload_to_json_carries_plan_and_scope_check():
     payload = po.contract_payload(t, "main", plan, po.Launch(parent_name="orc"))
     assert payload == po.ContractPayload(
         task_id="A", branch="br-A", base="main", default_base="main",
-        boundary=("src/**", "tmp_claude/**"), issue=3, parent="orc", plan="/abs/plan.md",
+        boundary=("src/**", "tmp-agents/**"), issue=3, parent="orc", plan="/abs/plan.md",
         scope_check=po.scope_check_command(t, "main"),
     )
     data = json.loads(payload.to_json())
     assert data["plan"] == "/abs/plan.md"
     assert data["scope_check"].endswith("--expected-file a.py")
-    assert data["boundary"] == ["src/**", "tmp_claude/**"]
+    assert data["boundary"] == ["src/**", "tmp-agents/**"]
     assert data["mode"] == "implement"
 
 
@@ -625,7 +625,7 @@ def test_bootstrap_fresh_worktree_writes_declaration(tmp_path):
     proc = run_bootstrap(repo, po.boundary_json(t), "--model", "opus", "the prompt")
     assert proc.returncode == 0, proc.stderr
     assert json.loads(boundary_file(repo).read_text()) == {
-        "task_id": "A", "branch": "br-A", "allow": ["src/**", "tmp_claude/**"],
+        "task_id": "A", "branch": "br-A", "allow": ["src/**", "tmp-agents/**"],
     }
     assert "ARGC=3" in proc.stdout and "ARG=the prompt" in proc.stdout
     status = subprocess.run(
@@ -646,14 +646,14 @@ def test_bootstrap_merges_existing_allow_and_keeps_widened_globs(tmp_path):
     repo = git_repo(tmp_path)
     boundary_file(repo).parent.mkdir()
     boundary_file(repo).write_text(json.dumps(
-        {"task_id": "old-id", "branch": "br-A", "allow": ["src/**", "tmp_claude/**", "docs/**"]}
+        {"task_id": "old-id", "branch": "br-A", "allow": ["src/**", "tmp-agents/**", "docs/**"]}
     ))
     t = spec([task("A", boundary=["src/**", "tests/**"])]).tasks[0]
     proc = run_bootstrap(repo, po.boundary_json(t))
     assert proc.returncode == 0, proc.stderr
     written = json.loads(boundary_file(repo).read_text())
     assert written["task_id"] == "A" and written["branch"] == "br-A"
-    assert set(written["allow"]) == {"src/**", "tmp_claude/**", "docs/**", "tests/**"}
+    assert set(written["allow"]) == {"src/**", "tmp-agents/**", "docs/**", "tests/**"}
     assert len(written["allow"]) == 4  # 重複なし
     # mv で書き直しても exclude 登録済み ＝ git status に現れない
     status = subprocess.run(
@@ -675,7 +675,7 @@ def test_bootstrap_merge_keeps_unknown_top_level_keys(tmp_path):
     assert proc.returncode == 0, proc.stderr
     written = json.loads(boundary_file(repo).read_text())
     assert written["note"] == "kept"
-    assert sorted(written["allow"]) == ["src/**", "tmp_claude/**"]
+    assert sorted(written["allow"]) == ["src/**", "tmp-agents/**"]
 
 
 @pytest.mark.parametrize(
@@ -692,7 +692,7 @@ def test_bootstrap_merge_tolerates_missing_allow(tmp_path, existing):
     proc = run_bootstrap(repo, po.boundary_json(t))
     assert proc.returncode == 0, proc.stderr
     written = json.loads(boundary_file(repo).read_text())
-    assert sorted(written["allow"]) == ["src/**", "tmp_claude/**"]
+    assert sorted(written["allow"]) == ["src/**", "tmp-agents/**"]
 
 
 def test_bootstrap_merge_is_idempotent(tmp_path):
@@ -703,7 +703,7 @@ def test_bootstrap_merge_is_idempotent(tmp_path):
         proc = run_bootstrap(repo, po.boundary_json(t))
         assert proc.returncode == 0, proc.stderr
     written = json.loads(boundary_file(repo).read_text())
-    assert sorted(written["allow"]) == ["src/**", "tmp_claude/**"]
+    assert sorted(written["allow"]) == ["src/**", "tmp-agents/**"]
     exclude = repo / ".git" / "info" / "exclude"
     hits = [ln for ln in exclude.read_text().splitlines() if "task-boundary" in ln]
     assert hits == [f"/{po.BOUNDARY_FILE}"]
@@ -778,10 +778,10 @@ def test_bootstrap_fails_closed_when_boundary_dir_is_a_symlink(tmp_path):
 
 
 # ------------------------------------------------------------
-# CLAUDE_EXEC（統合: tmp_claude の symlink 解決先を --add-dir で渡す）
+# CLAUDE_EXEC（統合: tmp-agents の symlink 解決先を --add-dir で渡す）
 # ------------------------------------------------------------
 #
-# worktree 作成フックが tmp_claude/ を primary worktree の実体への symlink にすると、
+# worktree 作成フックが tmp-agents/ を primary worktree の実体への symlink にすると、
 # claude の安全チェックは解決先を作業ディレクトリ外とみなして書き込みごとに確認を出す。
 # 境界あり（bootstrap 経由）・境界なし（CLAUDE_EXEC 単体）の両経路で実行して確かめる。
 
@@ -797,16 +797,16 @@ def run_exec(cwd, *claude_args):
     )
 
 
-def shared_tmp_claude(tmp_path, repo):
-    primary = tmp_path / "primary" / "tmp_claude"
+def shared_tmp_agents(tmp_path, repo):
+    primary = tmp_path / "primary" / "tmp-agents"
     primary.mkdir(parents=True)
-    (repo / "tmp_claude").symlink_to(primary, target_is_directory=True)
+    (repo / "tmp-agents").symlink_to(primary, target_is_directory=True)
     return primary.resolve()
 
 
-def test_bootstrap_adds_symlinked_tmp_claude_as_add_dir(tmp_path):
+def test_bootstrap_adds_symlinked_tmp_agents_as_add_dir(tmp_path):
     repo = git_repo(tmp_path)
-    target = shared_tmp_claude(tmp_path, repo)
+    target = shared_tmp_agents(tmp_path, repo)
     t = spec([task("A", boundary=["src/**"])]).tasks[0]
     proc = run_bootstrap(repo, po.boundary_json(t), "--model", "opus", "the prompt")
     assert proc.returncode == 0, proc.stderr
@@ -815,21 +815,21 @@ def test_bootstrap_adds_symlinked_tmp_claude_as_add_dir(tmp_path):
     ]
 
 
-def test_claude_exec_adds_symlinked_tmp_claude_without_flags(tmp_path):
+def test_claude_exec_adds_symlinked_tmp_agents_without_flags(tmp_path):
     # 境界なし・起動フラグなし: --add-dir は 1 引数形なので、直後のプロンプトが
     # ディレクトリとして食われない位置関係（プロンプトが末尾の独立した引数）を保つ。
     repo = git_repo(tmp_path)
-    target = shared_tmp_claude(tmp_path, repo)
+    target = shared_tmp_agents(tmp_path, repo)
     proc = run_exec(repo, "the prompt")
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.splitlines() == ["ARGC=2", f"ARG=--add-dir={target}", "ARG=the prompt"]
 
 
-def test_claude_exec_leaves_args_when_tmp_claude_is_not_a_symlink(tmp_path):
+def test_claude_exec_leaves_args_when_tmp_agents_is_not_a_symlink(tmp_path):
     # 実ディレクトリ（作業ディレクトリ内）・不在のどちらも何も足さない。
     repo = git_repo(tmp_path)
     assert run_exec(repo, "the prompt").stdout.splitlines() == ["ARGC=1", "ARG=the prompt"]
-    (repo / "tmp_claude").mkdir()
+    (repo / "tmp-agents").mkdir()
     assert run_exec(repo, "the prompt").stdout.splitlines() == ["ARGC=1", "ARG=the prompt"]
 
 
@@ -837,7 +837,7 @@ def test_claude_exec_still_launches_on_dangling_symlink(tmp_path):
     # 解決先が無い symlink でも起動は止めない（確認ダイアログは止まるだけだが、
     # 起動失敗はレーンが立たない）。
     repo = git_repo(tmp_path)
-    (repo / "tmp_claude").symlink_to(tmp_path / "missing", target_is_directory=True)
+    (repo / "tmp-agents").symlink_to(tmp_path / "missing", target_is_directory=True)
     proc = run_exec(repo, "the prompt")
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.splitlines() == ["ARGC=1", "ARG=the prompt"]

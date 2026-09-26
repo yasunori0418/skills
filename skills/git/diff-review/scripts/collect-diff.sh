@@ -65,7 +65,7 @@ sum_numstat() {
 
 # 規定パス外のグラウンドトゥルース候補の探索範囲(git pathspec ではなく find 相対パス)。
 # 「仕様・設計・テストケースらしい名前」だけを拾い、無関係な md を混ぜない。
-CANDIDATE_DIRS=(tmp_claude docs doc design specs spec)
+CANDIDATE_DIRS=(tmp-agents docs doc design specs spec)
 CANDIDATE_NAME_PATTERNS=('*spec*.md' '*basic-design*.md' '*basic_design*.md' '*test-case*.md' '*test_case*.md' '*要件*.md' '*仕様*.md')
 CANDIDATE_LIMIT=20 # これを超える候補は打ち切って件数だけ報告する(コンテキスト保護)
 
@@ -85,7 +85,7 @@ emit_confirmed_paths() { # root target...
 }
 
 # 規定パス外の候補を探索して相対パスで列挙する(確定済みパスは除く)。
-# gitignored なファイル(tmp_claude/ 等)も対象にするため git ls-files は使わない。
+# gitignored なファイル(tmp-agents/ 等)も対象にするため git ls-files は使わない。
 find_candidates() { # root confirmed_list
     local root="$1" confirmed="$2"
     local dir args=() first=1 p

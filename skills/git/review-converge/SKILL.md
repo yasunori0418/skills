@@ -33,10 +33,10 @@ diff-review の責務で、こちらはその read-only 単発設計に手を触
    1 周目に入る前に「対象範囲(base-ref)・適用閾値・上限周回数(既定 5)・レンズ」を提示して
    ユーザーの承認を取る。`/review-converge` で明示起動された場合はこのゲートを省略してよい
 2. 状態ファイルのパスを決める。
-   `$(git rev-parse --show-toplevel)/tmp_claude/review-converge/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')/review-converge-state.json`
+   `$(git rev-parse --show-toplevel)/tmp-agents/review-converge/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')/review-converge-state.json`
    に置く。以降 `<STATE>` と呼ぶ。**親ディレクトリは `mkdir -p` で先に作る**(手順 3 の `reset` は
    ファイルを消すだけで、ディレクトリを作る `record` より先に集約エージェントの統合報告の
-   書き出しが走るため、作っておかないと 1 周目の書き出しが失敗する)。ブランチ名のサブディレクトリで分けるのは、`tmp_claude/` が
+   書き出しが走るため、作っておかないと 1 周目の書き出しが失敗する)。ブランチ名のサブディレクトリで分けるのは、`tmp-agents/` が
    worktree 間で symlink 共有されうるためで、分けないとレーン間で状態ファイルと統合報告が衝突する。
    **セッションの scratchpad は使わない**(集約エージェントの書き込みガードが出力先を worktree 内に
    拘束しており、hook へ scratchpad のパスを伝える経路が無いため、統合報告の書き出しが拒否される)
@@ -322,7 +322,7 @@ python3 <SKILL_DIR>/scripts/converge_state.py keep --state <STATE> \
 **見送りファイル**として書き出す:
 
 - 出力先はセッション・プロジェクトの一時出力規約があればそれに従い、無ければ
-  `$(git rev-parse --show-toplevel)/tmp_claude/` に置く。ファイル名は
+  `$(git rev-parse --show-toplevel)/tmp-agents/` に置く。ファイル名は
   `YYYYMMDD_review_converge_deferred_<ブランチ>.md`(`<ブランチ>` は `<STATE>` のサブディレクトリ名と
   同じ `git rev-parse --abbrev-ref HEAD | tr '/' '-'`)。セッションの scratchpad は使わない
   (セッション終了で消え、後続の転記素材にならない)
@@ -338,7 +338,7 @@ python3 <SKILL_DIR>/scripts/converge_state.py keep --state <STATE> \
 分析できた実例)。
 
 見送りファイル・状態ファイルの複写は**最終的な名前へ 1 回で書く**。ファイル名に `<ブランチ>` を
-含めるのは、`tmp_claude/` が worktree 間で symlink 共有されうるため(並列レーンで同じ日に回すと
+含めるのは、`tmp-agents/` が worktree 間で symlink 共有されうるため(並列レーンで同じ日に回すと
 固定名では衝突する)。一時出力規約などで別の接尾辞を付けたいときも、その名前を先に決めてから
 直接書く。固定名で書いてから改名・`rm` で片付ける手順は取らない(`rm` は確認ダイアログになり、
 並列レーンではそこで止まる)。

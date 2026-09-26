@@ -132,10 +132,10 @@ def test_tempfile_clause_follows_commit_granularity(mode):
 
 @pytest.mark.parametrize("mode", ["implement", "maintain"])
 def test_tempfile_clause_warns_shared_worktree_dirs(mode):
-    # tmp_claude/ 等の gitignored ディレクトリが primary への symlink で共有され、
+    # tmp-agents/ 等の gitignored ディレクトリが primary への symlink で共有され、
     # 既定名の状態ファイルを別レーンが上書きする事故が実際に起きた。
     s = wc.render(task(mode=mode))
-    assert "`tmp_claude/` などリポジトリ内の gitignore されたディレクトリ" in s
+    assert "`tmp-agents/` などリポジトリ内の gitignore されたディレクトリ" in s
     assert "scratchpad と違い他レーンと実体を共有する" in s
     assert "スキルが既定名を決めているファイルは他レーンのものかもしれない" in s
     assert "見つけても消さず上書きしない" in s

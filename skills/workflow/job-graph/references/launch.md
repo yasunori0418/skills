@@ -34,7 +34,7 @@ herdr --session "$HSESSION" pane run "$PANE_A" 'bash <prompt-dir>/launch_A.sh'
 - workspace のラベルはレーン先頭のブランチ名。並列レーンは workspace が並ぶ
 - `--no-focus` でユーザーの現在フォーカスを奪わない。ID は JSON 応答から jq で掴む（予測しない）
 - `wt switch --create` が worktree を作り、`-x bash` の起動末尾が worktree 内で `exec claude` する。herdr は pane 内の claude をエージェントとして自動認識する（スクリプト・起動末尾とも `exec` で置き換わるので bash は残らない）
-- 起動末尾は、worktree の `tmp_claude/` が symlink（worktree 作成フックが primary worktree の実体へ張る）ならその解決先を `--add-dir=<解決先>` で claude に渡す。渡さないと claude の組み込み安全チェックが解決先を作業ディレクトリ外とみなし、`tmp_claude/` への書き込みのたびに確認ダイアログでレーンが止まる（ask ルール由来ではないので settings の permissions では消せない）。symlink の解決は worktree 内でしかできないため、境界宣言の有無に関わらず `-x bash` 経由になる。境界宣言ありは起動末尾の前に境界ファイルの bootstrap が入る（`boundary.md`）
+- 起動末尾は、worktree の `tmp-agents/` が symlink（worktree 作成フックが primary worktree の実体へ張る）ならその解決先を `--add-dir=<解決先>` で claude に渡す。渡さないと claude の組み込み安全チェックが解決先を作業ディレクトリ外とみなし、`tmp-agents/` への書き込みのたびに確認ダイアログでレーンが止まる（ask ルール由来ではないので settings の permissions では消せない）。symlink の解決は worktree 内でしかできないため、境界宣言の有無に関わらず `-x bash` 経由になる。境界宣言ありは起動末尾の前に境界ファイルの bootstrap が入る（`boundary.md`）
 - **`--base` は常に明示**される。省略すると wt はリポジトリの default branch から切るため、spec の意図と食い違う事故が起きる（**`mode: "maintain"` を除く**。下記「maintain の起動」参照）
 - プロンプトは複数行のためファイル渡し。`"$(cat <path>)"` はスクリプトを実行する bash が展開し、wt が EXECUTE_ARGS として shell-escape して claude に 1 引数で渡す
 

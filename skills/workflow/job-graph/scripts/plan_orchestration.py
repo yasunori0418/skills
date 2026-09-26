@@ -31,9 +31,9 @@ AI の責務は spec（特に depends_on の意味的判定と boundary の範�
   pane run には `bash <path>` の短いコマンドだけを流す
 - ワーカー規約（報告・凍結・承認の振る舞い）の正本は lane-ops の worker_contract.py。
   本スクリプトはタスク情報 JSON を渡して規約セクションを取得し、prompt へ連結する
-- boundary を宣言した task には `tmp_claude/**` を自動で追加する（PR 本文ドラフト等の
+- boundary を宣言した task には `tmp-agents/**` を自動で追加する（PR 本文ドラフト等の
   一時出力先が境界と衝突して詰まる事故の防止）
-- worktree の `tmp_claude/` が symlink（worktree 作成フックが primary worktree の実体へ
+- worktree の `tmp-agents/` が symlink（worktree 作成フックが primary worktree の実体へ
   張る）なら、その解決先を claude に `--add-dir` で渡す（作業ディレクトリ外として
   書き込みのたびに確認ダイアログが出てレーンが止まる事故の防止）
 
@@ -51,7 +51,7 @@ AI の責務は spec（特に depends_on の意味的判定と boundary の範�
 spec の形:
 {
   "default_base": "main",
-  "plan": "tmp_claude/<job>/plan.md",
+  "plan": "tmp-agents/<job>/plan.md",
   "mode": "implement",
   "tasks": [
     {"id": "A",  "branch": "refactor-logger",  "depends_on": [],     "prompt": "...",
@@ -320,9 +320,9 @@ def parse_spec(data: object) -> Plan:
     return Plan(default_base=default_base, tasks=tuple(tasks), plan=plan_path, mode=mode)
 
 
-# 境界宣言に必ず含める glob。PR 本文ドラフト等の一時出力先（tmp_claude/）が
+# 境界宣言に必ず含める glob。PR 本文ドラフト等の一時出力先（tmp-agents/）が
 # 境界外だと PR 作成フェーズで必ず deny に当たるため、宣言時に自動で足す。
-DEFAULT_BOUNDARY_GLOBS = ("tmp_claude/**",)
+DEFAULT_BOUNDARY_GLOBS = ("tmp-agents/**",)
 
 
 def with_default_boundary(boundary: tuple[str, ...]) -> tuple[str, ...]:
@@ -599,9 +599,9 @@ ENV_STRIP_PREFIX = "env" + "".join(f" -u {v}" for v in INHERITED_SESSION_VARS)
 BOUNDARY_FILE = ".claude/task-boundary.json"
 
 # worktree 内で claude を起動する末尾（境界あり・なしの両経路で共有）。
-# worktree 作成フック（worktrunk の symlink-ignored 等）が gitignored な tmp_claude/ を
+# worktree 作成フック（worktrunk の symlink-ignored 等）が gitignored な tmp-agents/ を
 # primary worktree の実体への symlink に置き換えると、claude の組み込み安全チェックは
-# symlink の解決先を作業ディレクトリ外とみなし、tmp_claude/ への書き込みのたびに確認
+# symlink の解決先を作業ディレクトリ外とみなし、tmp-agents/ への書き込みのたびに確認
 # ダイアログを出す（ask ルール由来ではないので settings の permissions では消せない）。
 # 解決先を --add-dir で渡して作業ディレクトリに含める。解決先は安全チェックが見るものと
 # 同じ readlink -f の結果を使う（primary worktree の特定を別経路でやると食い違い得る）。
@@ -610,7 +610,7 @@ BOUNDARY_FILE = ".claude/task-boundary.json"
 # --add-dir は可変長引数なので `--add-dir=<dir>` の 1 引数形で渡す（空白区切りだと
 # 起動フラグが無いときに後続のプロンプトまでディレクトリとして食われる）。
 CLAUDE_EXEC = (
-    'if [ -L tmp_claude ] && td="$(readlink -f tmp_claude)" && [ -d "$td" ]; then '
+    'if [ -L tmp-agents ] && td="$(readlink -f tmp-agents)" && [ -d "$td" ]; then '
     '  set -- "--add-dir=$td" "$@"; '
     "fi; "
     'exec claude "$@"'
@@ -818,7 +818,7 @@ def launch_script(
     """task の起動コマンド（env -u ... wt switch ... -x bash -- -c ...）を
     スクリプト本文として組む（純粋）。
 
-    claude 引数列: --add-dir=<tmp_claude の解決先>（symlink のときだけ。CLAUDE_EXEC 参照）->
+    claude 引数列: --add-dir=<tmp-agents の解決先>（symlink のときだけ。CLAUDE_EXEC 参照）->
     起動フラグ -> --remote-control（オプトイン）-> プロンプト（ファイルから読む）。プロンプトは複数行のため直接埋め込まず "$(cat <path>)" で bash に展開させる
     （wt は EXECUTE_ARGS を shell-escape して exec するので安全）。
     親セッション固有のマーカーは wt より前で断ち切る（ENV_STRIP_PREFIX 参照）。
@@ -838,7 +838,7 @@ def launch_script(
             f"{flags_str}{rc_args} {prompt_ref}"
         )
     else:
-        # 境界宣言なしも -x bash 経由（tmp_claude の symlink 解決は worktree 内でしか
+        # 境界宣言なしも -x bash 経由（tmp-agents の symlink 解決は worktree 内でしか
         # できないため。CLAUDE_EXEC 参照）。
         cmd = (
             f"{ENV_STRIP_PREFIX} {switch}"

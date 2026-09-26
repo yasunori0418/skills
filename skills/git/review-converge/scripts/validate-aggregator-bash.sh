@@ -63,7 +63,7 @@ STRIPPED=$(printf '%s' "$STRIPPED" | sed -E 's#[0-9]*>>?[[:space:]]*(&[0-9]+|/de
 REPORT_RE='^review-converge-round-[0-9]+\.md$'
 # 書き込み先として許すディレクトリ。統合報告の置き場は review-converge の規定で
 # 「<STATE> と同じディレクトリ」= worktree 内の
-# tmp_claude/review-converge/<ブランチ名の / を - に置換した文字列>/。basename 一致だけでは
+# tmp-agents/review-converge/<ブランチ名の / を - に置換した文字列>/。basename 一致だけでは
 # 任意のディレクトリへ書けるため、
 # 解決後のパスが許可ディレクトリの配下にあることも要求する。
 # root も字句で求める。`--show-toplevel` は symlink を解決した実体パスを返すため、
@@ -97,7 +97,7 @@ while IFS= read -r target; do
     fi
 
     # `..` による遡上を拒否する。正規化はシンボリックリンクを辿らず字句上で行う
-    # (worktree 内の tmp_claude は primary リポジトリへの symlink であり、実体を
+    # (worktree 内の tmp-agents は primary リポジトリへの symlink であり、実体を
     #  解決すると規定の出力先が worktree 外と判定されるため)
     if [[ "$target" == *'..'* ]]; then
         deny "相対パスの遡上(..)を含む書き込み先は不可: ${target}"
@@ -110,7 +110,7 @@ while IFS= read -r target; do
     while [[ "$resolved" == *//* ]]; do resolved="${resolved//\/\//\/}"; done
     while [[ "$resolved" == *"/./"* ]]; do resolved="${resolved//\/.\//\/}"; done
     # 前方一致は字句同士で行う(root も CWD と同じ系で求めてある)。symlink は
-    # 辿らないので、worktree 内の tmp_claude が外を指す symlink でも許可される。
+    # 辿らないので、worktree 内の tmp-agents が外を指す symlink でも許可される。
     in_allowed=0
     for root in "$WORKTREE_ROOT" "$SCRATCH_ROOT"; do
         [[ -n "$root" ]] || continue

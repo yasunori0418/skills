@@ -96,7 +96,7 @@ REQ-01 と REQ-02 を満たす。
 
 ## 6. 引き渡し
 
-- 起動: `/job-graph tmp_claude/demo/plan.md`
+- 起動: `/job-graph tmp-agents/demo/plan.md`
 """
 
 
@@ -137,13 +137,13 @@ def tasks_ok() -> list[dict[str, object]]:
 
 
 def spec_ok(
-    plan: str = "tmp_claude/demo/plan.md", tasks: list[dict[str, object]] | None = None
+    plan: str = "tmp-agents/demo/plan.md", tasks: list[dict[str, object]] | None = None
 ) -> dict[str, object]:
     return {"default_base": "main", "plan": plan, "tasks": tasks_ok() if tasks is None else tasks}
 
 
 CWD = "/repo"
-PLAN_PATH = "tmp_claude/demo/plan.md"
+PLAN_PATH = "tmp-agents/demo/plan.md"
 
 
 def verdict(plan_text: str, spec: dict[str, object], plan_path: str = PLAN_PATH) -> cps.Verdict:
@@ -208,15 +208,15 @@ def test_pass_on_consistent_inputs() -> None:
 
 def test_auto_boundary_is_ignored_on_both_sides() -> None:
     tasks = tasks_ok()
-    tasks[0]["boundary"] = ["pkg/logger/**", "tmp_claude/**"]
+    tasks[0]["boundary"] = ["pkg/logger/**", "tmp-agents/**"]
     assert errors(verdict(PLAN_OK, spec_ok(tasks=tasks))) == []
 
 
 def test_plan_path_relative_resolution_matches_job_graph_rule() -> None:
     # spec の plan は cwd 基準で絶対化される。引数側も同じ規則で揃えてから比較する。
-    assert errors(verdict(PLAN_OK, spec_ok(), plan_path="/repo/tmp_claude/demo/plan.md")) == []
-    assert errors(verdict(PLAN_OK, spec_ok(plan="/repo/tmp_claude/demo/plan.md"))) == []
-    assert errors(verdict(PLAN_OK, spec_ok(plan="./tmp_claude/../tmp_claude/demo/plan.md"))) == []
+    assert errors(verdict(PLAN_OK, spec_ok(), plan_path="/repo/tmp-agents/demo/plan.md")) == []
+    assert errors(verdict(PLAN_OK, spec_ok(plan="/repo/tmp-agents/demo/plan.md"))) == []
+    assert errors(verdict(PLAN_OK, spec_ok(plan="./tmp-agents/../tmp-agents/demo/plan.md"))) == []
 
 
 # ---------- compare: FAIL ----------
@@ -275,7 +275,7 @@ def test_fail_on_missing_chapter() -> None:
 
 
 def test_fail_on_plan_path_mismatch_or_empty() -> None:
-    errs = errors(verdict(PLAN_OK, spec_ok(plan="tmp_claude/other/plan.md")))
+    errs = errors(verdict(PLAN_OK, spec_ok(plan="tmp-agents/other/plan.md")))
     assert len(errs) == 1 and "spec の plan が渡した plan.md と一致しない" in errs[0]
     errs = errors(verdict(PLAN_OK, spec_ok(plan="")))
     assert errs == ["spec の plan が空（plan.md のパスを書く）"]
@@ -338,12 +338,12 @@ def test_parse_spec_rejects_broken_structure() -> None:
 
 
 def run_cli(tmp_path: Path, plan_text: str, spec: dict[str, object]) -> subprocess.CompletedProcess[str]:
-    job = tmp_path / "tmp_claude" / "demo"
+    job = tmp_path / "tmp-agents" / "demo"
     (job / "job-graph").mkdir(parents=True)
     (job / "plan.md").write_text(plan_text, encoding="utf-8")
     (job / "job-graph" / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
     return subprocess.run(
-        [sys.executable, str(SCRIPT), "tmp_claude/demo/plan.md", "tmp_claude/demo/job-graph/spec.json"],
+        [sys.executable, str(SCRIPT), "tmp-agents/demo/plan.md", "tmp-agents/demo/job-graph/spec.json"],
         cwd=tmp_path,
         capture_output=True,
         text=True,

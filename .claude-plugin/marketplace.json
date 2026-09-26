@@ -40,7 +40,7 @@
     {
       "name": "claude-skills",
       "source": "./skills/claude",
-      "description": "Claude Code 固有の運用スキル群（response-format / session-insights / tmp-output / project-session）。",
+      "description": "Claude Code 固有の運用スキル群（response-format / session-insights / project-session）。",
       "author": {
         "name": "yasunori0418"
       },
@@ -50,7 +50,7 @@
     {
       "name": "workflow-skills",
       "source": "./skills/workflow",
-      "description": "エージェント非依存の作業運用スキル群（external-writes / job-graph / job-plan / lane-ops / test-targeted）。",
+      "description": "エージェント非依存の作業運用スキル群（external-writes / job-graph / job-plan / lane-ops / test-targeted / tmp-output）。",
       "author": {
         "name": "yasunori0418"
       },

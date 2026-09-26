@@ -72,13 +72,13 @@ issue 番号は実装フェーズと同じものを使い続ける）。
   COMMANDS が出ない。push 承認待ちの報告先が要るため）
 
 `plan_orchestration.py` の呼び出しは implement と同じ（`--prompt-dir` は
-`tmp_claude/<job>/job-graph/prompts` を再利用してよい。上書きされる）。
+`tmp-agents/<job>/job-graph/prompts` を再利用してよい。上書きされる）。
 
 出力の `COMMANDS` を実行する前に、**起動コマンドに `--create` が付いていないこと**を
 確認する:
 
 ```sh
-grep -n 'wt switch' tmp_claude/<job>/job-graph/prompts/launch_*.sh
+grep -n 'wt switch' tmp-agents/<job>/job-graph/prompts/launch_*.sh
 # => exec env -u ... wt switch <branch> -x bash -- -c '...' wt-launch-<id> "$(cat .../<id>.md)"
 #    境界宣言のある task は $0 が wt-boundary-<id> の bootstrap 形になる
 #    どちらの形でも `wt switch` の直後に --create / --base が現れないこと

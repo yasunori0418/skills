@@ -1,4 +1,4 @@
-# plan-template — `tmp_claude/<job>/plan.md` の 6 章テンプレ
+# plan-template — `tmp-agents/<job>/plan.md` の 6 章テンプレ
 
 plan.md は 2 つの読者を持つ。ワーカーの `/review-converge` が `DIFF_REVIEW_GROUND_TRUTH` として読む
 （第 3 章の完了条件・変更対象と第 5 章のスコープ外が「計画に無い変更」の判定材料になる）のと、
@@ -61,7 +61,7 @@ plan.md は 2 つの読者を持つ。ワーカーの `/review-converge` が `DI
 
 ## 6. 引き渡し
 
-- 起動: `/job-graph tmp_claude/<job>/plan.md`
+- 起動: `/job-graph tmp-agents/<job>/plan.md`
 - 親の permission mode: acceptEdits 等の明示モード
 ````
 
@@ -103,7 +103,7 @@ spec.json の task と 1:1。節見出しは `### <id>: <概要>`（id は英数
 - **変更対象は glob 不可**。リポジトリルート相対の実パスをそのまま書く（`check_scope.py` が完全一致で
   照合する）。lockfile・生成物・`plugin.json` の登録配列など「必ず巻き添えになるファイル」も列挙する
   （基準は job-graph `references/spec.md`）。stacked の後段は、その段で触るファイルだけ
-- **境界に `tmp_claude/**` を書かない**。job-graph が自動付与する。書いても検査からは除外されるが、
+- **境界に `tmp-agents/**` を書かない**。job-graph が自動付与する。書いても検査からは除外されるが、
   書く意味が無い
 - **規模目安は追加 + 削除の合計行数**（テスト込み）。実測が 2 倍を超えると計画突合が FAIL するので、
   盛りすぎず削りすぎず
@@ -136,6 +136,6 @@ spec.json の task と 1:1。節見出しは `### <id>: <概要>`（id は英数
 
 ### 第 6 章: 引き渡し
 
-`/job-graph tmp_claude/<job>/plan.md` の起動コマンドと、親を動かす permission mode の注意。
+`/job-graph tmp-agents/<job>/plan.md` の起動コマンドと、親を動かす permission mode の注意。
 issue を出したときは `create_issues.py` が `- epic: <URL>` / `- sub-issue: <id> → <URL>` を末尾に追記する
 （改訂時の `--epic` 番号はここから読む）。

@@ -203,14 +203,14 @@ check "escalate-foreign-block" "以下 1 件のツール呼び出しが text と
 # 主張されたパスが実在しない。
 CLAIM_435='引き継ぎ書を再作成しました。
 
-**ファイル**: `~/src/github.com/yasunori0418/skills/tmp_claude/DOES_NOT_EXIST_plan.md`
+**ファイル**: `~/src/github.com/yasunori0418/skills/tmp-agents/DOES_NOT_EXIST_plan.md`
 
 内容は削除前と同一です。私のコンテキストに全文が残っていたため、欠落なく復元できています。'
 
 write_transcript claimpos "$(user_text '元に戻して')" "$(assistant_text '確認する。')" \
     "$(tool_result_user)" "$(assistant_text "$CLAIM_435")"
 check "claim-detect" "このターンでファイル作成/更新を報告していますが、Write/Edit の実行がありません:" "$(first_line claimpos)"
-check "claim-detect-path" "  - ~/src/github.com/yasunori0418/skills/tmp_claude/DOES_NOT_EXIST_plan.md （存在しません）" \
+check "claim-detect-path" "  - ~/src/github.com/yasunori0418/skills/tmp-agents/DOES_NOT_EXIST_plan.md （存在しません）" \
     "$(run claimpos | sed -n '2p')"
 
 # 同一ターンに Write があれば対象外（実行の痕跡が構造として残っている）

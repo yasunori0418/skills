@@ -2,7 +2,7 @@
 
 長時間ジョブは 1 セッションで完走しない前提で運用する。コンテキスト肥大・中断・
 セッション消失のどれが来ても、別セッションの親が正確な位置から再開できるよう、
-`tmp_claude/<job>/handoff.md` を生成・更新する。
+`tmp-agents/<job>/handoff.md` を生成・更新する。
 
 ## 生成・更新のタイミング
 
@@ -29,7 +29,7 @@
    再生成させると spec・プロンプトファイルの再現から必要になる）
 4. **運用注意**: 既知バグと回避策・API フォールバック・ユーザーから得た事前裁定
    （ワーカーの選択ダイアログへ即答するための判断材料）
-5. **spec / prompts / launch スクリプトの所在**: `tmp_claude/<job>/job-graph/` 配下の
+5. **spec / prompts / launch スクリプトの所在**: `tmp-agents/<job>/job-graph/` 配下の
    絶対パス（`spec.md` の置き場規定）。後続 wave の起動コマンドはこれらを参照するので、
    所在が分からないと COMMANDS を貼ってあっても再投入できない
 
@@ -69,9 +69,9 @@ wave 0 起動済み）。再実行せず Phase 3 の監視から再開する。�
 <親名>（worker_contract に焼き付き。一字一句この名前で rename する）
 
 ## 所在
-- spec: <abs>/tmp_claude/<job>/job-graph/spec.json
-- prompts / launch スクリプト: <abs>/tmp_claude/<job>/job-graph/prompts/
-- 計画: <abs>/tmp_claude/<job>/plan.md
+- spec: <abs>/tmp-agents/<job>/job-graph/spec.json
+- prompts / launch スクリプト: <abs>/tmp-agents/<job>/job-graph/prompts/
+- 計画: <abs>/tmp-agents/<job>/plan.md
 
 ## 現在地
 - <task-id>: <状態> / worktree: <path> / pane: <id> / PR: <URL or 未> / 突合: <未|合格|要裁定|裁定済み>
