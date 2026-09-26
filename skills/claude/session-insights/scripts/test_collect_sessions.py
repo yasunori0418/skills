@@ -104,6 +104,63 @@ class TestBasics(unittest.TestCase):
         self.assertFalse(cs.in_range(datetime(2026, 6, 30, tzinfo=cs.JST), since, until))
 
 
+class TestRedact(unittest.TestCase):
+    """秘密情報の伏せ字。
+
+    テスト用の偽トークンは連結で組み立てる（リポジトリの secret scanning に
+    実トークンと誤認させないため）。
+    """
+
+    def test_token_kinds(self):
+        cases = {
+            "github_token": "ghp_" + "a1" * 18,
+            "anthropic_key": "sk-ant-" + "x" * 30,
+            "openai_key": "sk-proj-" + "y" * 30,
+            "slack_token": "xox" + "b-" + "1234567890-abc",
+            "aws_access_key": "AKIA" + "ABCDEFGH12345678",
+            "google_api_key": "AIza" + "z" * 35,
+            "jwt": "eyJ" + "hbGc.eyJzdWIi.sig_Nature",
+        }
+        for kind, token in cases.items():
+            with self.subTest(kind=kind):
+                out = cs.redact(f"value {token} end")
+                self.assertEqual(out, f"value [REDACTED:{kind}] end")
+
+    def test_private_key_block(self):
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\nabc\n-----END RSA PRIVATE KEY-----"
+        self.assertEqual(cs.redact(f"a\n{pem}\nb"), "a\n[REDACTED:private_key]\nb")
+        # END が無い（途中で切れた）鍵も末尾まで伏せる
+        self.assertEqual(cs.redact("x -----BEGIN PRIVATE KEY-----\nMIIE"), "x [REDACTED:private_key]")
+
+    def test_keeps_key_name(self):
+        self.assertEqual(cs.redact("DB_PASSWORD=hunter22"), "DB_PASSWORD=[REDACTED:assignment]")
+        self.assertEqual(cs.redact('"api_key": "abcd1234"'), '"api_key": "[REDACTED:assignment]"')
+        self.assertEqual(
+            cs.redact("Authorization: Bearer abc.def"), "Authorization: Bearer [REDACTED:bearer]"
+        )
+        self.assertEqual(
+            cs.redact("https://user:pa55@example.com/x"),
+            "https://[REDACTED:url_credential]@example.com/x",
+        )
+
+    def test_assignment_does_not_swallow_earlier_mark(self):
+        token = "ghp_" + "b" * 36
+        self.assertEqual(cs.redact(f"GH_TOKEN={token}"), "GH_TOKEN=[REDACTED:github_token]")
+
+    def test_plain_text_untouched_and_idempotent(self):
+        text = "git check-ignore -v tmp_claude/ ; echo $?\ntoken: 0"
+        self.assertEqual(cs.redact(text), text)
+        once = cs.redact("PASSWORD=hunter22 " + "sk-ant-" + "x" * 30)
+        self.assertEqual(cs.redact(once), once)
+
+    def test_clip_redacts_before_truncate(self):
+        """切り詰め位置をまたぐ秘密情報の断片が漏れない。"""
+        token = "ghp_" + "c" * 36
+        out = cs.clip("abc " + token, 20)
+        self.assertNotIn("ghp_ccc", out)
+        self.assertTrue(out.startswith("abc [REDACTED:github"))
+
+
 class TestTokenUsage(unittest.TestCase):
     def test_from_api_usage(self):
         u = cs.TokenUsage.from_api_usage(
@@ -463,6 +520,13 @@ class TestCli(unittest.TestCase):
         rep = self.run_cli("prompts")
         self.assertEqual(rep["total_prompts"], 1)
         self.assertEqual(rep["prompts"][0]["text"], "最初の依頼")
+
+    def test_prompts_are_redacted(self):
+        proj = self.root / "projects" / "-home-u-proj"
+        with open(proj / "cccc3333-0000-0000-0000-000000000000.jsonl", "w") as f:
+            f.write(json.dumps(user_rec("この鍵で試して API_KEY=abcd1234efgh")) + "\n")
+        rep = self.run_cli("prompts", "--session", "cccc3333")
+        self.assertEqual(rep["prompts"][0]["text"], "この鍵で試して API_KEY=[REDACTED:assignment]")
 
     def test_transcript_by_prefix(self):
         rep = self.run_cli("transcript", "--session", "aaaa1111")

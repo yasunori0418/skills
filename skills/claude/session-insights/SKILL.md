@@ -161,4 +161,5 @@ cclens の固定レポートで足りない切り口は、`cclens sql --db "$DB"
 - **明示起動のみ**（frontmatter で自動起動無効化済み）。分析観点なしでは動かない
 - 分析結果・transcript の内容を外部システム（Slack・Notion・Issue 等）へ送らない。求められた場合も [[external-writes]] の確認手順に従う
 - transcript には過去の業務情報・秘匿情報が含まれうる。レポートへの引用は分析に必要な最小限にとどめ、トークンやパスワード様の文字列は伏せる
+    - スクリプトは本文を出す全箇所で既知形式のトークン・鍵・`password=` 等を `[REDACTED:<kind>]` に置き換える（外すオプションは無い）。正規表現で拾えない形式は素通りするので、引用時の確認は省かない
 - スクリプトの改修時は `UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/session-insights" uv run --project "<skill-dir>" pytest` を全件通す

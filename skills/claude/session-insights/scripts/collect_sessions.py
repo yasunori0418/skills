@@ -24,6 +24,8 @@ Claude Code のセッション JSONL を機械的に読み出して JSON で標�
 - タイムスタンプは全て JST（UTC+9）表記で出力する（ユーザー環境ルール）。
 - 出力サイズには既定の上限（limit / max-chars）を設けてある。コンテキストを
   食い潰さないための意図的な制約なので、外すときは明示フラグで。
+- 本文を出す箇所は全て秘密情報の伏せ字（redact）を通す（clip = 伏せ字 → 切り詰め）。
+  伏せ字を外すオプションは持たない。
 
 サブコマンド:
   paths       設定ディレクトリの解決結果とデータ配置の一覧
@@ -112,6 +114,70 @@ def truncate(text: str, max_chars: int) -> str:
     if max_chars <= 0 or len(text) <= max_chars:
         return text
     return text[:max_chars] + f"…(+{len(text) - max_chars}字)"
+
+
+# 秘密情報の伏せ字パターン（kind, 正規表現, 置換）。上から順に適用する。
+# 過剰に伏せる側へ倒す（コード中の `token = get_token()` なども伏せうる）。
+# 網羅はできないので、レポートへの引用を最小限にする運用（SKILL.md の制約）と併用する。
+_REDACT_RULES: list = [
+    (
+        "private_key",
+        re.compile(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+            re.DOTALL,
+        ),
+        None,
+    ),
+    ("github_token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})"), None),
+    ("anthropic_key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"), None),
+    ("openai_key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}"), None),
+    ("slack_token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"), None),
+    ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), None),
+    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}"), None),
+    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"), None),
+    ("bearer", re.compile(r"(?i)(\bauthorization:\s*(?:bearer|basic)\s+)[^\s\"']+"), r"\1"),
+    ("url_credential", re.compile(r"(://)[^/\s:@]+:[^/\s@]+(@)"), r"\1{}\2"),
+    (
+        "assignment",
+        re.compile(
+            r"(?i)(\b[\w.-]*(?:password|passwd|secret|token|api[_-]?key|access[_-]?key)[\w.-]*"
+            r"[\"']?\s*[:=]\s*[\"']?)[^\s\"',;]{4,}"
+        ),
+        r"\1",
+    ),
+]
+
+REDACTED_RE = re.compile(r"\[REDACTED:[a-z_]+\]")
+
+
+def redact(text: str) -> str:
+    """秘密情報らしき文字列を `[REDACTED:<kind>]` に置き換える。
+
+    key=value 形式・Authorization ヘッダはキー名側を残し、値だけを伏せる。
+    切り詰めより前に適用すること（途中で切れたトークンは照合できず断片が漏れる）。
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    for kind, pattern, keep in _REDACT_RULES:
+        mark = f"[REDACTED:{kind}]"
+        if keep is None:
+            repl = mark
+        elif "{}" in keep:
+            repl = keep.format(mark)
+        else:
+            repl = keep + mark
+        # 既に伏せた箇所（`[REDACTED:…]`）を後段のルールが再度食わないよう、
+        # 伏せ字の目印を値として拾う一致は置き換えない
+        text = pattern.sub(
+            lambda m, r=repl: m.group(0) if REDACTED_RE.search(m.group(0)) else m.expand(r),
+            text,
+        )
+    return text
+
+
+def clip(text: str, max_chars: int) -> str:
+    """伏せ字 → 切り詰めの順で出力用テキストを作る。"""
+    return truncate(redact(text), max_chars)
 
 
 def in_range(dt: datetime, since: datetime | None, until: datetime | None) -> bool:
@@ -333,7 +399,7 @@ def tool_brief(tool_input) -> str:
     for key in ("description", "command", "file_path", "skill", "prompt", "query", "pattern", "url"):
         v = tool_input.get(key)
         if isinstance(v, str) and v:
-            return truncate(v.replace("\n", " "), 100)
+            return clip(v.replace("\n", " "), 100)
     return ""
 
 
@@ -521,7 +587,7 @@ def prompts_report(stats: list, filters: SessionFilters, limit: int, max_chars: 
                     "session_id": s.session_id[:8],
                     "project": s.project,
                     "chars": len(p.text),
-                    "text": truncate(p.text, max_chars),
+                    "text": clip(p.text, max_chars),
                 }
             )
     return {
@@ -541,7 +607,7 @@ def transcript_turns(records: Iterable[dict], max_chars: int, include_tools: boo
         ts = jst_str(parse_ts(rec.get("timestamp")), seconds=True)
         text = prompt_text(rec)
         if text is not None:
-            turns.append({"role": "user", "ts": ts, "text": truncate(text, max_chars)})
+            turns.append({"role": "user", "ts": ts, "text": clip(text, max_chars)})
             continue
         if rec.get("type") == "assistant" and not rec.get("isSidechain"):
             texts, tool_uses = [], []
@@ -552,7 +618,7 @@ def transcript_turns(records: Iterable[dict], max_chars: int, include_tools: boo
                     tool_uses.append({"tool": b.get("name"), "brief": tool_brief(b.get("input"))})
             if texts:
                 turns.append(
-                    {"role": "assistant", "ts": ts, "text": truncate("\n".join(texts), max_chars)}
+                    {"role": "assistant", "ts": ts, "text": clip("\n".join(texts), max_chars)}
                 )
             if tool_uses and include_tools:
                 turns.append({"role": "assistant:tools", "ts": ts, "tools": tool_uses})

@@ -109,6 +109,29 @@ cclens は同じ transcript を SQLite（`sessions` / `events` / `subagent_runs`
 友好的な列名が要るなら `tool_errors` ビューを使う。cclens は本文を保持しないため、
 本文を読む・本文で探す用途はスクリプト側の担当になる。
 
+## 出力時の伏せ字
+
+スクリプトは本文を出す全箇所（`prompts` の本文、`transcript` の発話・ツール要約）で
+`redact()` を通し、秘密情報らしき文字列を `[REDACTED:<kind>]` に置き換える。
+**伏せ字 → 切り詰めの順**で適用する（逆にすると、切り詰めで途中が切れた
+トークンに正規表現が当たらず断片が漏れる）。
+
+| kind | 対象 |
+|---|---|
+| `private_key` | `-----BEGIN … PRIVATE KEY-----` から END まで（END が無ければ末尾まで） |
+| `github_token` | `gh[pousr]_…` / `github_pat_…` |
+| `anthropic_key` / `openai_key` | `sk-ant-…` / `sk-(proj-)…` |
+| `slack_token` | `xox[abposr]-…` |
+| `aws_access_key` | `AKIA…` / `ASIA…`（16 桁） |
+| `google_api_key` | `AIza…` |
+| `jwt` | `eyJ….….…` |
+| `bearer` | `Authorization: Bearer\|Basic` の値（ヘッダ名は残す） |
+| `url_credential` | `://user:pass@` の認証部分 |
+| `assignment` | `password` / `secret` / `token` / `api_key` / `access_key` を含むキーへの `:` / `=` の値（4 文字以上、キー名は残す） |
+
+過剰に伏せる側へ倒している（`token = get_token()` のようなコードも伏せうる）。
+正規表現で拾えない形式は素通りする。
+
 ## 公式が推奨する代替アクセス手段
 
 transcript の直接パースが壊れた場合の代替:
