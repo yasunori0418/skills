@@ -62,7 +62,7 @@ cclens <subcommand> --db "$DB" [--scope <scope>] [--frozen]
 
 - **バイナリ解決**: `command -v cclens` で見つからなければ `nix run github:lambdalisue/cclens -- <subcommand …>` を使う。どちらも無ければ、そのぶんの観点は cclens 不在として報告し、スクリプト側で取れる範囲に切り替える（分析全体を止めない）
 - **ストア**: プロジェクト直下に `./cclens.db` があればそれを使い `--db` を省く。無ければ上記の per-user ストアを使う（カレントプロジェクトへ db を落とさない）
-- 各レポートは実行前に自動で `analyze`（増分・高速）を走らせる。同一分析中に何度も引くときは `--frozen` で固定してよい
+- 各レポートは実行前に自動で `analyze`（増分・高速）を走らせる。同一分析中に何度も引くときは `--frozen` で固定してよい（`sql` は `--frozen` を受け付けず、常に解析済みストアをそのまま読む）
 - 出力は `table`（既定）/ `markdown`。`doctor` のみ `json` も持つ。`sql` は JSON を持たないので、構造化して受けたいときは `doctor --format json` か、素直に表を読む
 
 **`--scope` で分析軸を切る**（`doctor` / `inventory` / `waste` / `failures` が対応）:
@@ -104,24 +104,25 @@ command -v cclens; command -v ccusage   # 使える道具の確認
 
 ### 2. 観点に応じた一次収集（集計層）
 
-観点をサブコマンドに写像する。複数併用してよいが、観点に関係ない収集はしない:
+観点をサブコマンドに写像する。複数併用してよいが、観点に関係ない収集はしない（「cclens」は cclens のサブコマンド、「script」は同梱スクリプトのサブコマンド）:
 
 | 観点 | サブコマンド |
 |---|---|
-| コンテキスト効率・compact 多発・トークン消費・コスト | `usage`（`--by day/project`）+ `sessions` の `peak_context`/`compactions` |
-| プロンプトの書き方・依頼の傾向・手戻り | `prompts` + `errors`、深掘りは `transcript` |
-| スキル・コマンドの活用度（死にスキル検出） | `tools` + `commands` + `config`（定義一覧と突き合わせ） |
-| ツール運用（MCP・サブエージェント・並列化） | `tools`（`--by-project`）+ `sessions` の `agents`/`subagent_files` |
-| 設定の妥当性（permissions・hooks・モデル選択） | `config` + `sessions` の `models`/`permission_modes` |
-| エラー・摩擦ポイント | `errors` + 該当セッションの `transcript` |
-| 特定プロジェクトの運用 | 各サブコマンドに `--project` |
+| コンテキスト効率・compact 多発・トークン消費 | cclens `overhead` / `usage`（`--by day` 等）+ script `sessions` の `peak_context`/`compactions` |
+| コスト（USD） | script `cost` |
+| プロンプトの書き方・依頼の傾向・手戻り | cclens `prompts`（種別の分布）+ script `prompts`（本文）、深掘りは script `transcript` |
+| スキル・コマンドの活用度（死にスキル検出） | cclens `usage` + `inventory` + `waste` |
+| ツール運用（MCP・サブエージェント・並列化） | cclens `sql`（`events` の `agent_spawn` 等）+ script `sessions` の `agents`/`subagent_files` |
+| 設定の妥当性（permissions・hooks・モデル選択） | cclens `inventory` / `overhead` + script `sessions` の `models`/`permission_modes` |
+| エラー・摩擦ポイント | cclens `failures`（`--scope`）+ `stuck`、深掘りは該当セッションの script `transcript` |
+| 特定プロジェクトの運用 | script は `--project`、cclens は `--scope project:<slug>` |
 
-共通オプション: `--project <部分一致>` / `--since` / `--until`（JST日付）/ `--session <ID前方一致>`。Agent/Task 起動由来のセッションは既定で除外される（人間の運用分析を歪めるため）。
+script の共通オプション: `--project <部分一致>` / `--since` / `--until`（JST日付）/ `--session <ID前方一致>`。Agent/Task 起動由来のセッションは既定で除外される（人間の運用分析を歪めるため）。
 含めるなら `--include-agents`。
 
-トークン総量とコスト（USD）の算出は、`usage` が [ccusage](https://github.com/ryoppippi/ccusage)に移譲する（既定 `--engine auto`: ccusage があれば `ccusage claude daily/session --json` を実行して `ccusage` キーに添付、無ければ builtin 合算のみ）。
+金額（USD）は `cost` が [ccusage](https://github.com/ryoppippi/ccusage) に移譲する（`ccusage claude daily|session --json`）。
 **絶対量・金額は ccusage の値を正とする**（重複レコード排除とモデル別価格計算済み）。
-builtin の `usage_total` は `peak_context`・`compactions` などセッション内訳分析用の生合算。
+`sessions` の `usage` / `aggregate.usage` は `peak_context`・`compactions` などセッション内訳分析用の生合算。
 
 ### 3. 深掘り（個別セッション）
 

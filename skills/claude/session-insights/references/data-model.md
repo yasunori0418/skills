@@ -85,11 +85,29 @@
   「キャッシュ依存度」の指標として読む
 - `compact_boundary` の `preTokens` は compact 直前のコンテキスト量。
   `trigger: auto|manual` で自動/手動を区別できる
-- **トークン総量・コスト（USD）は ccusage へ移譲**（`usage --engine auto`）。
+- **金額（USD）は ccusage へ移譲**（`cost` サブコマンド）。
   ccusage は messageId+requestId による重複レコード排除とモデル別の価格計算を
-  行うため、絶対量・金額はそちらが正確。builtin の `usage_total` は生レコードの
+  行うため、絶対量・金額はそちらが正確。`sessions` の `usage` は生レコードの
   単純合算（リトライ等で重複しうる）で、比率・内訳の把握用。ccusage も
   `CLAUDE_CONFIG_DIR` を尊重する（スクリプトが子プロセスへ引き渡す）
+
+## cclens ストアとの対応
+
+cclens は同じ transcript を SQLite（`sessions` / `events` / `subagent_runs` 等）へ
+抽出する。スキーマは `cclens sql --db "$DB" "SELECT sql FROM sqlite_master"` で確認する。
+
+| cclens | 中身 | スクリプト側の対応 |
+|---|---|---|
+| `sessions` | 1 行 1 セッション（`id` / `project` / `source_path` / `started_at`） | `sessions` サブコマンド |
+| `events.kind='prompt'` | `source` にプロンプト種別（`instruct` / `steer` / `correct` / `question`）のみ。**本文は無い** | `prompts`（本文） |
+| `events.kind='bash_cmd'` | `surface_id` にコマンドの先頭語のみ。**コマンド全文・出力は無い** | `transcript` |
+| `events.kind='tool_error'`（`tool_errors` ビュー） | カテゴリ・ツール名・抜粋（`source` / `target` とも 200 字まで） | `transcript` |
+| `events.kind='file_edit'` / `skill_invocation` / `agent_spawn` | `target` にパス、`surface_id` にスキル名・subagent type | `sessions` の `skills` / `agents` |
+| `events` の `source_path` / `source_line` | 元の JSONL と行番号 | — |
+
+`events` は列を多重利用している（`tool_error` では `model` 列にツール名が入る）ので、
+友好的な列名が要るなら `tool_errors` ビューを使う。cclens は本文を保持しないため、
+本文を読む・本文で探す用途はスクリプト側の担当になる。
 
 ## 公式が推奨する代替アクセス手段
 
