@@ -10,7 +10,9 @@ Claude Code のセッション JSONL を機械的に読み出して JSON で標�
 
   - プロンプト本文（cclens は instruct/steer/correct/question の 4 ラベルに
     集約するのみで本文を保持しない）
-  - 生 transcript の時系列読み出し
+  - 生 transcript の時系列読み出しと、ツールの入出力本文
+  - 本文の横断検索（cclens の events は本文を持たず、bash_cmd もコマンドの
+    先頭語しか残らない）
   - compaction の発生記録（cclens は compaction を差分計算時に補正する
     ノイズとしてしか扱わず、発生回数・トリガーを残さない）
   - 金額（USD）の取得。cclens はトークン量とコンテキスト増加は出すが USD 換算を
@@ -24,13 +26,16 @@ Claude Code のセッション JSONL を機械的に読み出して JSON で標�
 - タイムスタンプは全て JST（UTC+9）表記で出力する（ユーザー環境ルール）。
 - 出力サイズには既定の上限（limit / max-chars）を設けてある。コンテキストを
   食い潰さないための意図的な制約なので、外すときは明示フラグで。
+- 本文を出す箇所は全て秘密情報の伏せ字（redact）を通す（clip = 伏せ字 → 切り詰め）。
+  伏せ字を外すオプションは持たない。
 
 サブコマンド:
   paths       設定ディレクトリの解決結果とデータ配置の一覧
   sessions    セッション一覧（メタデータ + セッション単位の集計値）
-  prompts     ユーザープロンプトの抽出（本文つき）
+  prompts     ユーザープロンプトの抽出（本文つき。--grep でキーワード絞り込み）
   cost        トークン消費と金額（USD）を ccusage から取得
-  transcript  単一セッションの会話を時系列で抽出
+  search      全セッションの本文（プロンプト・応答・ツールの入出力）を横断検索
+  transcript  単一セッションの会話を時系列で抽出（--tool-detail でツールの入力と結果も）
 
 設計: 「純粋層」と「副作用層」を分離している。
   純粋層 … レコード解釈（prompt_text 等）、セッション畳み込み
@@ -53,7 +58,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -112,6 +117,84 @@ def truncate(text: str, max_chars: int) -> str:
     if max_chars <= 0 or len(text) <= max_chars:
         return text
     return text[:max_chars] + f"…(+{len(text) - max_chars}字)"
+
+
+# 秘密情報の伏せ字パターン（kind, 正規表現, 置換）。上から順に適用する。
+# 過剰に伏せる側へ倒す（コード中の `token = get_token()` なども伏せうる）。
+# 網羅はできないので、レポートへの引用を最小限にする運用（SKILL.md の制約）と併用する。
+_REDACT_RULES: list = [
+    (
+        "private_key",
+        re.compile(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+            re.DOTALL,
+        ),
+        None,
+    ),
+    ("github_token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})"), None),
+    ("anthropic_key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"), None),
+    ("openai_key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}"), None),
+    ("slack_token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"), None),
+    ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), None),
+    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}"), None),
+    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"), None),
+    ("bearer", re.compile(r"(?i)(\bauthorization:\s*(?:bearer|basic)\s+)[^\s\"']+"), r"\1"),
+    ("url_credential", re.compile(r"(://)[^/\s:@]+:[^/\s@]+(@)"), r"\1{}\2"),
+    (
+        "assignment",
+        re.compile(
+            r"(?i)(\b[\w.-]*(?:password|passwd|secret|token|api[_-]?key|access[_-]?key)[\w.-]*"
+            r"[\"']?\s*[:=]\s*[\"']?)[^\s\"',;]{4,}"
+        ),
+        r"\1",
+    ),
+]
+
+REDACTED_RE = re.compile(r"\[REDACTED:[a-z_]+\]")
+
+
+def redact(text: str) -> str:
+    """秘密情報らしき文字列を `[REDACTED:<kind>]` に置き換える。
+
+    key=value 形式・Authorization ヘッダはキー名側を残し、値だけを伏せる。
+    切り詰めより前に適用すること（途中で切れたトークンは照合できず断片が漏れる）。
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    for kind, pattern, keep in _REDACT_RULES:
+        mark = f"[REDACTED:{kind}]"
+        if keep is None:
+            repl = mark
+        elif "{}" in keep:
+            repl = keep.format(mark)
+        else:
+            repl = keep + mark
+        # 既に伏せた箇所（`[REDACTED:…]`）を後段のルールが再度食わないよう、
+        # 伏せ字の目印を値として拾う一致は置き換えない
+        text = pattern.sub(
+            lambda m, r=repl: m.group(0) if REDACTED_RE.search(m.group(0)) else m.expand(r),
+            text,
+        )
+    return text
+
+
+def clip(text: str, max_chars: int) -> str:
+    """伏せ字 → 切り詰めの順で出力用テキストを作る。"""
+    return truncate(redact(text), max_chars)
+
+
+def truncate_head_tail(text: str, max_chars: int, head_ratio: float = 0.6) -> str:
+    """先頭と末尾を残して中央を省く。失敗メッセージや確認結果は末尾に出やすいため。"""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    head = int(max_chars * head_ratio)
+    tail = max_chars - head
+    return f"{text[:head]}…(中略 {len(text) - max_chars}字)…{text[len(text) - tail:]}"
+
+
+def clip_head_tail(text: str, max_chars: int) -> str:
+    """伏せ字 → 先頭末尾を残す切り詰め。"""
+    return truncate_head_tail(redact(text), max_chars)
 
 
 def in_range(dt: datetime, since: datetime | None, until: datetime | None) -> bool:
@@ -190,6 +273,32 @@ class Compaction:
 
     def as_dict(self) -> dict:
         return {"trigger": self.trigger, "pre_tokens": self.pre_tokens}
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    """tool_use に対応する tool_result の解釈結果。
+
+    status: ok / exit / hook_blocked / permission_denied / user_rejected /
+            interrupted / error。exit_code は失敗時に `Exit code N` から取れた
+            ときだけ入る（成功時は記録が無いので 0 と推定せず None）。
+    body は伏せ字・切り詰め前の生テキスト。persisted は大きな出力が
+    tool-results/ へ退避されたときの {path, size}。
+    """
+
+    status: str
+    exit_code: int | None
+    body: str
+    persisted: dict | None = None
+
+
+@dataclass(frozen=True)
+class ToolDetailOptions:
+    """transcript --tool-detail の上限値。0 は無制限。"""
+
+    input_chars: int = 300
+    result_chars: int = 600
+    budget: int = 30000
 
 
 @dataclass
@@ -333,7 +442,7 @@ def tool_brief(tool_input) -> str:
     for key in ("description", "command", "file_path", "skill", "prompt", "query", "pattern", "url"):
         v = tool_input.get(key)
         if isinstance(v, str) and v:
-            return truncate(v.replace("\n", " "), 100)
+            return clip(v.replace("\n", " "), 100)
     return ""
 
 
@@ -357,6 +466,116 @@ def tool_result_errors(rec: dict, tool_use_names: dict) -> list:
                 message=(raw or "").strip().replace("\n", " "),
             )
         )
+    return out
+
+
+EXIT_CODE_RE = re.compile(r"(?:Error: )?Exit code (-?\d+)")
+PERMISSION_RE = re.compile(r"(?:Error: )?Permission\b")
+
+
+def tool_result_text(block: dict) -> str:
+    """tool_result ブロックの content をテキストに（list なら text を連結）。"""
+    raw = block.get("content")
+    if isinstance(raw, list):
+        return "\n".join(
+            x.get("text", "") for x in raw if isinstance(x, dict) and x.get("type") == "text"
+        )
+    return raw if isinstance(raw, str) else ""
+
+
+def classify_tool_result(block: dict, tool_use_result) -> tuple:
+    """tool_result と record の toolUseResult から (status, exit_code) を決める。
+
+    成功時の Bash は toolUseResult に exit code を持たないので exit_code は None。
+    失敗時は toolUseResult が文字列（`Error: Exit code N` 等）になる。
+    """
+    if not block.get("is_error"):
+        if isinstance(tool_use_result, dict) and tool_use_result.get("interrupted"):
+            return "interrupted", None
+        return "ok", None
+    err = tool_use_result if isinstance(tool_use_result, str) else tool_result_text(block)
+    err = err.strip()
+    m = EXIT_CODE_RE.match(err)
+    if m:
+        return "exit", int(m.group(1))
+    first_line = err.split("\n", 1)[0]
+    if "PreToolUse:" in first_line:
+        return "hook_blocked", None
+    if PERMISSION_RE.match(err):
+        return "permission_denied", None
+    if "User rejected" in first_line or "doesn't want to proceed" in first_line:
+        return "user_rejected", None
+    if isinstance(tool_use_result, dict) and tool_use_result.get("interrupted"):
+        return "interrupted", None
+    return "error", None
+
+
+def result_body(tool: str, block: dict, tool_use_result) -> str:
+    """結果本文として見せるテキストをツール別に選ぶ（伏せ字・切り詰め前）。
+
+    Read はファイル全文、Write/Edit は書いた内容を持つが、それらを出すと
+    1 回で本文が溢れるため、パスと量だけにする。
+    """
+    tur = tool_use_result if isinstance(tool_use_result, dict) else None
+    if block.get("is_error") or tur is None:
+        return tool_result_text(block)
+    if tool == "Bash" and "stdout" in tur:
+        out = tur.get("stdout") or ""
+        err = tur.get("stderr") or ""
+        return f"{out}\n[stderr]\n{err}" if err else out
+    if tool == "Read" and isinstance(tur.get("file"), dict):
+        f = tur["file"]
+        return f"{f.get('filePath', '?')}（{f.get('numLines', '?')}行を読み込み）"
+    if tool == "Write" and "filePath" in tur:
+        return f"{tur['filePath']}（{len(tur.get('content') or '')}字を書き込み）"
+    if tool == "Edit" and "filePath" in tur:
+        patch = tur.get("structuredPatch")
+        hunks = len(patch) if isinstance(patch, list) else 0
+        return f"{tur['filePath']}（{hunks} hunk を変更）"
+    return tool_result_text(block)
+
+
+def tool_input_text(tool: str, tool_input) -> str:
+    """tool_use の入力を表示用テキストに（Bash はコマンド全文、他は JSON）。"""
+    if not isinstance(tool_input, dict):
+        return ""
+    if tool == "Bash" and isinstance(tool_input.get("command"), str):
+        return tool_input["command"]
+    return json.dumps(tool_input, ensure_ascii=False)
+
+
+def index_tool_results(records: Iterable[dict]) -> dict:
+    """tool_use_id -> ToolResult。tool_result は後続の user 行にあるため先に索引化する。"""
+    names: dict = {}
+    out: dict = {}
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        for b in iter_assistant_blocks(rec):
+            if b.get("type") == "tool_use":
+                names[b.get("id")] = b.get("name") or "?"
+        if rec.get("type") != "user":
+            continue
+        content = (rec.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        tur = rec.get("toolUseResult")
+        for b in content:
+            if not (isinstance(b, dict) and b.get("type") == "tool_result"):
+                continue
+            status, code = classify_tool_result(b, tur)
+            persisted = None
+            if isinstance(tur, dict) and tur.get("persistedOutputPath"):
+                persisted = {
+                    "path": tur["persistedOutputPath"],
+                    "size": tur.get("persistedOutputSize"),
+                }
+            out[b.get("tool_use_id")] = ToolResult(
+                status=status,
+                exit_code=code,
+                body=result_body(names.get(b.get("tool_use_id"), "?"), b, tur),
+                persisted=persisted,
+            )
     return out
 
 
@@ -507,33 +726,78 @@ def sessions_report(stats: list, filters: SessionFilters, limit: int) -> dict:
     }
 
 
-def prompts_report(stats: list, filters: SessionFilters, limit: int, max_chars: int) -> dict:
+def prompts_report(
+    stats: list,
+    filters: SessionFilters,
+    limit: int,
+    max_chars: int,
+    matcher: Matcher | None = None,
+) -> dict:
+    """matcher 指定時は一致したプロンプトだけを、一致箇所を中心に切り詰めて返す。"""
     items = []
     total = 0
+    matched = 0
     for s in stats:
         for p in s.prompts:
             total += 1
+            if matcher is not None and matcher.search(p.text) is None:
+                continue
+            matched += 1
             if limit > 0 and len(items) >= limit:
                 continue
+            text = clip(p.text, max_chars) if matcher is None else clip_around(p.text, matcher, max_chars)
             items.append(
                 {
                     "ts": jst_str(p.ts),
                     "session_id": s.session_id[:8],
                     "project": s.project,
                     "chars": len(p.text),
-                    "text": truncate(p.text, max_chars),
+                    "text": text,
                 }
             )
-    return {
-        "filters": filters.as_dict(),
-        "total_prompts": total,
-        "shown": len(items),
-        "prompts": items,
+    out = {"filters": filters.as_dict()}
+    if matcher is not None:
+        out["query"] = matcher.as_dict()
+    out["total_prompts"] = total
+    if matcher is not None:
+        out["matched"] = matched
+    out["shown"] = len(items)
+    out["prompts"] = items
+    return out
+
+
+def tool_detail_entry(block: dict, result: ToolResult | None, opts: ToolDetailOptions) -> dict:
+    """--tool-detail 用に 1 ツール呼び出しの入力と結果を整形する。"""
+    name = block.get("name") or "?"
+    entry = {
+        "tool": name,
+        "brief": tool_brief(block.get("input")),
+        "input": clip(tool_input_text(name, block.get("input")), opts.input_chars),
+        "result": None,  # セッション中断等で結果が無いこともある
     }
+    if result is not None:
+        entry["result"] = {
+            "status": result.status,
+            "exit_code": result.exit_code,
+            "body": clip_head_tail(result.body, opts.result_chars),
+            "persisted": result.persisted,
+        }
+    return entry
 
 
-def transcript_turns(records: Iterable[dict], max_chars: int, include_tools: bool) -> list:
-    """レコード列を表示用ターン列に変換する（順序保存）。"""
+def transcript_turns(
+    records: Sequence[dict],
+    max_chars: int,
+    include_tools: bool,
+    tool_detail: ToolDetailOptions | None = None,
+) -> list:
+    """レコード列を表示用ターン列に変換する（順序保存）。
+
+    tool_detail 指定時は tool_use と後続の tool_result を突き合わせるため、
+    records は 2 回走査する（Sequence で受ける）。
+    """
+    results = index_tool_results(records) if tool_detail else {}
+    include_tools = include_tools or tool_detail is not None
     turns = []
     for rec in records:
         if not isinstance(rec, dict):
@@ -541,24 +805,253 @@ def transcript_turns(records: Iterable[dict], max_chars: int, include_tools: boo
         ts = jst_str(parse_ts(rec.get("timestamp")), seconds=True)
         text = prompt_text(rec)
         if text is not None:
-            turns.append({"role": "user", "ts": ts, "text": truncate(text, max_chars)})
+            turns.append({"role": "user", "ts": ts, "text": clip(text, max_chars)})
             continue
         if rec.get("type") == "assistant" and not rec.get("isSidechain"):
             texts, tool_uses = [], []
             for b in iter_assistant_blocks(rec):
                 if b.get("type") == "text" and b.get("text", "").strip():
                     texts.append(b["text"].strip())
+                elif b.get("type") == "tool_use" and tool_detail:
+                    tool_uses.append(tool_detail_entry(b, results.get(b.get("id")), tool_detail))
                 elif b.get("type") == "tool_use":
                     tool_uses.append({"tool": b.get("name"), "brief": tool_brief(b.get("input"))})
             if texts:
                 turns.append(
-                    {"role": "assistant", "ts": ts, "text": truncate("\n".join(texts), max_chars)}
+                    {"role": "assistant", "ts": ts, "text": clip("\n".join(texts), max_chars)}
                 )
             if tool_uses and include_tools:
                 turns.append({"role": "assistant:tools", "ts": ts, "tools": tool_uses})
         elif rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
             turns.append({"role": "system", "ts": ts, "text": "--- compact 発生 ---"})
     return turns
+
+
+def apply_detail_budget(turns: list, budget: int) -> tuple:
+    """ツール詳細の合計文字数が budget を超えたら、以降を {tool, brief} に戻す。
+
+    先頭から数える（--tail 適用後のターン列に掛ける）。戻り値は
+    (新しいターン列, brief に戻した件数)。budget <= 0 は無制限。
+    """
+    if budget <= 0:
+        return turns, 0
+    used = 0
+    omitted = 0
+    out = []
+    for t in turns:
+        if t.get("role") != "assistant:tools":
+            out.append(t)
+            continue
+        tools = []
+        for e in t["tools"]:
+            if "input" not in e:
+                tools.append(e)
+                continue
+            size = len(e["input"]) + len((e.get("result") or {}).get("body") or "")
+            if used + size > budget:
+                tools.append({"tool": e["tool"], "brief": e["brief"]})
+                omitted += 1
+                continue
+            used += size
+            tools.append(e)
+        out.append({**t, "tools": tools})
+    return out, omitted
+
+
+# ============================================================
+# 純粋層: 本文検索（search / prompts --grep）
+# ============================================================
+
+SEARCH_FIELDS = ("prompt", "assistant", "tool-input", "tool-result")
+TOOL_FIELDS = ("tool-input", "tool-result")
+REDACTED_MATCH_NOTE = "[一致箇所は伏せ字の対象]"
+
+
+@dataclass(frozen=True)
+class Matcher:
+    """検索語の照合規則。既定は固定文字列・大文字小文字を区別しない。
+
+    不正な正規表現は構築時に re.error を送出する（CLI 側でエラー報告）。
+    """
+
+    pattern: str
+    regex: bool = False
+    case_sensitive: bool = False
+    _re: re.Pattern = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self):
+        src = self.pattern if self.regex else re.escape(self.pattern)
+        flags = 0 if self.case_sensitive else re.IGNORECASE
+        object.__setattr__(self, "_re", re.compile(src, flags))
+
+    def search(self, text: str) -> re.Match | None:
+        return self._re.search(text) if text else None
+
+    def as_dict(self) -> dict:
+        return {"pattern": self.pattern, "regex": self.regex, "case_sensitive": self.case_sensitive}
+
+
+def snippet_around(text: str, matcher: Matcher, context: int) -> str:
+    """伏せ字を掛けた本文で一致箇所の前後 context 文字を切り出す。
+
+    照合を伏せ字後にやり直すので、切り出し窓の端で秘密情報が途中から漏れることは
+    ない。伏せ字後に一致しない（一致箇所が秘密情報の中にあった）ときは目印を返す。
+    """
+    red = redact(text)
+    m = matcher.search(red)
+    if m is None:
+        return REDACTED_MATCH_NOTE
+    start = max(0, m.start() - context)
+    end = min(len(red), m.end() + context)
+    body = red[start:end].replace("\n", " ")
+    return ("…" if start > 0 else "") + body + ("…" if end < len(red) else "")
+
+
+@dataclass(frozen=True)
+class SearchUnit:
+    """検索対象の本文 1 件（JSONL の行番号と由来つき）。"""
+
+    line: int
+    ts: datetime | None
+    field: str
+    tool: str | None
+    text: str
+
+
+@dataclass(frozen=True)
+class SessionScan:
+    title: str | None
+    spawned_as_agent: bool
+    hits: list  # list[dict]（行番号順）
+
+
+def iter_search_units(numbered: Iterable[tuple]) -> Iterator[SearchUnit]:
+    """(行番号, レコード) 列から検索対象の本文を列挙する。
+
+    prompt は prompt_text の判定規則に従い、assistant は text ブロック（thinking は
+    含めない）、tool-input は tool_input_text、tool-result は result_body。
+    sidechain 行は対象外。
+    """
+    names: dict = {}
+    for line, rec in numbered:
+        if not isinstance(rec, dict) or rec.get("isSidechain"):
+            continue
+        ts = parse_ts(rec.get("timestamp"))
+        text = prompt_text(rec)
+        if text is not None:
+            yield SearchUnit(line, ts, "prompt", None, text)
+            continue
+        if rec.get("type") == "assistant":
+            texts = []
+            for b in iter_assistant_blocks(rec):
+                if b.get("type") == "text" and b.get("text", "").strip():
+                    texts.append(b["text"])
+                elif b.get("type") == "tool_use":
+                    name = b.get("name") or "?"
+                    names[b.get("id")] = name
+                    yield SearchUnit(line, ts, "tool-input", name, tool_input_text(name, b.get("input")))
+            if texts:
+                yield SearchUnit(line, ts, "assistant", None, "\n".join(texts))
+        elif rec.get("type") == "user":
+            content = (rec.get("message") or {}).get("content")
+            if not isinstance(content, list):
+                continue
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    name = names.get(b.get("tool_use_id"), "?")
+                    body = result_body(name, b, rec.get("toolUseResult"))
+                    yield SearchUnit(line, ts, "tool-result", name, body)
+
+
+def scan_session(
+    numbered: Iterable[tuple],
+    matcher: Matcher,
+    fields_: tuple,
+    tools: tuple | None,
+    context: int,
+) -> SessionScan:
+    """1 セッション分の (行番号, レコード) 列を照合する。照合は生の本文に対して行う。"""
+    records = list(numbered)
+    title = None
+    spawned = False
+    for _, rec in records:
+        if rec.get("type") == "ai-title" and rec.get("aiTitle"):
+            title = rec["aiTitle"]
+        elif rec.get("type") in ("agent-setting", "agent-name"):
+            spawned = True
+    hits = []
+    for u in iter_search_units(records):
+        if u.field not in fields_:
+            continue
+        if tools and u.field in TOOL_FIELDS and u.tool not in tools:
+            continue
+        if matcher.search(u.text) is None:
+            continue
+        hits.append(
+            {
+                "ts": jst_str(u.ts, seconds=True),
+                "line": u.line,
+                "field": u.field,
+                "tool": u.tool,
+                "snippet": snippet_around(u.text, matcher, context),
+            }
+        )
+    return SessionScan(title=title, spawned_as_agent=spawned, hits=hits)
+
+
+def search_report(
+    scans: list,
+    filters: SessionFilters,
+    matcher: Matcher,
+    fields_: tuple,
+    tools: tuple | None,
+    limit: int,
+    per_session: int,
+    by_session_top: int = 30,
+) -> dict:
+    """scans: list[(session_id, project, SessionScan)]（新しい順・走査した全セッション）。"""
+    matched = [(sid, proj, sc) for sid, proj, sc in scans if sc.hits]
+    # 件数の多い順。sort は安定なので同数なら新しい順が保たれる
+    ranked = sorted(matched, key=lambda x: -len(x[2].hits))
+    by_session = [
+        {"session_id": sid[:8], "title": sc.title, "project": proj, "hits": len(sc.hits)}
+        for sid, proj, sc in ranked[:by_session_top]
+    ]
+    shown = []
+    for sid, _, sc in matched:
+        for h in sc.hits[: per_session if per_session > 0 else None]:
+            if limit > 0 and len(shown) >= limit:
+                break
+            shown.append({"session_id": sid[:8], **h})
+    return {
+        "filters": filters.as_dict(),
+        "query": {**matcher.as_dict(), "in": list(fields_), "tool": list(tools) if tools else None},
+        "scanned_sessions": len(scans),
+        "sessions_matched": len(matched),
+        "total_hits": sum(len(sc.hits) for _, _, sc in matched),
+        "shown": len(shown),
+        "by_session": by_session,
+        "hits": shown,
+    }
+
+
+def clip_around(text: str, matcher: Matcher, max_chars: int) -> str:
+    """伏せ字後の本文を、一致箇所が max_chars の窓に入るよう切り詰める。
+
+    省いた側には `…(+N字)` を付ける。一致箇所が伏せ字の中なら先頭から切り詰める。
+    """
+    red = redact(text)
+    if max_chars <= 0 or len(red) <= max_chars:
+        return red
+    m = matcher.search(red)
+    if m is None:
+        return truncate(red, max_chars)
+    start = m.start() - (max_chars - (m.end() - m.start())) // 2
+    start = max(0, min(start, len(red) - max_chars))
+    end = start + max_chars
+    head = f"(+{start}字)…" if start > 0 else ""
+    tail = f"…(+{len(red) - end}字)" if end < len(red) else ""
+    return head + red[start:end] + tail
 
 
 def ccusage_argv(since: str | None, until: str | None, session: str | None) -> list:
@@ -598,11 +1091,11 @@ def resolve_config_dir(override: str | None, env: dict | None = None) -> tuple:
     return Path.home() / ".claude", "default:~/.claude"
 
 
-def iter_records(path: Path) -> Iterator[dict]:
-    """JSONL を1行ずつ寛容に読む。壊れた行は捨てる。"""
+def iter_numbered_records(path: Path) -> Iterator[tuple]:
+    """JSONL を1行ずつ寛容に読み、(1 始まりの物理行番号, レコード) を返す。壊れた行は捨てる。"""
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
-            for line in f:
+            for lineno, line in enumerate(f, start=1):
                 line = line.strip()
                 if not line:
                     continue
@@ -611,9 +1104,15 @@ def iter_records(path: Path) -> Iterator[dict]:
                 except json.JSONDecodeError:
                     continue
                 if isinstance(obj, dict):
-                    yield obj
+                    yield lineno, obj
     except OSError:
         return
+
+
+def iter_records(path: Path) -> Iterator[dict]:
+    """JSONL を1行ずつ寛容に読む。壊れた行は捨てる。"""
+    for _, rec in iter_numbered_records(path):
+        yield rec
 
 
 def find_session_files(config_dir: Path, filters: SessionFilters) -> list:
@@ -796,8 +1295,9 @@ def cmd_sessions(config_dir: Path, args) -> None:
 
 def cmd_prompts(config_dir: Path, args) -> None:
     filters = SessionFilters.from_args(args)
+    matcher = build_matcher(args) if args.grep else None
     stats = load_sessions(config_dir, filters)
-    emit(prompts_report(stats, filters, args.limit, args.max_chars))
+    emit(prompts_report(stats, filters, args.limit, args.max_chars, matcher))
 
 
 def cmd_cost(config_dir: Path, args) -> None:
@@ -830,6 +1330,43 @@ def cmd_cost(config_dir: Path, args) -> None:
     )
 
 
+def split_csv(value: str | None) -> tuple:
+    return tuple(x.strip() for x in value.split(",") if x.strip()) if value else ()
+
+
+def build_matcher(args) -> Matcher:
+    """CLI 引数から Matcher を作る（search は pattern、prompts は --grep）。
+
+    不正な正規表現はエラーを出して終了する。
+    """
+    pattern = getattr(args, "pattern", None) or args.grep
+    try:
+        return Matcher(pattern, regex=args.regex, case_sensitive=args.case_sensitive)
+    except re.error as e:
+        emit({"error": f"正規表現が不正: {e}", "pattern": pattern})
+        sys.exit(1)
+
+
+def cmd_search(config_dir: Path, args) -> None:
+    """全セッションの本文を横断検索し、ヒット位置（行番号）とスニペットを返す。"""
+    matcher = build_matcher(args)
+    tools = split_csv(args.tool) or None
+    # --tool だけ指定されたらツールの入出力に絞る（prompt/assistant のヒットで埋もれないように）
+    fields_ = split_csv(args.in_) or (TOOL_FIELDS if tools else SEARCH_FIELDS)
+    unknown = [f for f in fields_ if f not in SEARCH_FIELDS]
+    if unknown:
+        emit({"error": f"--in に未知の対象: {unknown}", "choices": list(SEARCH_FIELDS)})
+        sys.exit(1)
+    filters = SessionFilters.from_args(args)
+    scans = []
+    for f in find_session_files(config_dir, filters):
+        sc = scan_session(iter_numbered_records(f), matcher, fields_, tools, args.context)
+        if not filters.include_agents and sc.spawned_as_agent:
+            continue
+        scans.append((f.stem, f.parent.name, sc))
+    emit(search_report(scans, filters, matcher, fields_, tools, args.limit, args.per_session))
+
+
 def cmd_transcript(config_dir: Path, args) -> None:
     filters = SessionFilters(session=args.session, include_agents=True)
     files = find_session_files(config_dir, filters)
@@ -840,18 +1377,27 @@ def cmd_transcript(config_dir: Path, args) -> None:
         emit({"error": "セッションIDが曖昧。候補:", "candidates": [f.stem for f in files[:10]]})
         sys.exit(1)
     path = files[0]
-    s = reduce_session(path.stem, path.parent.name, iter_records(path))
+    records = list(iter_records(path))
+    s = reduce_session(path.stem, path.parent.name, records)
     s.subagent_files = subagent_file_count(path)
-    turns = transcript_turns(iter_records(path), args.max_chars, args.include_tools)
+    detail = (
+        ToolDetailOptions(
+            input_chars=args.input_chars,
+            result_chars=args.result_chars,
+            budget=args.detail_budget,
+        )
+        if args.tool_detail
+        else None
+    )
+    turns = transcript_turns(records, args.max_chars, args.include_tools, detail)
     if args.tail > 0:
         turns = turns[-args.tail :]
-    emit(
-        {
-            "session": summarize_session(s),
-            "turn_count": len(turns),
-            "turns": turns,
-        }
-    )
+    out = {"session": summarize_session(s), "turn_count": len(turns)}
+    if detail:
+        turns, omitted = apply_detail_budget(turns, detail.budget)
+        out["detail_omitted"] = omitted
+    out["turns"] = turns
+    emit(out)
 
 
 # ============================================================
@@ -897,11 +1443,31 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "--max-chars", type=int, default=240, help="本文の切り詰め文字数（既定240、0で無制限）"
     )
+    sp.add_argument("--grep", help="本文にこの語を含むプロンプトだけを出す（一致箇所を中心に切り詰める）")
+    sp.add_argument("--regex", action="store_true", help="--grep を正規表現として扱う")
+    sp.add_argument("--case-sensitive", action="store_true", help="--grep で大文字小文字を区別する")
 
     sp = sub.add_parser("cost", help="トークン消費と金額（USD）を ccusage から取得")
     sp.add_argument("--since", help="JST日付 YYYY-MM-DD")
     sp.add_argument("--until", help="JST日付 YYYY-MM-DD（その日を含む）")
     sp.add_argument("--session", help="セッションID（指定時は日次でなくセッション単位）")
+
+    sp = sub.add_parser("search", help="全セッションの本文を横断検索（ヒット位置とスニペット）")
+    sp.add_argument("pattern", help="検索語（既定は固定文字列・大文字小文字を区別しない）")
+    sp.add_argument("--regex", action="store_true", help="pattern を正規表現として扱う")
+    sp.add_argument("--case-sensitive", action="store_true", help="大文字小文字を区別する")
+    sp.add_argument(
+        "--in",
+        dest="in_",
+        help=f"検索対象（カンマ区切り: {','.join(SEARCH_FIELDS)}。既定は全部、--tool 指定時は tool-input,tool-result）",
+    )
+    sp.add_argument("--tool", help="tool-input / tool-result を指定ツールに絞る（カンマ区切り。例: Bash,Edit）")
+    add_filter_args(sp)
+    sp.add_argument("--limit", type=int, default=40, help="表示するヒットの最大件数（既定40、0で無制限）")
+    sp.add_argument(
+        "--per-session", type=int, default=3, help="1 セッションあたりの表示件数（既定3、0で無制限）"
+    )
+    sp.add_argument("--context", type=int, default=80, help="スニペットの前後文字数（既定80）")
 
     sp = sub.add_parser("transcript", help="単一セッションの会話抽出")
     sp.add_argument("--session", required=True, help="セッションIDの前方一致（一意になる長さで）")
@@ -910,6 +1476,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("--tail", type=int, default=0, help="末尾Nターンのみ表示（既定0=全部）")
     sp.add_argument("--include-tools", action="store_true", help="ツール呼び出し行も含める")
+    sp.add_argument(
+        "--tool-detail",
+        action="store_true",
+        help="ツールの入力全文と結果（status・exit_code・本文抜粋）も含める（--include-tools を含意）",
+    )
+    sp.add_argument(
+        "--input-chars", type=int, default=300, help="ツール入力の切り詰め文字数（既定300、0で無制限）"
+    )
+    sp.add_argument(
+        "--result-chars",
+        type=int,
+        default=600,
+        help="ツール結果の切り詰め文字数。先頭と末尾を残す（既定600、0で無制限）",
+    )
+    sp.add_argument(
+        "--detail-budget",
+        type=int,
+        default=30000,
+        help="ツール詳細の合計文字数の上限。超えた分は brief に戻す（既定30000、0で無制限）",
+    )
     return p
 
 
@@ -925,6 +1511,7 @@ def main(argv: list | None = None) -> int:
         "sessions": lambda: cmd_sessions(config_dir, args),
         "prompts": lambda: cmd_prompts(config_dir, args),
         "cost": lambda: cmd_cost(config_dir, args),
+        "search": lambda: cmd_search(config_dir, args),
         "transcript": lambda: cmd_transcript(config_dir, args),
     }
     handlers[args.cmd]()

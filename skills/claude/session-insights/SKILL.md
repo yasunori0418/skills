@@ -28,7 +28,7 @@ argument-hint: "<分析観点（必須）> [--project <名前>] [--since YYYY-MM
 |---|---|
 | **cclens** | ツール/スキル使用頻度・skill 単位のトークン消費とコンテキスト増加・常時コスト（overhead）・ツールエラーのカテゴリ分類・設定の棚卸しと未使用検出・プロンプト種別の分布・繰り返し失敗・再編集ループ |
 | **ccusage** | **金額（USD）**。モデル別価格表と重複レコード排除を持つ。cclens はトークン量は出すが USD 換算を持たない |
-| **同梱スクリプト** | プロンプト**本文**・生 transcript の時系列・**compaction の発生記録**・分析対象範囲の明示 |
+| **同梱スクリプト** | プロンプト**本文**・生 transcript の時系列・**ツールの入出力本文**（実行コマンド・stdout/stderr・終了状態）・**全セッション横断の本文検索**・**compaction の発生記録**・分析対象範囲の明示 |
 
 境界の理由:
 
@@ -36,6 +36,7 @@ argument-hint: "<分析観点（必須）> [--project <名前>] [--since YYYY-MM
 - cclens には価格表が無い（ソースにコスト計算が存在しない）。金額を問われたら必ず ccusage 系（`cost` サブコマンド）へ回す
 - cclens はプロンプトを `instruct` / `steer` / `correct` / `question` の 4 ラベルへ集約して**本文を保持しない**。「どう書いたか」を読む観点はスクリプト側でしか扱えない
 - cclens は compaction を差分計算時に補正する**ノイズとしてしか扱わない**（発生回数・トリガーを残さない）
+- cclens の `events` は本文を持たない（`bash_cmd` はコマンドの先頭語のみ、`tool_error` は 200 字の抜粋のみ）。本文での横断検索はスクリプトの `search` が担う。全件走査でも 400 セッション弱で 1 秒未満なので索引は持たない。cclens は `events` の `session_id` / `source_path` で候補セッションを絞る前段としてだけ使える
 
 ## 起動チェック（必須）
 
@@ -62,7 +63,7 @@ cclens <subcommand> --db "$DB" [--scope <scope>] [--frozen]
 
 - **バイナリ解決**: `command -v cclens` で見つからなければ `nix run github:lambdalisue/cclens -- <subcommand …>` を使う。どちらも無ければ、そのぶんの観点は cclens 不在として報告し、スクリプト側で取れる範囲に切り替える（分析全体を止めない）
 - **ストア**: プロジェクト直下に `./cclens.db` があればそれを使い `--db` を省く。無ければ上記の per-user ストアを使う（カレントプロジェクトへ db を落とさない）
-- 各レポートは実行前に自動で `analyze`（増分・高速）を走らせる。同一分析中に何度も引くときは `--frozen` で固定してよい
+- 各レポートは実行前に自動で `analyze`（増分・高速）を走らせる。同一分析中に何度も引くときは `--frozen` で固定してよい（`sql` は `--frozen` を受け付けず、常に解析済みストアをそのまま読む）
 - 出力は `table`（既定）/ `markdown`。`doctor` のみ `json` も持つ。`sql` は JSON を持たないので、構造化して受けたいときは `doctor --format json` か、素直に表を読む
 
 **`--scope` で分析軸を切る**（`doctor` / `inventory` / `waste` / `failures` が対応）:
@@ -85,7 +86,8 @@ UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/session-insights" uv run --project
 
 - `UV_PROJECT_ENVIRONMENT` は必ず付ける。スキルディレクトリは read-only（nix store / plugin cache）に配置され得るため、venv をスキル配下に作れない
 - `CLAUDE_CONFIG_DIR` はスクリプトが自動で解決する。手で `~/.claude` をハードコードしない
-- サブコマンドは `paths` / `sessions` / `prompts` / `cost` / `transcript` の 5 つだけ。横断集計を求められたら cclens へ回す
+- サブコマンドは `paths` / `sessions` / `prompts` / `cost` / `search` / `transcript` の 6 つだけ。横断集計を求められたら cclens へ回す
+- `search` はヒットした位置（セッション ID・JSONL の行番号・スニペット）を返すだけの横断照会。本文を読む深掘りは従来どおり `transcript` で 3〜5 件に絞る。`--tool` だけを指定すると、検索対象はツールの入出力（`tool-input` / `tool-result`）に絞られる。既定の上限は `--limit 40` / `--per-session 3` / `--context 80` で、切られても `total_hits` と `by_session`（ヒットの多いセッション上位 30 件）で全体量が分かる
 - `cost` は ccusage への薄い移譲（`ccusage claude daily|session --json --timezone Asia/Tokyo`）。ccusage が無ければ理由を返して停止するので、その観点だけ落として分析は続ける
 - 各サブコマンドの limit / max-chars 既定値はコンテキスト保護のための意図的な制約。
   - 外すときは範囲を十分絞ってから
@@ -104,24 +106,26 @@ command -v cclens; command -v ccusage   # 使える道具の確認
 
 ### 2. 観点に応じた一次収集（集計層）
 
-観点をサブコマンドに写像する。複数併用してよいが、観点に関係ない収集はしない:
+観点をサブコマンドに写像する。複数併用してよいが、観点に関係ない収集はしない（「cclens」は cclens のサブコマンド、「script」は同梱スクリプトのサブコマンド）:
 
 | 観点 | サブコマンド |
 |---|---|
-| コンテキスト効率・compact 多発・トークン消費・コスト | `usage`（`--by day/project`）+ `sessions` の `peak_context`/`compactions` |
-| プロンプトの書き方・依頼の傾向・手戻り | `prompts` + `errors`、深掘りは `transcript` |
-| スキル・コマンドの活用度（死にスキル検出） | `tools` + `commands` + `config`（定義一覧と突き合わせ） |
-| ツール運用（MCP・サブエージェント・並列化） | `tools`（`--by-project`）+ `sessions` の `agents`/`subagent_files` |
-| 設定の妥当性（permissions・hooks・モデル選択） | `config` + `sessions` の `models`/`permission_modes` |
-| エラー・摩擦ポイント | `errors` + 該当セッションの `transcript` |
-| 特定プロジェクトの運用 | 各サブコマンドに `--project` |
+| コンテキスト効率・compact 多発・トークン消費 | cclens `overhead` / `usage`（`--by day` 等）+ script `sessions` の `peak_context`/`compactions` |
+| コスト（USD） | script `cost` |
+| プロンプトの書き方・依頼の傾向・手戻り | cclens `prompts`（種別の分布）+ script `prompts`（本文。特定の言い回しは `--grep`）、深掘りは script `transcript` |
+| スキル・コマンドの活用度（死にスキル検出） | cclens `usage` + `inventory` + `waste` |
+| ツール運用（MCP・サブエージェント・並列化） | cclens `sql`（`events` の `agent_spawn` 等）+ script `sessions` の `agents`/`subagent_files` |
+| 設定の妥当性（permissions・hooks・モデル選択） | cclens `inventory` / `overhead` + script `sessions` の `models`/`permission_modes` |
+| エラー・摩擦ポイント | cclens `failures`（`--scope`）+ `stuck`、深掘りは該当セッションの script `transcript` |
+| 特定の操作・発言を含むセッションを探す | script `search`（`--in` / `--tool` で対象を絞る）→ 該当セッションの `transcript --tool-detail` |
+| 特定プロジェクトの運用 | script は `--project`、cclens は `--scope project:<slug>` |
 
-共通オプション: `--project <部分一致>` / `--since` / `--until`（JST日付）/ `--session <ID前方一致>`。Agent/Task 起動由来のセッションは既定で除外される（人間の運用分析を歪めるため）。
+script の共通オプション: `--project <部分一致>` / `--since` / `--until`（JST日付）/ `--session <ID前方一致>`。Agent/Task 起動由来のセッションは既定で除外される（人間の運用分析を歪めるため）。
 含めるなら `--include-agents`。
 
-トークン総量とコスト（USD）の算出は、`usage` が [ccusage](https://github.com/ryoppippi/ccusage)に移譲する（既定 `--engine auto`: ccusage があれば `ccusage claude daily/session --json` を実行して `ccusage` キーに添付、無ければ builtin 合算のみ）。
+金額（USD）は `cost` が [ccusage](https://github.com/ryoppippi/ccusage) に移譲する（`ccusage claude daily|session --json`）。
 **絶対量・金額は ccusage の値を正とする**（重複レコード排除とモデル別価格計算済み）。
-builtin の `usage_total` は `peak_context`・`compactions` などセッション内訳分析用の生合算。
+`sessions` の `usage` / `aggregate.usage` は `peak_context`・`compactions` などセッション内訳分析用の生合算。
 
 ### 3. 深掘り（個別セッション）
 
@@ -130,7 +134,12 @@ builtin の `usage_total` は `peak_context`・`compactions` などセッショ�
 ```bash
 UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/session-insights" uv run --project "<skill-dir>" python "<skill-dir>/scripts/collect_sessions.py" transcript --session <ID> --tail 40
 UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/session-insights" uv run --project "<skill-dir>" python "<skill-dir>/scripts/collect_sessions.py" transcript --session <ID> --include-tools
+UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/session-insights" uv run --project "<skill-dir>" python "<skill-dir>/scripts/collect_sessions.py" transcript --session <ID> --tool-detail --tail 40
 ```
+
+- `--include-tools` はツール名と説明（`brief`）だけ。実行したコマンドと結果（`status` / `exit_code` / stdout・stderr の抜粋）まで読むときは `--tool-detail` を使う
+- `--tool-detail` の上限: 入力 `--input-chars 300`、結果 `--result-chars 600`（先頭と末尾を残す）、セッション全体 `--detail-budget 30000`（既定の上限でおよそ 30 ツール分。超えた分は `brief` に戻り、件数が `detail_omitted` に出る）。予算は古いターンから順に消費するので、末尾を詳しく読むときは `--tail` で範囲を絞ってから使う
+- 成功した Bash の `exit_code` は `null`（transcript に記録が無い）。`status: ok` を成功と読む
 
 深掘りは**仮説の検証に必要なセッションに絞る**（目安: 1観点あたり3〜5件まで）。
 全セッションの transcript を順に読むような使い方はこのスキルの禁止事項。
@@ -160,4 +169,5 @@ cclens の固定レポートで足りない切り口は、`cclens sql --db "$DB"
 - **明示起動のみ**（frontmatter で自動起動無効化済み）。分析観点なしでは動かない
 - 分析結果・transcript の内容を外部システム（Slack・Notion・Issue 等）へ送らない。求められた場合も [[external-writes]] の確認手順に従う
 - transcript には過去の業務情報・秘匿情報が含まれうる。レポートへの引用は分析に必要な最小限にとどめ、トークンやパスワード様の文字列は伏せる
+    - スクリプトは本文を出す全箇所で既知形式のトークン・鍵・`password=` 等を `[REDACTED:<kind>]` に置き換える（外すオプションは無い）。正規表現で拾えない形式は素通りするので、引用時の確認は省かない
 - スクリプトの改修時は `UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/session-insights" uv run --project "<skill-dir>" pytest` を全件通す

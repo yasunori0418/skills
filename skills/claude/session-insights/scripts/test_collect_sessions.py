@@ -104,6 +104,63 @@ class TestBasics(unittest.TestCase):
         self.assertFalse(cs.in_range(datetime(2026, 6, 30, tzinfo=cs.JST), since, until))
 
 
+class TestRedact(unittest.TestCase):
+    """秘密情報の伏せ字。
+
+    テスト用の偽トークンは連結で組み立てる（リポジトリの secret scanning に
+    実トークンと誤認させないため）。
+    """
+
+    def test_token_kinds(self):
+        cases = {
+            "github_token": "ghp_" + "a1" * 18,
+            "anthropic_key": "sk-ant-" + "x" * 30,
+            "openai_key": "sk-proj-" + "y" * 30,
+            "slack_token": "xox" + "b-" + "1234567890-abc",
+            "aws_access_key": "AKIA" + "ABCDEFGH12345678",
+            "google_api_key": "AIza" + "z" * 35,
+            "jwt": "eyJ" + "hbGc.eyJzdWIi.sig_Nature",
+        }
+        for kind, token in cases.items():
+            with self.subTest(kind=kind):
+                out = cs.redact(f"value {token} end")
+                self.assertEqual(out, f"value [REDACTED:{kind}] end")
+
+    def test_private_key_block(self):
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\nabc\n-----END RSA PRIVATE KEY-----"
+        self.assertEqual(cs.redact(f"a\n{pem}\nb"), "a\n[REDACTED:private_key]\nb")
+        # END が無い（途中で切れた）鍵も末尾まで伏せる
+        self.assertEqual(cs.redact("x -----BEGIN PRIVATE KEY-----\nMIIE"), "x [REDACTED:private_key]")
+
+    def test_keeps_key_name(self):
+        self.assertEqual(cs.redact("DB_PASSWORD=hunter22"), "DB_PASSWORD=[REDACTED:assignment]")
+        self.assertEqual(cs.redact('"api_key": "abcd1234"'), '"api_key": "[REDACTED:assignment]"')
+        self.assertEqual(
+            cs.redact("Authorization: Bearer abc.def"), "Authorization: Bearer [REDACTED:bearer]"
+        )
+        self.assertEqual(
+            cs.redact("https://user:pa55@example.com/x"),
+            "https://[REDACTED:url_credential]@example.com/x",
+        )
+
+    def test_assignment_does_not_swallow_earlier_mark(self):
+        token = "ghp_" + "b" * 36
+        self.assertEqual(cs.redact(f"GH_TOKEN={token}"), "GH_TOKEN=[REDACTED:github_token]")
+
+    def test_plain_text_untouched_and_idempotent(self):
+        text = "git check-ignore -v tmp_claude/ ; echo $?\ntoken: 0"
+        self.assertEqual(cs.redact(text), text)
+        once = cs.redact("PASSWORD=hunter22 " + "sk-ant-" + "x" * 30)
+        self.assertEqual(cs.redact(once), once)
+
+    def test_clip_redacts_before_truncate(self):
+        """切り詰め位置をまたぐ秘密情報の断片が漏れない。"""
+        token = "ghp_" + "c" * 36
+        out = cs.clip("abc " + token, 20)
+        self.assertNotIn("ghp_ccc", out)
+        self.assertTrue(out.startswith("abc [REDACTED:github"))
+
+
 class TestTokenUsage(unittest.TestCase):
     def test_from_api_usage(self):
         u = cs.TokenUsage.from_api_usage(
@@ -367,6 +424,263 @@ class TestReports(unittest.TestCase):
         self.assertIn("compact", turns[3]["text"])
 
 
+def tool_result_rec(tool_id, content, tool_use_result, is_error=False, ts="2026-07-01T03:02:00.000Z"):
+    block = {"type": "tool_result", "tool_use_id": tool_id, "content": content}
+    if is_error:
+        block["is_error"] = True
+    rec = user_rec([block], ts=ts)
+    rec["toolUseResult"] = tool_use_result
+    return rec
+
+
+def detail_records():
+    """ツールの入力と結果を突き合わせる検証用の合成セッション。"""
+    return [
+        user_rec("ignore 状態を確認して"),
+        assistant_rec(
+            [
+                tool_use("Bash", {"command": "git check-ignore -v tmp_claude/", "description": "確認"}, "tu_ok"),
+                tool_use("Bash", {"command": "false"}, "tu_ng"),
+                tool_use("Read", {"file_path": "/x/a.py"}, "tu_rd"),
+            ]
+        ),
+        tool_result_rec(
+            "tu_ok",
+            ".gitignore:3:tmp_claude/\ttmp_claude/",
+            {"stdout": ".gitignore:3:tmp_claude/\ttmp_claude/", "stderr": "", "interrupted": False},
+        ),
+        tool_result_rec("tu_ng", "Exit code 1\nboom", "Error: Exit code 1\nboom", is_error=True),
+        tool_result_rec(
+            "tu_rd",
+            "1\tprint(1)",
+            {"type": "text", "file": {"filePath": "/x/a.py", "content": "print(1)", "numLines": 1}},
+        ),
+    ]
+
+
+class TestToolResults(unittest.TestCase):
+    def test_classify(self):
+        ok = {"type": "tool_result", "content": "x"}
+        err = {"type": "tool_result", "content": "x", "is_error": True}
+        cases = [
+            (ok, {"stdout": "x", "interrupted": False}, ("ok", None)),
+            (ok, {"stdout": "", "interrupted": True}, ("interrupted", None)),
+            (err, "Error: Exit code 2\nno such file", ("exit", 2)),
+            (err, "Error: PreToolUse:Bash hook error: 🚫 blocked", ("hook_blocked", None)),
+            (err, "Error: Permission for this action was denied", ("permission_denied", None)),
+            (err, "User rejected tool use", ("user_rejected", None)),
+            (err, "Error: File has not been read yet.", ("error", None)),
+        ]
+        for block, tur, expected in cases:
+            with self.subTest(tur=tur):
+                self.assertEqual(cs.classify_tool_result(block, tur), expected)
+
+    def test_classify_falls_back_to_block_content(self):
+        block = {"type": "tool_result", "content": "Exit code 127\ncmd: not found", "is_error": True}
+        self.assertEqual(cs.classify_tool_result(block, None), ("exit", 127))
+
+    def test_result_body_per_tool(self):
+        ok = {"type": "tool_result", "content": "raw"}
+        self.assertEqual(cs.result_body("Bash", ok, {"stdout": "out", "stderr": ""}), "out")
+        self.assertEqual(
+            cs.result_body("Bash", ok, {"stdout": "out", "stderr": "warn"}), "out\n[stderr]\nwarn"
+        )
+        read = {"file": {"filePath": "/a", "content": "SECRET BODY", "numLines": 9}}
+        body = cs.result_body("Read", ok, read)
+        self.assertNotIn("SECRET BODY", body)
+        self.assertIn("/a", body)
+        edit = {"filePath": "/b", "structuredPatch": [{}, {}], "oldString": "o", "newString": "n"}
+        self.assertEqual(cs.result_body("Edit", ok, edit), "/b（2 hunk を変更）")
+        agent = {"type": "tool_result", "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}
+        self.assertEqual(cs.result_body("Agent", agent, {"status": "completed"}), "a\nb")
+        err = {"type": "tool_result", "content": "Exit code 1\nboom", "is_error": True}
+        self.assertEqual(cs.result_body("Bash", err, "Error: Exit code 1\nboom"), "Exit code 1\nboom")
+
+    def test_index_tool_results_and_persisted(self):
+        recs = detail_records()
+        recs.append(
+            tool_result_rec(
+                "tu_big",
+                "…",
+                {"stdout": "x", "stderr": "", "persistedOutputPath": "/t/r.txt", "persistedOutputSize": 99999},
+            )
+        )
+        idx = cs.index_tool_results(recs)
+        self.assertEqual(idx["tu_ok"].status, "ok")
+        self.assertIsNone(idx["tu_ok"].exit_code)
+        self.assertEqual((idx["tu_ng"].status, idx["tu_ng"].exit_code), ("exit", 1))
+        self.assertEqual(idx["tu_big"].persisted, {"path": "/t/r.txt", "size": 99999})
+
+    def test_truncate_head_tail(self):
+        self.assertEqual(cs.truncate_head_tail("abc", 10), "abc")
+        self.assertEqual(cs.truncate_head_tail("abcdef", 0), "abcdef")
+        out = cs.truncate_head_tail("0123456789", 5)
+        self.assertEqual(out, "012…(中略 5字)…89")
+
+
+class TestTranscriptToolDetail(unittest.TestCase):
+    def test_include_tools_stays_brief(self):
+        """--include-tools だけなら従来どおり {tool, brief}。"""
+        turns = cs.transcript_turns(detail_records(), max_chars=100, include_tools=True)
+        tools = next(t for t in turns if t["role"] == "assistant:tools")["tools"]
+        self.assertEqual(tools[0], {"tool": "Bash", "brief": "確認"})
+
+    def test_detail_joins_input_and_result(self):
+        turns = cs.transcript_turns(
+            detail_records(), max_chars=100, include_tools=False, tool_detail=cs.ToolDetailOptions()
+        )
+        tools = next(t for t in turns if t["role"] == "assistant:tools")["tools"]
+        ok, ng, rd = tools
+        self.assertEqual(ok["input"], "git check-ignore -v tmp_claude/")
+        self.assertEqual(ok["result"]["status"], "ok")
+        self.assertIn(".gitignore:3", ok["result"]["body"])
+        self.assertEqual((ng["result"]["status"], ng["result"]["exit_code"]), ("exit", 1))
+        self.assertNotIn("print(1)", rd["result"]["body"])
+
+    def test_detail_redacts_and_clips(self):
+        token = "ghp_" + "d" * 36
+        recs = [
+            assistant_rec([tool_use("Bash", {"command": f"echo {token}"}, "tu_s")]),
+            tool_result_rec("tu_s", token, {"stdout": "A" * 50 + token + "Z" * 50, "stderr": ""}),
+        ]
+        opts = cs.ToolDetailOptions(input_chars=300, result_chars=40)
+        turns = cs.transcript_turns(recs, max_chars=100, include_tools=False, tool_detail=opts)
+        e = turns[0]["tools"][0]
+        self.assertEqual(e["input"], "echo [REDACTED:github_token]")
+        self.assertNotIn("ghp_", e["result"]["body"])
+        self.assertTrue(e["result"]["body"].endswith("Z" * 16))
+
+    def test_missing_result_is_none(self):
+        recs = [assistant_rec([tool_use("Bash", {"command": "sleep 9"}, "tu_x")])]
+        turns = cs.transcript_turns(recs, 100, False, cs.ToolDetailOptions())
+        self.assertIsNone(turns[0]["tools"][0]["result"])
+
+    def test_budget_falls_back_to_brief(self):
+        turns = cs.transcript_turns(detail_records(), 100, False, cs.ToolDetailOptions())
+        first = turns[1]["tools"][0]
+        budget = len(first["input"]) + len(first["result"]["body"])
+        limited, omitted = cs.apply_detail_budget(turns, budget)
+        self.assertEqual(omitted, 2)
+        self.assertIn("input", limited[1]["tools"][0])
+        self.assertEqual(limited[1]["tools"][1], {"tool": "Bash", "brief": "false"})
+        self.assertEqual(cs.apply_detail_budget(turns, 0), (turns, 0))
+
+
+def numbered(records):
+    return list(enumerate(records, start=1))
+
+
+class TestMatcher(unittest.TestCase):
+    def test_fixed_string_ignores_case_and_metachars(self):
+        m = cs.Matcher("TMP_CLAUDE (x)")
+        self.assertIsNotNone(m.search("see tmp_claude (x) here"))
+        self.assertIsNone(m.search("tmp_claude x"))
+
+    def test_regex_and_case_sensitive(self):
+        self.assertIsNotNone(cs.Matcher(r"check-ignore\s+-v", regex=True).search("git check-ignore  -v a"))
+        self.assertIsNone(cs.Matcher("ABC", case_sensitive=True).search("abc"))
+
+    def test_invalid_regex_raises(self):
+        with self.assertRaises(cs.re.error):
+            cs.Matcher("(", regex=True)
+
+    def test_snippet_around(self):
+        m = cs.Matcher("needle")
+        self.assertEqual(cs.snippet_around("aaaa needle bbbb", m, 2), "…a needle b…")
+        self.assertEqual(cs.snippet_around("needle\nx", m, 10), "needle x")
+
+    def test_snippet_never_leaks_secret_fragment(self):
+        token = "ghp_" + "e" * 36
+        out = cs.snippet_around(f"export GH={token} # needle", cs.Matcher("needle"), 10)
+        self.assertNotIn("eeee", out)
+        # 一致箇所そのものが秘密情報の中にある
+        self.assertEqual(cs.snippet_around(token, cs.Matcher("eeee"), 10), cs.REDACTED_MATCH_NOTE)
+
+
+class TestSearch(unittest.TestCase):
+    def scan(self, pattern="tmp_claude", fields_=cs.SEARCH_FIELDS, tools=None, records=None):
+        recs = detail_records() if records is None else records
+        return cs.scan_session(numbered(recs), cs.Matcher(pattern), fields_, tools, 20)
+
+    def test_hits_all_fields_with_line_numbers(self):
+        sc = self.scan()
+        got = [(h["line"], h["field"], h["tool"]) for h in sc.hits]
+        self.assertEqual(
+            got,
+            [(2, "tool-input", "Bash"), (3, "tool-result", "Bash")],
+        )
+        self.assertFalse(sc.spawned_as_agent)
+
+    def test_field_and_tool_filters(self):
+        self.assertEqual([h["field"] for h in self.scan("ignore", ("prompt",)).hits], ["prompt"])
+        sc = self.scan("a", cs.TOOL_FIELDS, ("Read",))
+        self.assertTrue(sc.hits)
+        self.assertTrue(all(h["tool"] == "Read" for h in sc.hits))
+
+    def test_excludes_sidechain_and_meta(self):
+        recs = [
+            user_rec("needle meta", isMeta=True),
+            user_rec("needle side", isSidechain=True),
+            {**assistant_rec([{"type": "text", "text": "needle"}]), "isSidechain": True},
+            user_rec("<system-reminder>needle</system-reminder>"),
+        ]
+        self.assertEqual(self.scan("needle", records=recs).hits, [])
+
+    def test_title_and_spawned(self):
+        recs = [{"type": "ai-title", "aiTitle": "T"}, {"type": "agent-setting", "agentSetting": "Explore"}]
+        sc = self.scan(records=recs)
+        self.assertEqual((sc.title, sc.spawned_as_agent), ("T", True))
+
+    def test_report_limits_keep_totals(self):
+        def scan_with(n):
+            return cs.SessionScan(title=None, spawned_as_agent=False, hits=[{"line": i} for i in range(n)])
+
+        scans = [("s-new", "p", scan_with(2)), ("s-none", "p", scan_with(0)), ("s-old", "p", scan_with(5))]
+        rep = cs.search_report(
+            scans, cs.SessionFilters(), cs.Matcher("x"), cs.SEARCH_FIELDS, None, limit=3, per_session=2
+        )
+        self.assertEqual(
+            (rep["scanned_sessions"], rep["sessions_matched"], rep["total_hits"], rep["shown"]), (3, 2, 7, 3)
+        )
+        self.assertEqual([h["session_id"] for h in rep["hits"]], ["s-new", "s-new", "s-old"])
+        self.assertEqual([b["session_id"] for b in rep["by_session"]], ["s-old", "s-new"])
+        self.assertEqual(rep["by_session"][0]["hits"], 5)
+
+
+class TestPromptsGrep(unittest.TestCase):
+    def setUp(self):
+        recs = [
+            user_rec("前置き" * 50 + " tmp_claude を ignore して " + "後書き" * 50),
+            user_rec("関係ない依頼"),
+        ]
+        self.stats = [cs.reduce_session("abcdef12-3456", "-home-u-proj", recs)]
+
+    def test_filters_and_counts(self):
+        rep = cs.prompts_report(self.stats, cs.SessionFilters(), 10, 40, cs.Matcher("TMP_CLAUDE"))
+        self.assertEqual((rep["total_prompts"], rep["matched"], rep["shown"]), (2, 1, 1))
+        self.assertEqual(rep["query"]["pattern"], "TMP_CLAUDE")
+
+    def test_clips_around_match(self):
+        rep = cs.prompts_report(self.stats, cs.SessionFilters(), 10, 40, cs.Matcher("tmp_claude"))
+        text = rep["prompts"][0]["text"]
+        self.assertIn("tmp_claude", text)
+        self.assertRegex(text, r"^\(\+\d+字\)…")
+        self.assertRegex(text, r"…\(\+\d+字\)$")
+
+    def test_without_matcher_is_unchanged(self):
+        rep = cs.prompts_report(self.stats, cs.SessionFilters(), 10, 240)
+        self.assertNotIn("matched", rep)
+        self.assertNotIn("query", rep)
+        self.assertEqual(rep["shown"], 2)
+
+    def test_clip_around_edges(self):
+        m = cs.Matcher("x")
+        self.assertEqual(cs.clip_around("abc x", m, 0), "abc x")
+        self.assertEqual(cs.clip_around("x" + "a" * 20, m, 5), "xaaaa…(+16字)")
+        token = "ghp_" + "x" * 36
+        self.assertNotIn("xxxx", cs.clip_around(token + " tail", cs.Matcher("xxxx"), 10))
+
+
 class TestCcusageArgv(unittest.TestCase):
     def test_daily_with_range(self):
         argv = cs.ccusage_argv("2026-07-01", "2026-07-08", None)
@@ -464,10 +778,53 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rep["total_prompts"], 1)
         self.assertEqual(rep["prompts"][0]["text"], "最初の依頼")
 
+    def test_prompts_are_redacted(self):
+        proj = self.root / "projects" / "-home-u-proj"
+        with open(proj / "cccc3333-0000-0000-0000-000000000000.jsonl", "w") as f:
+            f.write(json.dumps(user_rec("この鍵で試して API_KEY=abcd1234efgh")) + "\n")
+        rep = self.run_cli("prompts", "--session", "cccc3333")
+        self.assertEqual(rep["prompts"][0]["text"], "この鍵で試して API_KEY=[REDACTED:assignment]")
+
     def test_transcript_by_prefix(self):
         rep = self.run_cli("transcript", "--session", "aaaa1111")
         self.assertEqual(rep["session"]["session_id"], "aaaa1111-0000-0000-0000-000000000000")
         self.assertEqual(rep["turns"][0]["text"], "最初の依頼")
+
+    def test_transcript_tool_detail(self):
+        proj = self.root / "projects" / "-home-u-proj"
+        with open(proj / "dddd4444-0000-0000-0000-000000000000.jsonl", "w") as f:
+            f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in detail_records())
+        rep = self.run_cli("transcript", "--session", "dddd4444", "--tool-detail")
+        self.assertEqual(rep["detail_omitted"], 0)
+        tools = next(t for t in rep["turns"] if t["role"] == "assistant:tools")["tools"]
+        self.assertEqual(tools[1]["result"]["exit_code"], 1)
+
+    def test_search(self):
+        proj = self.root / "projects" / "-home-u-proj"
+        with open(proj / "dddd4444-0000-0000-0000-000000000000.jsonl", "w") as f:
+            f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in detail_records())
+        rep = self.run_cli("search", "gitignore:3", "--tool", "Bash")
+        self.assertEqual(rep["query"]["in"], ["tool-input", "tool-result"])
+        self.assertEqual(rep["sessions_matched"], 1)
+        self.assertEqual(rep["hits"][0]["session_id"], "dddd4444")
+        self.assertEqual(rep["hits"][0]["field"], "tool-result")
+        # Agent 起動由来（bbbb2222）は既定で走査対象外
+        self.assertEqual(rep["scanned_sessions"], 2)
+
+    def test_prompts_grep(self):
+        rep = self.run_cli("prompts", "--grep", "最初")
+        self.assertEqual(rep["matched"], 1)
+        self.assertEqual(rep["prompts"][0]["text"], "最初の依頼")
+        self.assertEqual(self.run_cli("prompts", "--grep", "存在しない語")["shown"], 0)
+
+    def test_search_rejects_bad_input(self):
+        for argv in (["search", "(", "--regex"], ["search", "x", "--in", "bogus"], ["prompts", "--grep", "(", "--regex"]):
+            with self.subTest(argv=argv):
+                buf = io.StringIO()
+                with redirect_stdout(buf), self.assertRaises(SystemExit) as cm:
+                    cs.main(["--config-dir", str(self.root), *argv])
+                self.assertEqual(cm.exception.code, 1)
+                self.assertIn("error", json.loads(buf.getvalue()))
 
     def test_paths_runs(self):
         rep = self.run_cli("paths")

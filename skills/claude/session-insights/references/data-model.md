@@ -85,11 +85,90 @@
   「キャッシュ依存度」の指標として読む
 - `compact_boundary` の `preTokens` は compact 直前のコンテキスト量。
   `trigger: auto|manual` で自動/手動を区別できる
-- **トークン総量・コスト（USD）は ccusage へ移譲**（`usage --engine auto`）。
+- **金額（USD）は ccusage へ移譲**（`cost` サブコマンド）。
   ccusage は messageId+requestId による重複レコード排除とモデル別の価格計算を
-  行うため、絶対量・金額はそちらが正確。builtin の `usage_total` は生レコードの
+  行うため、絶対量・金額はそちらが正確。`sessions` の `usage` は生レコードの
   単純合算（リトライ等で重複しうる）で、比率・内訳の把握用。ccusage も
   `CLAUDE_CONFIG_DIR` を尊重する（スクリプトが子プロセスへ引き渡す）
+
+## cclens ストアとの対応
+
+cclens は同じ transcript を SQLite（`sessions` / `events` / `subagent_runs` 等）へ
+抽出する。スキーマは `cclens sql --db "$DB" "SELECT sql FROM sqlite_master"` で確認する。
+
+| cclens | 中身 | スクリプト側の対応 |
+|---|---|---|
+| `sessions` | 1 行 1 セッション（`id` / `project` / `source_path` / `started_at`） | `sessions` サブコマンド |
+| `events.kind='prompt'` | `source` にプロンプト種別（`instruct` / `steer` / `correct` / `question`）のみ。**本文は無い** | `prompts`（本文） |
+| `events.kind='bash_cmd'` | `surface_id` にコマンドの先頭語のみ。**コマンド全文・出力は無い** | `transcript` |
+| `events.kind='tool_error'`（`tool_errors` ビュー） | カテゴリ・ツール名・抜粋（`source` / `target` とも 200 字まで） | `transcript` |
+| `events.kind='file_edit'` / `skill_invocation` / `agent_spawn` | `target` にパス、`surface_id` にスキル名・subagent type | `sessions` の `skills` / `agents` |
+| `events` の `source_path` / `source_line` | 元の JSONL と行番号（`source_line` は 0 始まりで、値が入るのは `prompt` のみ） | `search` の `line`（1 始まり） |
+
+`events` は列を多重利用している（`tool_error` では `model` 列にツール名が入る）ので、
+友好的な列名が要るなら `tool_errors` ビューを使う。cclens は本文を保持しないため、
+本文を読む・本文で探す用途はスクリプト側（`transcript` / `search`）の担当になる。
+`search` のヒットが返す `line` は 1 始まりの物理行番号。`events.source_line`（0 始まり）と
+突き合わせるときは 1 を足す。
+
+## ツール結果（tool_result と toolUseResult）
+
+`tool_use`（assistant 行の content）の結果は、後続の `type=user` 行に
+`tool_result` ブロック（`tool_use_id` で対応）として入る。同じ行のトップレベル
+`toolUseResult` にツール固有の構造化結果が付く。`transcript --tool-detail` は
+先に `tool_use_id -> 結果` の索引を作ってから突き合わせる（`index_tool_results`）。
+
+| ツール | 成功時の `toolUseResult` | `--tool-detail` の body |
+|---|---|---|
+| Bash | `{stdout, stderr, interrupted, isImage, noOutputExpected, …}`。**exit code のキーは無い** | stdout（stderr があれば `[stderr]` 以下に続ける） |
+| Read | `{type, file: {filePath, content, numLines, startLine, totalLines}}` | パスと行数のみ（本文は出さない） |
+| Write | `{type, filePath, content, structuredPatch, originalFile, …}` | パスと文字数のみ |
+| Edit | `{filePath, oldString, newString, structuredPatch, originalFile, …}` | パスと hunk 数のみ |
+| Agent | `{agentId, status, prompt, …}`。本文は `tool_result.content` の text ブロック | text ブロックの連結 |
+| その他 | ツールごとに異なる | `tool_result.content` のテキスト |
+
+失敗時は `tool_result.is_error: true` になり、`toolUseResult` は文字列になる。
+`status` の判定:
+
+| `toolUseResult`（文字列）の先頭 | status |
+|---|---|
+| `Error: Exit code N` | `exit`（`exit_code: N`） |
+| `Error: PreToolUse:<Tool> hook error: …` | `hook_blocked` |
+| `Error: Permission for this action was denied…` | `permission_denied` |
+| `User rejected tool use` / `…doesn't want to proceed…` | `user_rejected` |
+| それ以外 | `error` |
+
+成功時は `ok`（`interrupted: true` なら `interrupted`）で、`exit_code` は `null`
+（記録が無いので 0 と推定しない）。大きな出力は `persistedOutputPath` /
+`persistedOutputSize` が付いて本体が `<session-id>/tool-results/` に退避される。
+スクリプトはこれを追わず `persisted: {path, size}` の目印だけを出す。
+
+## 出力時の伏せ字
+
+スクリプトは本文を出す全箇所（`prompts` の本文、`transcript` の発話・ツール要約・ツールの入出力、`search` のスニペット）で
+`redact()` を通し、秘密情報らしき文字列を `[REDACTED:<kind>]` に置き換える。
+**伏せ字 → 切り詰めの順**で適用する（逆にすると、切り詰めで途中が切れた
+トークンに正規表現が当たらず断片が漏れる）。
+
+| kind | 対象 |
+|---|---|
+| `private_key` | `-----BEGIN … PRIVATE KEY-----` から END まで（END が無ければ末尾まで） |
+| `github_token` | `gh[pousr]_…` / `github_pat_…` |
+| `anthropic_key` / `openai_key` | `sk-ant-…` / `sk-(proj-)…` |
+| `slack_token` | `xox[abposr]-…` |
+| `aws_access_key` | `AKIA…` / `ASIA…`（16 桁） |
+| `google_api_key` | `AIza…` |
+| `jwt` | `eyJ….….…` |
+| `bearer` | `Authorization: Bearer\|Basic` の値（ヘッダ名は残す） |
+| `url_credential` | `://user:pass@` の認証部分 |
+| `assignment` | `password` / `secret` / `token` / `api_key` / `access_key` を含むキーへの `:` / `=` の値（4 文字以上、キー名は残す） |
+
+過剰に伏せる側へ倒している（`token = get_token()` のようなコードも伏せうる）。
+正規表現で拾えない形式は素通りする。
+
+`search` は生の本文で照合してヒットを決め、スニペットは伏せ字を掛けた本文で
+照合し直してから前後を切り出す。伏せ字後に一致しない（一致箇所が秘密情報の
+中にあった）ときは `[一致箇所は伏せ字の対象]` を返す。
 
 ## 公式が推奨する代替アクセス手段
 
