@@ -10,7 +10,9 @@ Claude Code のセッション JSONL を機械的に読み出して JSON で標�
 
   - プロンプト本文（cclens は instruct/steer/correct/question の 4 ラベルに
     集約するのみで本文を保持しない）
-  - 生 transcript の時系列読み出し
+  - 生 transcript の時系列読み出しと、ツールの入出力本文
+  - 本文の横断検索（cclens の events は本文を持たず、bash_cmd もコマンドの
+    先頭語しか残らない）
   - compaction の発生記録（cclens は compaction を差分計算時に補正する
     ノイズとしてしか扱わず、発生回数・トリガーを残さない）
   - 金額（USD）の取得。cclens はトークン量とコンテキスト増加は出すが USD 換算を
@@ -32,6 +34,7 @@ Claude Code のセッション JSONL を機械的に読み出して JSON で標�
   sessions    セッション一覧（メタデータ + セッション単位の集計値）
   prompts     ユーザープロンプトの抽出（本文つき）
   cost        トークン消費と金額（USD）を ccusage から取得
+  search      全セッションの本文（プロンプト・応答・ツールの入出力）を横断検索
   transcript  単一セッションの会話を時系列で抽出（--tool-detail でツールの入力と結果も）
 
 設計: 「純粋層」と「副作用層」を分離している。
@@ -840,6 +843,183 @@ def apply_detail_budget(turns: list, budget: int) -> tuple:
     return out, omitted
 
 
+# ============================================================
+# 純粋層: 本文検索（search / prompts --grep）
+# ============================================================
+
+SEARCH_FIELDS = ("prompt", "assistant", "tool-input", "tool-result")
+TOOL_FIELDS = ("tool-input", "tool-result")
+REDACTED_MATCH_NOTE = "[一致箇所は伏せ字の対象]"
+
+
+@dataclass(frozen=True)
+class Matcher:
+    """検索語の照合規則。既定は固定文字列・大文字小文字を区別しない。
+
+    不正な正規表現は構築時に re.error を送出する（CLI 側でエラー報告）。
+    """
+
+    pattern: str
+    regex: bool = False
+    case_sensitive: bool = False
+    _re: re.Pattern = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self):
+        src = self.pattern if self.regex else re.escape(self.pattern)
+        flags = 0 if self.case_sensitive else re.IGNORECASE
+        object.__setattr__(self, "_re", re.compile(src, flags))
+
+    def search(self, text: str) -> re.Match | None:
+        return self._re.search(text) if text else None
+
+    def as_dict(self) -> dict:
+        return {"pattern": self.pattern, "regex": self.regex, "case_sensitive": self.case_sensitive}
+
+
+def snippet_around(text: str, matcher: Matcher, context: int) -> str:
+    """伏せ字を掛けた本文で一致箇所の前後 context 文字を切り出す。
+
+    照合を伏せ字後にやり直すので、切り出し窓の端で秘密情報が途中から漏れることは
+    ない。伏せ字後に一致しない（一致箇所が秘密情報の中にあった）ときは目印を返す。
+    """
+    red = redact(text)
+    m = matcher.search(red)
+    if m is None:
+        return REDACTED_MATCH_NOTE
+    start = max(0, m.start() - context)
+    end = min(len(red), m.end() + context)
+    body = red[start:end].replace("\n", " ")
+    return ("…" if start > 0 else "") + body + ("…" if end < len(red) else "")
+
+
+@dataclass(frozen=True)
+class SearchUnit:
+    """検索対象の本文 1 件（JSONL の行番号と由来つき）。"""
+
+    line: int
+    ts: datetime | None
+    field: str
+    tool: str | None
+    text: str
+
+
+@dataclass(frozen=True)
+class SessionScan:
+    title: str | None
+    spawned_as_agent: bool
+    hits: list  # list[dict]（行番号順）
+
+
+def iter_search_units(numbered: Iterable[tuple]) -> Iterator[SearchUnit]:
+    """(行番号, レコード) 列から検索対象の本文を列挙する。
+
+    prompt は prompt_text の判定規則に従い、assistant は text ブロック（thinking は
+    含めない）、tool-input は tool_input_text、tool-result は result_body。
+    sidechain 行は対象外。
+    """
+    names: dict = {}
+    for line, rec in numbered:
+        if not isinstance(rec, dict) or rec.get("isSidechain"):
+            continue
+        ts = parse_ts(rec.get("timestamp"))
+        text = prompt_text(rec)
+        if text is not None:
+            yield SearchUnit(line, ts, "prompt", None, text)
+            continue
+        if rec.get("type") == "assistant":
+            texts = []
+            for b in iter_assistant_blocks(rec):
+                if b.get("type") == "text" and b.get("text", "").strip():
+                    texts.append(b["text"])
+                elif b.get("type") == "tool_use":
+                    name = b.get("name") or "?"
+                    names[b.get("id")] = name
+                    yield SearchUnit(line, ts, "tool-input", name, tool_input_text(name, b.get("input")))
+            if texts:
+                yield SearchUnit(line, ts, "assistant", None, "\n".join(texts))
+        elif rec.get("type") == "user":
+            content = (rec.get("message") or {}).get("content")
+            if not isinstance(content, list):
+                continue
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    name = names.get(b.get("tool_use_id"), "?")
+                    body = result_body(name, b, rec.get("toolUseResult"))
+                    yield SearchUnit(line, ts, "tool-result", name, body)
+
+
+def scan_session(
+    numbered: Iterable[tuple],
+    matcher: Matcher,
+    fields_: tuple,
+    tools: tuple | None,
+    context: int,
+) -> SessionScan:
+    """1 セッション分の (行番号, レコード) 列を照合する。照合は生の本文に対して行う。"""
+    records = list(numbered)
+    title = None
+    spawned = False
+    for _, rec in records:
+        if rec.get("type") == "ai-title" and rec.get("aiTitle"):
+            title = rec["aiTitle"]
+        elif rec.get("type") in ("agent-setting", "agent-name"):
+            spawned = True
+    hits = []
+    for u in iter_search_units(records):
+        if u.field not in fields_:
+            continue
+        if tools and u.field in TOOL_FIELDS and u.tool not in tools:
+            continue
+        if matcher.search(u.text) is None:
+            continue
+        hits.append(
+            {
+                "ts": jst_str(u.ts, seconds=True),
+                "line": u.line,
+                "field": u.field,
+                "tool": u.tool,
+                "snippet": snippet_around(u.text, matcher, context),
+            }
+        )
+    return SessionScan(title=title, spawned_as_agent=spawned, hits=hits)
+
+
+def search_report(
+    scans: list,
+    filters: SessionFilters,
+    matcher: Matcher,
+    fields_: tuple,
+    tools: tuple | None,
+    limit: int,
+    per_session: int,
+    by_session_top: int = 30,
+) -> dict:
+    """scans: list[(session_id, project, SessionScan)]（新しい順・走査した全セッション）。"""
+    matched = [(sid, proj, sc) for sid, proj, sc in scans if sc.hits]
+    # 件数の多い順。sort は安定なので同数なら新しい順が保たれる
+    ranked = sorted(matched, key=lambda x: -len(x[2].hits))
+    by_session = [
+        {"session_id": sid[:8], "title": sc.title, "project": proj, "hits": len(sc.hits)}
+        for sid, proj, sc in ranked[:by_session_top]
+    ]
+    shown = []
+    for sid, _, sc in matched:
+        for h in sc.hits[: per_session if per_session > 0 else None]:
+            if limit > 0 and len(shown) >= limit:
+                break
+            shown.append({"session_id": sid[:8], **h})
+    return {
+        "filters": filters.as_dict(),
+        "query": {**matcher.as_dict(), "in": list(fields_), "tool": list(tools) if tools else None},
+        "scanned_sessions": len(scans),
+        "sessions_matched": len(matched),
+        "total_hits": sum(len(sc.hits) for _, _, sc in matched),
+        "shown": len(shown),
+        "by_session": by_session,
+        "hits": shown,
+    }
+
+
 def ccusage_argv(since: str | None, until: str | None, session: str | None) -> list:
     """フィルタ条件から ccusage の引数列を組み立てる（純粋）。
 
@@ -877,11 +1057,11 @@ def resolve_config_dir(override: str | None, env: dict | None = None) -> tuple:
     return Path.home() / ".claude", "default:~/.claude"
 
 
-def iter_records(path: Path) -> Iterator[dict]:
-    """JSONL を1行ずつ寛容に読む。壊れた行は捨てる。"""
+def iter_numbered_records(path: Path) -> Iterator[tuple]:
+    """JSONL を1行ずつ寛容に読み、(1 始まりの物理行番号, レコード) を返す。壊れた行は捨てる。"""
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
-            for line in f:
+            for lineno, line in enumerate(f, start=1):
                 line = line.strip()
                 if not line:
                     continue
@@ -890,9 +1070,15 @@ def iter_records(path: Path) -> Iterator[dict]:
                 except json.JSONDecodeError:
                     continue
                 if isinstance(obj, dict):
-                    yield obj
+                    yield lineno, obj
     except OSError:
         return
+
+
+def iter_records(path: Path) -> Iterator[dict]:
+    """JSONL を1行ずつ寛容に読む。壊れた行は捨てる。"""
+    for _, rec in iter_numbered_records(path):
+        yield rec
 
 
 def find_session_files(config_dir: Path, filters: SessionFilters) -> list:
@@ -1109,6 +1295,39 @@ def cmd_cost(config_dir: Path, args) -> None:
     )
 
 
+def split_csv(value: str | None) -> tuple:
+    return tuple(x.strip() for x in value.split(",") if x.strip()) if value else ()
+
+
+def build_matcher(args) -> Matcher:
+    """CLI 引数から Matcher を作る。不正な正規表現はエラーを出して終了する。"""
+    try:
+        return Matcher(args.pattern, regex=args.regex, case_sensitive=args.case_sensitive)
+    except re.error as e:
+        emit({"error": f"正規表現が不正: {e}", "pattern": args.pattern})
+        sys.exit(1)
+
+
+def cmd_search(config_dir: Path, args) -> None:
+    """全セッションの本文を横断検索し、ヒット位置（行番号）とスニペットを返す。"""
+    matcher = build_matcher(args)
+    tools = split_csv(args.tool) or None
+    # --tool だけ指定されたらツールの入出力に絞る（prompt/assistant のヒットで埋もれないように）
+    fields_ = split_csv(args.in_) or (TOOL_FIELDS if tools else SEARCH_FIELDS)
+    unknown = [f for f in fields_ if f not in SEARCH_FIELDS]
+    if unknown:
+        emit({"error": f"--in に未知の対象: {unknown}", "choices": list(SEARCH_FIELDS)})
+        sys.exit(1)
+    filters = SessionFilters.from_args(args)
+    scans = []
+    for f in find_session_files(config_dir, filters):
+        sc = scan_session(iter_numbered_records(f), matcher, fields_, tools, args.context)
+        if not filters.include_agents and sc.spawned_as_agent:
+            continue
+        scans.append((f.stem, f.parent.name, sc))
+    emit(search_report(scans, filters, matcher, fields_, tools, args.limit, args.per_session))
+
+
 def cmd_transcript(config_dir: Path, args) -> None:
     filters = SessionFilters(session=args.session, include_agents=True)
     files = find_session_files(config_dir, filters)
@@ -1191,6 +1410,23 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--until", help="JST日付 YYYY-MM-DD（その日を含む）")
     sp.add_argument("--session", help="セッションID（指定時は日次でなくセッション単位）")
 
+    sp = sub.add_parser("search", help="全セッションの本文を横断検索（ヒット位置とスニペット）")
+    sp.add_argument("pattern", help="検索語（既定は固定文字列・大文字小文字を区別しない）")
+    sp.add_argument("--regex", action="store_true", help="pattern を正規表現として扱う")
+    sp.add_argument("--case-sensitive", action="store_true", help="大文字小文字を区別する")
+    sp.add_argument(
+        "--in",
+        dest="in_",
+        help=f"検索対象（カンマ区切り: {','.join(SEARCH_FIELDS)}。既定は全部、--tool 指定時は tool-input,tool-result）",
+    )
+    sp.add_argument("--tool", help="tool-input / tool-result を指定ツールに絞る（カンマ区切り。例: Bash,Edit）")
+    add_filter_args(sp)
+    sp.add_argument("--limit", type=int, default=40, help="表示するヒットの最大件数（既定40、0で無制限）")
+    sp.add_argument(
+        "--per-session", type=int, default=3, help="1 セッションあたりの表示件数（既定3、0で無制限）"
+    )
+    sp.add_argument("--context", type=int, default=80, help="スニペットの前後文字数（既定80）")
+
     sp = sub.add_parser("transcript", help="単一セッションの会話抽出")
     sp.add_argument("--session", required=True, help="セッションIDの前方一致（一意になる長さで）")
     sp.add_argument(
@@ -1233,6 +1469,7 @@ def main(argv: list | None = None) -> int:
         "sessions": lambda: cmd_sessions(config_dir, args),
         "prompts": lambda: cmd_prompts(config_dir, args),
         "cost": lambda: cmd_cost(config_dir, args),
+        "search": lambda: cmd_search(config_dir, args),
         "transcript": lambda: cmd_transcript(config_dir, args),
     }
     handlers[args.cmd]()

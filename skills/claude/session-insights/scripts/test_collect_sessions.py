@@ -566,6 +566,87 @@ class TestTranscriptToolDetail(unittest.TestCase):
         self.assertEqual(cs.apply_detail_budget(turns, 0), (turns, 0))
 
 
+def numbered(records):
+    return list(enumerate(records, start=1))
+
+
+class TestMatcher(unittest.TestCase):
+    def test_fixed_string_ignores_case_and_metachars(self):
+        m = cs.Matcher("TMP_CLAUDE (x)")
+        self.assertIsNotNone(m.search("see tmp_claude (x) here"))
+        self.assertIsNone(m.search("tmp_claude x"))
+
+    def test_regex_and_case_sensitive(self):
+        self.assertIsNotNone(cs.Matcher(r"check-ignore\s+-v", regex=True).search("git check-ignore  -v a"))
+        self.assertIsNone(cs.Matcher("ABC", case_sensitive=True).search("abc"))
+
+    def test_invalid_regex_raises(self):
+        with self.assertRaises(cs.re.error):
+            cs.Matcher("(", regex=True)
+
+    def test_snippet_around(self):
+        m = cs.Matcher("needle")
+        self.assertEqual(cs.snippet_around("aaaa needle bbbb", m, 2), "…a needle b…")
+        self.assertEqual(cs.snippet_around("needle\nx", m, 10), "needle x")
+
+    def test_snippet_never_leaks_secret_fragment(self):
+        token = "ghp_" + "e" * 36
+        out = cs.snippet_around(f"export GH={token} # needle", cs.Matcher("needle"), 10)
+        self.assertNotIn("eeee", out)
+        # 一致箇所そのものが秘密情報の中にある
+        self.assertEqual(cs.snippet_around(token, cs.Matcher("eeee"), 10), cs.REDACTED_MATCH_NOTE)
+
+
+class TestSearch(unittest.TestCase):
+    def scan(self, pattern="tmp_claude", fields_=cs.SEARCH_FIELDS, tools=None, records=None):
+        recs = detail_records() if records is None else records
+        return cs.scan_session(numbered(recs), cs.Matcher(pattern), fields_, tools, 20)
+
+    def test_hits_all_fields_with_line_numbers(self):
+        sc = self.scan()
+        got = [(h["line"], h["field"], h["tool"]) for h in sc.hits]
+        self.assertEqual(
+            got,
+            [(2, "tool-input", "Bash"), (3, "tool-result", "Bash")],
+        )
+        self.assertFalse(sc.spawned_as_agent)
+
+    def test_field_and_tool_filters(self):
+        self.assertEqual([h["field"] for h in self.scan("ignore", ("prompt",)).hits], ["prompt"])
+        sc = self.scan("a", cs.TOOL_FIELDS, ("Read",))
+        self.assertTrue(sc.hits)
+        self.assertTrue(all(h["tool"] == "Read" for h in sc.hits))
+
+    def test_excludes_sidechain_and_meta(self):
+        recs = [
+            user_rec("needle meta", isMeta=True),
+            user_rec("needle side", isSidechain=True),
+            {**assistant_rec([{"type": "text", "text": "needle"}]), "isSidechain": True},
+            user_rec("<system-reminder>needle</system-reminder>"),
+        ]
+        self.assertEqual(self.scan("needle", records=recs).hits, [])
+
+    def test_title_and_spawned(self):
+        recs = [{"type": "ai-title", "aiTitle": "T"}, {"type": "agent-setting", "agentSetting": "Explore"}]
+        sc = self.scan(records=recs)
+        self.assertEqual((sc.title, sc.spawned_as_agent), ("T", True))
+
+    def test_report_limits_keep_totals(self):
+        def scan_with(n):
+            return cs.SessionScan(title=None, spawned_as_agent=False, hits=[{"line": i} for i in range(n)])
+
+        scans = [("s-new", "p", scan_with(2)), ("s-none", "p", scan_with(0)), ("s-old", "p", scan_with(5))]
+        rep = cs.search_report(
+            scans, cs.SessionFilters(), cs.Matcher("x"), cs.SEARCH_FIELDS, None, limit=3, per_session=2
+        )
+        self.assertEqual(
+            (rep["scanned_sessions"], rep["sessions_matched"], rep["total_hits"], rep["shown"]), (3, 2, 7, 3)
+        )
+        self.assertEqual([h["session_id"] for h in rep["hits"]], ["s-new", "s-new", "s-old"])
+        self.assertEqual([b["session_id"] for b in rep["by_session"]], ["s-old", "s-new"])
+        self.assertEqual(rep["by_session"][0]["hits"], 5)
+
+
 class TestCcusageArgv(unittest.TestCase):
     def test_daily_with_range(self):
         argv = cs.ccusage_argv("2026-07-01", "2026-07-08", None)
@@ -683,6 +764,27 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rep["detail_omitted"], 0)
         tools = next(t for t in rep["turns"] if t["role"] == "assistant:tools")["tools"]
         self.assertEqual(tools[1]["result"]["exit_code"], 1)
+
+    def test_search(self):
+        proj = self.root / "projects" / "-home-u-proj"
+        with open(proj / "dddd4444-0000-0000-0000-000000000000.jsonl", "w") as f:
+            f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in detail_records())
+        rep = self.run_cli("search", "gitignore:3", "--tool", "Bash")
+        self.assertEqual(rep["query"]["in"], ["tool-input", "tool-result"])
+        self.assertEqual(rep["sessions_matched"], 1)
+        self.assertEqual(rep["hits"][0]["session_id"], "dddd4444")
+        self.assertEqual(rep["hits"][0]["field"], "tool-result")
+        # Agent 起動由来（bbbb2222）は既定で走査対象外
+        self.assertEqual(rep["scanned_sessions"], 2)
+
+    def test_search_rejects_bad_input(self):
+        for argv in (["search", "(", "--regex"], ["search", "x", "--in", "bogus"]):
+            with self.subTest(argv=argv):
+                buf = io.StringIO()
+                with redirect_stdout(buf), self.assertRaises(SystemExit) as cm:
+                    cs.main(["--config-dir", str(self.root), *argv])
+                self.assertEqual(cm.exception.code, 1)
+                self.assertIn("error", json.loads(buf.getvalue()))
 
     def test_paths_runs(self):
         rep = self.run_cli("paths")
