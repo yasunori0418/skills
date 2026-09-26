@@ -31,7 +31,7 @@ AI の責務はここまで（依存辺・境界・期待ファイルの意味�
 | `depends_on` | string[] | `[]` | 前段 task の id。空 = 独立（並列）、1 つ = その branch を base にした stacked 段、複数 = WARNING（先頭親を仮採用）。判定基準は `dependency-analysis.md` |
 | `prompt` | string | 必須相当 | タスク固有の内容と完了条件だけを書く（運用規約は worker_contract が連結するので書かない） |
 | `issue` | int | `0` | 対応する GitHub issue 番号。規約に issue 参照と PR へのリンク指示が載る |
-| `boundary` | string[] | `[]` | 編集を許す glob。宣言すると境界ファイルを生成し task-boundary hook が境界外 Edit/Write を deny する。`tmp_claude/**` は自動追加。決め方は `dependency-analysis.md`、仕組みは `boundary.md`。maintain では既存 worktree の境界ファイルと**マージ**される（allow は和集合。実装フェーズ中に widen した分は保たれる。詳細は `maintain.md`） |
+| `boundary` | string[] | `[]` | 編集を許す glob。宣言すると境界ファイルを生成し task-boundary hook が境界外 Edit/Write を deny する。`tmp-agents/**` は自動追加。決め方は `dependency-analysis.md`、仕組みは `boundary.md`。maintain では既存 worktree の境界ファイルと**マージ**される（allow は和集合。実装フェーズ中に widen した分は保たれる。詳細は `maintain.md`） |
 | `model` / `permission_mode` / `effort` | string | 未指定 | claude 起動の task 個別上書き（CLI フラグのグローバル既定より優先）。`permission_mode` は `acceptEdits` / `auto` / `bypassPermissions` / `manual` / `dontAsk` / `plan`、`effort` は `low` / `medium` / `high` / `xhigh` / `max` |
 | `expected_files` | string[] | `[]` | 計画に書かれた変更ファイル一覧（下記の起草基準）。`check_scope.py` の照合対象。無い task は WARNING（ファイル照合なしに縮退） |
 | `expected_scale` | int | `0` | 計画の規模目安（追加 + 削除の行数）。実測が `expected_scale × 2` を超えると FAIL。`0` = 規模照合なし |
@@ -47,10 +47,10 @@ AI の責務はここまで（依存辺・境界・期待ファイルの意味�
 - **計画に変更ファイル一覧や規模が無いときは、憶測で埋めずユーザーへ問う**（計画側に書き足してもらうか、対話で確定してから spec に落とす）。空のまま進めると突合が縮退し、Phase 4 のゲートが機能しない
 - stacked の後段は、その段で触るファイルだけを書く（前段の変更は base 側に入るので diff に現れない）
 
-## 置き場: spec と prompt-dir は `tmp_claude/<job>/job-graph/` に置く
+## 置き場: spec と prompt-dir は `tmp-agents/<job>/job-graph/` に置く
 
 ```
-tmp_claude/<job>/
+tmp-agents/<job>/
   plan.md                 # 計画（spec の plan）
   handoff.md              # 引き継ぎ書（handoff.md 参照）
   job-graph/
@@ -64,4 +64,4 @@ tmp_claude/<job>/
 job-plan 側の plan.md は第 3 章が固定文法で、`expected_files` / `boundary` / `expected_scale` /
 `depends_on` を機械的に写せる。
 
-scratchpad（セッション固有の一時ディレクトリ）に置くと、**親交代（セッション再開・別セッションの親へ引き継ぎ）でパスが失効し、起動済みワーカーへ渡した prompt ファイルや後続 wave の launch スクリプトが読めなくなった実績**がある。`tmp_claude/` はリポジトリ直下で gitignored、worktree からも絶対パスで辿れ、handoff.md と同じ場所に揃う。spec と prompt-dir の絶対パスは handoff.md の「所在」に記録する。
+scratchpad（セッション固有の一時ディレクトリ）に置くと、**親交代（セッション再開・別セッションの親へ引き継ぎ）でパスが失効し、起動済みワーカーへ渡した prompt ファイルや後続 wave の launch スクリプトが読めなくなった実績**がある。`tmp-agents/` はリポジトリ直下で gitignored、worktree からも絶対パスで辿れ、handoff.md と同じ場所に揃う。spec と prompt-dir の絶対パスは handoff.md の「所在」に記録する。

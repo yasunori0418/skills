@@ -7,7 +7,7 @@
 - 期待ファイル一覧（--expected-file、繰り返し可）に無いファイルが 1 つでも変更されていれば FAIL
 - 変更行数（追加 + 削除）が 規模目安（--expected-scale）× SCALE_FACTOR を超えれば FAIL
 - 期待が両方とも無ければ SKIP（判定不能。親が手で確認する）
-- `tmp_claude/**` 配下は突合から除外する（一時出力先。境界宣言でも自動許可される）
+- `tmp-agents/**` 配下は突合から除外する（一時出力先。境界宣言でも自動許可される）
 
 出力は `=== CHANGED ===` / `=== UNEXPECTED ===` / `=== SCALE ===` と末尾の `VERDICT: PASS|FAIL|SKIP`。
 終了コード: PASS/SKIP = 0、FAIL = 1、収集失敗（gh/git の実行エラー）= 2。
@@ -36,7 +36,7 @@ from typing import Union
 SCALE_FACTOR = 2
 
 # 突合から除外するパス接頭辞（一時出力先。境界宣言でも自動で許可される）。
-EXCLUDED_PREFIXES = ("tmp_claude/",)
+EXCLUDED_PREFIXES = ("tmp-agents/",)
 
 
 class ScopeError(Exception):
@@ -203,7 +203,7 @@ def render(result: ScopeResult) -> str:
     out: list[str] = []
     for w in result.warnings:
         out.append(f"WARNING: {w}")
-    out.append("=== CHANGED (path adds dels; tmp_claude/ は除外済み) ===")
+    out.append("=== CHANGED (path adds dels; tmp-agents/ は除外済み) ===")
     if result.changed:
         for c in result.changed:
             out.append(f"  {c.path}\t+{c.additions}\t-{c.deletions}")

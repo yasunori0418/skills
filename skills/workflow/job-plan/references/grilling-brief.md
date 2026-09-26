@@ -8,11 +8,11 @@ job-plan の対話は `grilling` スキルに委ねる（feature-spec / product-
 
 ```
 対象: <job 候補名 / 入力の要約（自由記述 / docs/dev/<対象>/spec.md / issue #N）>
-目的: job-graph が手放しで走らせられる計画（tmp_claude/<job>/plan.md + job-graph/spec.json）を確定する。
+目的: job-graph が手放しで走らせられる計画（tmp-agents/<job>/plan.md + job-graph/spec.json）を確定する。
       成果物の章立ては references/plan-template.md、spec との対応は references/plan-spec-mapping.md。
 
 閉じるまで終われない項目（全て決まるまでフロンティアを空にしない）:
-1. <job> 名（tmp_claude/<job>/ のディレクトリ名。kebab-case）
+1. <job> 名（tmp-agents/<job>/ のディレクトリ名。kebab-case）
 2. タスク分割と各 task の id / branch / 依存辺（stacked か並列か。基準は job-graph dependency-analysis.md）
 3. task ごとの boundary（触ってよい glob）
 4. task ごとの expected_files（触るはずの実パス。巻き添えファイル込み）と expected_scale（行数）
@@ -37,7 +37,7 @@ grilling のフロンティアが空になったら、書き始める前にこ�
 
 | # | 項目 | 「閉じた」と言える状態 |
 | --- | --- | --- |
-| 1 | `<job>` 名 | 既存 `tmp_claude/<job>/` との衝突を確認済み（あれば改訂か別名かを問うた） |
+| 1 | `<job>` 名 | 既存 `tmp-agents/<job>/` との衝突を確認済み（あれば改訂か別名かを問うた） |
 | 2 | 分割・branch・依存 | 全 task に一意な id と branch、`depends_on` が明示（空 = 並列） |
 | 3 | boundary | 全 task に glob 配列（宣言漏れは正当作業のブロックになるので、テスト・生成物の置き場も含む） |
 | 4 | expected_files / scale | 全 task に実パス一覧（glob 不可）と整数の行数 |
@@ -72,6 +72,6 @@ grilling のフロンティアが空になったら、書き始める前にこ�
   `gh api repos/{owner}/{repo}/issues/<N>/sub_issues` で本文と既存 sub-issue を読む。sub-issue は
   タスク候補として並べ、項目 10 で振り分けを問う。`--issue` 出力時はこの issue が epic になり、
   spec の `issue` に既存番号を入れた task は新規作成されない
-- **改訂（既存 `tmp_claude/<job>/` あり）**: 既存 plan.md / spec.json を読み、差分だけを grilling する
+- **改訂（既存 `tmp-agents/<job>/` あり）**: 既存 plan.md / spec.json を読み、差分だけを grilling する
   （「タスクを 1 つ足す」なら項目 2〜6 を新 task についてのみ、既存 task は変更の有無を 1 問で確認）。
   既存 task の spec を書き換えない限り `issue` 番号は保つ

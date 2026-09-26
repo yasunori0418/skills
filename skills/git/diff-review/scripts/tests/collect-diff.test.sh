@@ -233,16 +233,16 @@ has "conv-timeout-completes" "$OUT" "== SIZE =="
 ERR=$(cd "$D" && DIFF_REVIEW_PYTHON="$SLOWPY" DIFF_REVIEW_CONVENTIONS_TIMEOUT=1 "$COLLECT" manifest 2>&1 >/dev/null)
 has "conv-timeout-warn" "$ERR" "1 秒で打ち切られたため CONVENTIONS 節を生成できない"
 
-# --- 規定パス外の候補: gitignored な tmp_claude/ の仕様書も候補として出る ---
-# 実運用の失敗例(tmp_claude/<日付>_<対象>_spec.md が検出されずレビューが仕様を無視した)の回帰
+# --- 規定パス外の候補: gitignored な tmp-agents/ の仕様書も候補として出る ---
+# 実運用の失敗例(tmp-agents/<日付>_<対象>_spec.md が検出されずレビューが仕様を無視した)の回帰
 D="$WORK/candidate" && new_repo "$D"
-mkdir -p "$D/tmp_claude"
-printf 'tmp_claude/\n' >"$D/.gitignore"
-echo "# spec" >"$D/tmp_claude/20260715_batch_optimize_spec.md"
+mkdir -p "$D/tmp-agents"
+printf 'tmp-agents/\n' >"$D/.gitignore"
+echo "# spec" >"$D/tmp-agents/20260715_batch_optimize_spec.md"
 OUT=$(manifest "$D")
 has "candidate-section" "$OUT" "== GROUND_TRUTH"
 has "candidate-header" "$OUT" "候補(規定パス外"
-has "candidate-path" "$OUT" "tmp_claude/20260715_batch_optimize_spec.md"
+has "candidate-path" "$OUT" "tmp-agents/20260715_batch_optimize_spec.md"
 hasnt "candidate-not-confirmed" "$OUT" "対象: "
 
 # --- 候補は未確定である旨が明記される(採否確認前に判断基準へ使わせない) ---
@@ -258,11 +258,11 @@ hasnt "candidate-noise-no-section" "$OUT" "== GROUND_TRUTH"
 
 # --- 明示注入: 確定側に出て候補には重複しない ---
 D="$WORK/injected" && new_repo "$D"
-mkdir -p "$D/tmp_claude"
-echo "# spec" >"$D/tmp_claude/my_spec.md"
-OUT=$(cd "$D" && DIFF_REVIEW_GROUND_TRUTH="tmp_claude/my_spec.md" "$COLLECT" manifest 2>/dev/null)
+mkdir -p "$D/tmp-agents"
+echo "# spec" >"$D/tmp-agents/my_spec.md"
+OUT=$(cd "$D" && DIFF_REVIEW_GROUND_TRUTH="tmp-agents/my_spec.md" "$COLLECT" manifest 2>/dev/null)
 has "injected-header" "$OUT" "明示指定(DIFF_REVIEW_GROUND_TRUTH)"
-has "injected-path" "$OUT" "tmp_claude/my_spec.md"
+has "injected-path" "$OUT" "tmp-agents/my_spec.md"
 hasnt "injected-not-candidate" "$OUT" "候補(規定パス外"
 
 # --- 明示注入: ':' 区切りで複数指定できる ---

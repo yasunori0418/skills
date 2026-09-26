@@ -10,7 +10,7 @@ description: Notion・Slack・GitHub Issue/PR・Linear等の外部システム�
 Notion・Slack・GitHub Issue/PR・Linear など、外部システムへの**作成・更新・コメント操作**は、ユーザーから明示的に指示された場合に限り実行する。
 
 - 会話に外部システムのURL（NotionページURL、Issue URL等）が登場しても、それは**参照用／目的地の共有**であり、自動書き込み依頼ではない
-- ドラフトはローカル（`./tmp_claude/` 等）に出力する
+- ドラフトはローカル（`./tmp-agents/` 等）に出力する
 - 「Notionに書いて」「コメントして」「Issueを作って」等の明示指示があって初めてMCPツールを使用する
 - 迷ったらローカル出力 → 「外部システムに反映しますか？」と確認する
 

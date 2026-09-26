@@ -42,7 +42,7 @@ has() { # label haystack needle
 # チェックアウトである前提を置くと、checks.hooks の sandbox(.git を持たない
 # cp -r コピー)で成立せず許可ケースが軒並み deny に倒れる。
 WORKTREE="$WORK/repo"
-mkdir -p "$WORKTREE/tmp_claude"
+mkdir -p "$WORKTREE/tmp-agents"
 git init -q "$WORKTREE"
 
 payload() { # command [cwd] -> hook 入力 JSON を $WORK/in.json に書く
@@ -57,29 +57,29 @@ hook_exit() { # command [cwd] -> スクリプト本体の exit code
 
 # --- (1) 統合報告ファイルへのリダイレクトは許可 ---
 # 出力先は basename 一致に加えて worktree / scratchpad 配下であることを要求する
-check "report-redirect-allowed" "0" "$(hook_exit "cat body.md > $WORKTREE/tmp_claude/review-converge-round-1.md")"
-check "report-append-allowed" "0" "$(hook_exit "echo done >> $WORKTREE/tmp_claude/review-converge-round-12.md")"
+check "report-redirect-allowed" "0" "$(hook_exit "cat body.md > $WORKTREE/tmp-agents/review-converge-round-1.md")"
+check "report-append-allowed" "0" "$(hook_exit "echo done >> $WORKTREE/tmp-agents/review-converge-round-12.md")"
 # 相対パスは hook 入力の cwd 基準で解決される(cwd が worktree 内なので許可)
 check "report-relative-allowed" "0" "$(hook_exit 'printf x >| review-converge-round-3.md')"
 # 実運用形: heredoc で本文を書き出す。本文に拒否語の行・markdown の引用行・バッククォートを
 # 含めても、データはコマンドとして読まれない(唯一の書き出し経路を塞ぐ退行の固定)
-check "report-heredoc-body-allowed" "0" "$(hook_exit "cat > $WORKTREE/tmp_claude/review-converge-round-1.md <<EOF
+check "report-heredoc-body-allowed" "0" "$(hook_exit "cat > $WORKTREE/tmp-agents/review-converge-round-1.md <<EOF
 ## レビュー結果
 - rm -rf の確認ダイアログがレーンを止める
 - make test / nix build は実測検証なので行わない
 > 引用行の markdown
 \`cp a b\` のようなコマンド引用
 EOF")"
-check "report-heredoc-quoted-delim-allowed" "0" "$(hook_exit "cat > $WORKTREE/tmp_claude/review-converge-round-2.md <<'EOF'
+check "report-heredoc-quoted-delim-allowed" "0" "$(hook_exit "cat > $WORKTREE/tmp-agents/review-converge-round-2.md <<'EOF'
 - nix build の成果物を作らない
 EOF")"
 # 引用符付き・変数展開の出力先は静的に解決できないので拒否側(安全側)に倒す
-check "report-quoted-blocked" "2" "$(hook_exit "cat body.md > \"$WORKTREE/tmp_claude/review-converge-round-1.md\"")"
+check "report-quoted-blocked" "2" "$(hook_exit "cat body.md > \"$WORKTREE/tmp-agents/review-converge-round-1.md\"")"
 check "report-variable-blocked" "2" "$(hook_exit 'cat body.md > "$REPORT"')"
 # 許可先と拒否先が 1 コマンドに混在するとき、最初の 1 件で打ち切らず全件検査する
-check "mixed-redirect-blocked" "2" "$(hook_exit "cat a >| $WORKTREE/tmp_claude/review-converge-round-1.md; echo b > out.txt")"
+check "mixed-redirect-blocked" "2" "$(hook_exit "cat a >| $WORKTREE/tmp-agents/review-converge-round-1.md; echo b > out.txt")"
 # basename が一致しても書き込み先が worktree / scratchpad の外なら不可
-check "report-in-worktree-allowed" "0" "$(hook_exit "cat a >| $WORKTREE/tmp_claude/review-converge-round-1.md")"
+check "report-in-worktree-allowed" "0" "$(hook_exit "cat a >| $WORKTREE/tmp-agents/review-converge-round-1.md")"
 check "report-outside-worktree-blocked" "2" "$(hook_exit 'cat a >| /tmp/evil/review-converge-round-1.md')"
 check "report-traversal-blocked" "2" "$(hook_exit 'cat a >| ../../review-converge-round-1.md')"
 check "report-abs-traversal-blocked" "2" "$(hook_exit "cat a >| $WORKTREE/../review-converge-round-1.md")"
@@ -96,35 +96,35 @@ check "report-in-scratchpad-allowed" "0" "$?"
 # 同じパスでも scratchpad の指定が無ければ worktree 外として拒否する
 check "report-scratchpad-unset-blocked" "2" "$(hook_exit "cat a >| $SCRATCH/review-converge-round-1.md")"
 
-# 実運用の経路: worktree 内の tmp_claude が primary リポジトリへの symlink でも許可する
+# 実運用の経路: worktree 内の tmp-agents が primary リポジトリへの symlink でも許可する
 # (worktree では symlink で配置される。前方一致は字句同士で行い symlink を
 #  辿らないため、実体が worktree 外にあっても許可される)
 PRIMARY="$WORK/primary-tmp"
 mkdir -p "$PRIMARY"
 LINKED="$WORK/repo-linked"
 git init -q "$LINKED"
-ln -s "$PRIMARY" "$LINKED/tmp_claude"
-check "report-symlinked-tmp-claude-allowed" "0" \
-    "$(hook_exit "cat a >| $LINKED/tmp_claude/review-converge-round-1.md" "$LINKED")"
+ln -s "$PRIMARY" "$LINKED/tmp-agents"
+check "report-symlinked-tmp-agents-allowed" "0" \
+    "$(hook_exit "cat a >| $LINKED/tmp-agents/review-converge-round-1.md" "$LINKED")"
 
 # worktree root より上に symlink がある配置(git rev-parse は実体を返す)でも許可する
 ABOVE="$WORK/above"
 mkdir -p "$ABOVE/real"
 ln -s "$ABOVE/real" "$ABOVE/link"
 git init -q "$ABOVE/real/repo"
-# tmp_claude は作らない。hook はコマンド実行前に走るので出力先は未作成であり、
+# tmp-agents は作らない。hook はコマンド実行前に走るので出力先は未作成であり、
 # 先に作ると実在を前提にした解決でも通ってしまい退行を検知できない
 check "report-symlink-above-root-allowed" "0" \
-    "$(hook_exit "cat a >| $ABOVE/link/repo/tmp_claude/review-converge-round-1.md" "$ABOVE/link/repo")"
+    "$(hook_exit "cat a >| $ABOVE/link/repo/tmp-agents/review-converge-round-1.md" "$ABOVE/link/repo")"
 
-# above-root symlink と worktree 内 tmp_claude の外向き symlink が同時に成立する配置
+# above-root symlink と worktree 内 tmp-agents の外向き symlink が同時に成立する配置
 BOTH="$WORK/both"
 mkdir -p "$BOTH/real" "$BOTH/outside"
 ln -s "$BOTH/real" "$BOTH/link"
 git init -q "$BOTH/real/repo"
-ln -s "$BOTH/outside" "$BOTH/real/repo/tmp_claude"
+ln -s "$BOTH/outside" "$BOTH/real/repo/tmp-agents"
 check "report-symlink-both-directions-allowed" "0" \
-    "$(hook_exit "cat a >| $BOTH/link/repo/tmp_claude/review-converge-round-1.md" "$BOTH/link/repo")"
+    "$(hook_exit "cat a >| $BOTH/link/repo/tmp-agents/review-converge-round-1.md" "$BOTH/link/repo")"
 
 # git リポジトリ外で走ったときは worktree を解決できず、安全側で拒否する
 check "report-outside-git-blocked" "2" "$(hook_exit "cat a >| $WORK/review-converge-round-1.md" "$WORK")"
@@ -133,7 +133,7 @@ check "report-outside-git-blocked" "2" "$(hook_exit "cat a >| $WORK/review-conve
 check "report-unquoted-variable-blocked" "2" "$(hook_exit 'cat body.md > $DIR/review-converge-round-1.md')"
 
 # heredoc 演算子がリダイレクトより前に来る語順でも同じく許可される
-check "report-heredoc-first-allowed" "0" "$(hook_exit "cat <<EOF > $WORKTREE/tmp_claude/review-converge-round-4.md
+check "report-heredoc-first-allowed" "0" "$(hook_exit "cat <<EOF > $WORKTREE/tmp-agents/review-converge-round-4.md
 - rm や nix build の説明を含む本文
 EOF")"
 

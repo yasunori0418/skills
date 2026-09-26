@@ -108,7 +108,7 @@ detect_repo_identity() {
 }
 
 # --- PR 本文の書き出し先（セッション分離）---------------------------------
-# worktrunk 等で複数セッションが tmp_claude/ を symlink 共有していると、本文の
+# worktrunk 等で複数セッションが tmp-agents/ を symlink 共有していると、本文の
 # 下書きを固定名（pr-body.md）に書いた瞬間に別セッションと衝突する。セッション
 # ごとにユニークな ID をパスへ埋め、書き出し先を分離する。
 #
@@ -236,7 +236,7 @@ echo "=== PR BODY FILE ==="
 # 本文下書きの書き出し先（セッション分離済み・絶対パス）。呼び出し側はこの
 # パスに本文を Write し、template-check.sh の第2引数にも同じパスを渡す。
 body_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-echo "$body_root/tmp_claude/pr-body-$(detect_body_id).md"
+echo "$body_root/tmp-agents/pr-body-$(detect_body_id).md"
 echo "(このパスに本文を書き出す。セッションごとに分離され、他セッションと衝突しない)"
 echo ""
 

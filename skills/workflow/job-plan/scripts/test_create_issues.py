@@ -12,8 +12,8 @@ import check_plan_spec as cps
 import create_issues as ci
 from test_check_plan_spec import PLAN_OK, spec_ok, tasks_ok
 
-PLAN_PATH = "tmp_claude/demo/plan.md"
-SPEC_PATH = "tmp_claude/demo/job-graph/spec.json"
+PLAN_PATH = "tmp-agents/demo/plan.md"
+SPEC_PATH = "tmp-agents/demo/job-graph/spec.json"
 REPO_JSON = json.dumps({"nameWithOwner": "o/r", "url": "https://github.com/o/r"})
 
 Responder = Callable[[Sequence[str], str], ci.GhResult | None]
@@ -131,7 +131,7 @@ def test_plan_actions_new_only() -> None:
     assert isinstance(first, ci.CreateSubIssue)
     assert first.task_id == "B1"
     assert first.title == "demo: B1 設定追加"
-    assert first.body.startswith("epic: #10\nローカル計画: `tmp_claude/demo/plan.md`\n\n### B1: 設定追加")
+    assert first.body.startswith("epic: #10\nローカル計画: `tmp-agents/demo/plan.md`\n\n### B1: 設定追加")
 
 
 def test_plan_actions_sync_paths() -> None:
@@ -180,7 +180,7 @@ def test_new_epic_creates_links_and_writes_back() -> None:
     assert argv[0] == ("gh", "auth", "status")
     assert argv[1] == ("gh", "repo", "view", "--json", "nameWithOwner,url")
     assert argv[2] == ("gh", "issue", "create", "--title", "計画: demo", "--body-file", "-")
-    assert runner.calls[2].input.startswith("ローカル計画: `tmp_claude/demo/plan.md`\n\n# 計画: demo")
+    assert runner.calls[2].input.startswith("ローカル計画: `tmp-agents/demo/plan.md`\n\n# 計画: demo")
     # epic = 101。以降 task ごとに create → id 取得 → 紐付け
     assert argv[3] == ("gh", "issue", "create", "--title", "demo: A ロガー整理", "--body-file", "-")
     assert runner.calls[3].input.startswith("epic: #101\n")
@@ -387,4 +387,4 @@ def test_file_effects_write_back_and_append(tmp_path: Path) -> None:
     assert tasks[1]["issue"] == 42
     assert tasks[1]["expected_scale"] == 80  # 他フィールドは保たれる
     fx.append_plan(["- epic: https://github.com/o/r/issues/1"])
-    assert plan_p.read_text(encoding="utf-8").endswith("- 起動: `/job-graph tmp_claude/demo/plan.md`\n- epic: https://github.com/o/r/issues/1\n")
+    assert plan_p.read_text(encoding="utf-8").endswith("- 起動: `/job-graph tmp-agents/demo/plan.md`\n- epic: https://github.com/o/r/issues/1\n")

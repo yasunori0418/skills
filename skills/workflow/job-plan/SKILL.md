@@ -1,6 +1,6 @@
 ---
 name: job-plan
-description: "grilling の対話で job-graph 向けの計画（tmp_claude/<job>/plan.md と job-graph/spec.json）を確定し、任意で GitHub の epic / sub-issue へ出す上流スキル。`/job-plan` の明示実行専用。"
+description: "grilling の対話で job-graph 向けの計画（tmp-agents/<job>/plan.md と job-graph/spec.json）を確定し、任意で GitHub の epic / sub-issue へ出す上流スキル。`/job-plan` の明示実行専用。"
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[対象名 | 資料パス | issue 番号] [--issue]"
@@ -14,8 +14,8 @@ job-graph は「計画ファイル → spec.json → レーン起動 → 手放�
 止まり、完了条件が曖昧だとワーカーが勝手に終了判断する。job-plan はその上流で、
 **grilling による対話**で計画を閉じ、job-graph がそのまま消費できる 2 ファイルを確定させる:
 
-- `tmp_claude/<job>/plan.md`（6 章固定。ワーカーの `/review-converge` が ground truth として読む）
-- `tmp_claude/<job>/job-graph/spec.json`（`plan` が plan.md を指す。job-graph の計画突合の材料）
+- `tmp-agents/<job>/plan.md`（6 章固定。ワーカーの `/review-converge` が ground truth として読む）
+- `tmp-agents/<job>/job-graph/spec.json`（`plan` が plan.md を指す。job-graph の計画突合の材料）
 
 外部書き込み（GitHub issue）を含み得るため `disable-model-invocation: true`。`/job-plan` の明示実行
 時のみ動く。以下、スキル本体のパスを `<SKILL>` と表記する。
@@ -32,7 +32,7 @@ job-graph は「計画ファイル → spec.json → レーン起動 → 手放�
 4. **末尾ゲートを通してから引き渡す。** `check_plan_spec.py`（plan ↔ spec 整合）と job-graph の
    `plan_orchestration.py`（循環・base・plan 実在）が両方通るまで終わらない。FAIL は該当項目だけ
    grilling へ戻す（全体をやり直さない）。
-5. **job-graph を自動で起動しない。** 最後に `/job-graph tmp_claude/<job>/plan.md` を提示して終わる。
+5. **job-graph を自動で起動しない。** 最後に `/job-graph tmp-agents/<job>/plan.md` を提示して終わる。
    HERDR_ENV は本スキルには不要。
 
 ## 決定論ツール（scripts/）
@@ -57,7 +57,7 @@ Python プロジェクト（`pyproject.toml` + `uv.lock`、依存なし）。実
 | `docs/dev/<対象>/spec.md` 等のパス | feature-spec の成果物 | `REQ-#` を全て拾い、task へ引き継ぐ |
 | 数字 | GitHub issue | `gh issue view <N> --json title,body` と `gh api repos/{owner}/{repo}/issues/<N>/sub_issues` で本文と既存 sub-issue を読む。sub-issue はタスク候補 |
 
-`tmp_claude/<job>/` が既にあれば **改訂か別名か**を AskUserQuestion で問う（推奨 = 改訂）。改訂なら
+`tmp-agents/<job>/` が既にあれば **改訂か別名か**を AskUserQuestion で問う（推奨 = 改訂）。改訂なら
 既存 plan.md / spec.json を読み、差分だけを grilling する（既存 task の `issue` 番号は保つ）。
 
 ### Phase B: grilling で閉じる
@@ -76,11 +76,11 @@ Python プロジェクト（`pyproject.toml` + `uv.lock`、依存なし）。実
 
 ### Phase C: 書き出しと末尾ゲート
 
-1. `tmp_claude/<job>/plan.md` を `references/plan-template.md` の 6 章で書く。第 3 章の小見出し
+1. `tmp-agents/<job>/plan.md` を `references/plan-template.md` の 6 章で書く。第 3 章の小見出し
    （branch / 依存 / 完了条件 / 変更対象 / 規模目安 / 境界 / コミット計画）は固定文法。崩すと
    `check_plan_spec.py` が偽 FAIL を出す
-2. `tmp_claude/<job>/job-graph/spec.json` を `references/plan-spec-mapping.md` の対応表で書く
-   （`plan` は `tmp_claude/<job>/plan.md`、`prompt` は組み立て規則どおり）
+2. `tmp-agents/<job>/job-graph/spec.json` を `references/plan-spec-mapping.md` の対応表で書く
+   （`plan` は `tmp-agents/<job>/plan.md`、`prompt` は組み立て規則どおり）
 3. ゲート（コマンドは mapping 参照）:
    - `check_plan_spec.py` → `VERDICT: PASS`。FAIL の ERROR 行は task 単位で直す。WARNING（第 5 章が空・
      REQ-# の孤児）は該当項目だけ grilling へ戻す
@@ -105,7 +105,7 @@ Python プロジェクト（`pyproject.toml` + `uv.lock`、依存なし）。実
 次を提示して終わる（自動連鎖しない）:
 
 ```
-/job-graph tmp_claude/<job>/plan.md
+/job-graph tmp-agents/<job>/plan.md
 ```
 
 併せて伝える: 親は `acceptEdits` 等の明示 permission mode で動かすこと（job-graph Phase 1 の注意）、

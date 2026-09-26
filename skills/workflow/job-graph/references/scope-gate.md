@@ -59,4 +59,4 @@
 | `--expected-file <path>` | 計画の変更ファイル（繰り返し。glob 不可。起草基準は `spec.md`） |
 | `--expected-scale <N>` | 規模目安。実測（追加 + 削除）が `N × 2` を超えると FAIL |
 
-出力は `=== CHANGED ===`（`tmp_claude/` 除外済みの変更一覧）/ `=== UNEXPECTED ===`（計画に無いファイル）/ `=== SCALE ===`（実測 / 目安 / 上限）と `REASON:` 行、末尾 `VERDICT: PASS|FAIL|SKIP`。終了コードは PASS/SKIP=0・FAIL=1・収集失敗=2。先頭に `WARNING:` があれば、PR のファイル数に対して `files` の取得が足りていない（gh の件数上限）。その分は突合に掛かっていないので、`gh pr diff --name-only` で補う。
+出力は `=== CHANGED ===`（`tmp-agents/` 除外済みの変更一覧）/ `=== UNEXPECTED ===`（計画に無いファイル）/ `=== SCALE ===`（実測 / 目安 / 上限）と `REASON:` 行、末尾 `VERDICT: PASS|FAIL|SKIP`。終了コードは PASS/SKIP=0・FAIL=1・収集失敗=2。先頭に `WARNING:` があれば、PR のファイル数に対して `files` の取得が足りていない（gh の件数上限）。その分は突合に掛かっていないので、`gh pr diff --name-only` で補う。

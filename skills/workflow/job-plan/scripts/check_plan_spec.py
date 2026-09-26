@@ -10,7 +10,7 @@ job-graph Phase 0 の入口で本スクリプトを通す。
 - 第 1〜6 章の見出し（`## <n>. <題名>`）が揃っている
 - spec の全 task id が第 3 章の `### <id>: <概要>` に存在し、逆も成立
 - task ごとに `- 変更対象:` のパス集合が spec の expected_files と一致
-- task ごとに `- 境界:` の glob 集合が spec の boundary と一致（`tmp_claude/**` は job-graph が
+- task ごとに `- 境界:` の glob 集合が spec の boundary と一致（`tmp-agents/**` は job-graph が
   自動付与するため両側から除いて比較）
 - task ごとに `- 規模目安:` の整数が spec の expected_scale と一致
 - task ごとに `- 依存:` の id 集合が spec の depends_on と一致
@@ -30,7 +30,7 @@ WARNING（続行可）:
 終了コード: PASS = 0、FAIL = 1、入力を読めない = 2。
 
 使い方:
-    python3 check_plan_spec.py tmp_claude/<job>/plan.md tmp_claude/<job>/job-graph/spec.json
+    python3 check_plan_spec.py tmp-agents/<job>/plan.md tmp-agents/<job>/job-graph/spec.json
 
 依存は stdlib のみ（job-graph の Phase 0 から子プロセスで呼ばれる）。plan.md の文法は
 references/plan-template.md が正本で、本スクリプトはそれを機械的に読む側。
@@ -69,7 +69,7 @@ CHAPTERS: dict[int, str] = {
 }
 
 # job-graph が boundary へ自動付与する glob。plan.md に書かなくてよいので比較から除く。
-AUTO_BOUNDARY = "tmp_claude/**"
+AUTO_BOUNDARY = "tmp-agents/**"
 
 NONE_WORDS = ("なし", "無し", "none", "-")
 

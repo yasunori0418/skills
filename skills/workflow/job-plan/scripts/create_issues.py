@@ -2,7 +2,7 @@
 """job-plan issue 起票（決定論 CLI）。plan.md / spec.json から GitHub の epic と sub-issue を作る。
 
 使い方:
-    python3 create_issues.py --plan tmp_claude/<job>/plan.md --spec tmp_claude/<job>/job-graph/spec.json
+    python3 create_issues.py --plan tmp-agents/<job>/plan.md --spec tmp-agents/<job>/job-graph/spec.json
     python3 create_issues.py --plan ... --spec ... --epic 42          # 既存 epic へ計画をコメント投稿
     python3 create_issues.py --plan ... --spec ... --epic 42 --sync   # 改訂を sub-issue へ同期
 
@@ -322,7 +322,7 @@ def parse_pr_exists(stdout: str) -> bool:
 
 
 def local_plan_note(plan: PlanText) -> str:
-    return f"ローカル計画: `tmp_claude/{plan.job}/plan.md`"
+    return f"ローカル計画: `tmp-agents/{plan.job}/plan.md`"
 
 
 def epic_title(plan: PlanText) -> str:
