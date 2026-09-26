@@ -28,7 +28,7 @@ argument-hint: "<分析観点（必須）> [--project <名前>] [--since YYYY-MM
 |---|---|
 | **cclens** | ツール/スキル使用頻度・skill 単位のトークン消費とコンテキスト増加・常時コスト（overhead）・ツールエラーのカテゴリ分類・設定の棚卸しと未使用検出・プロンプト種別の分布・繰り返し失敗・再編集ループ |
 | **ccusage** | **金額（USD）**。モデル別価格表と重複レコード排除を持つ。cclens はトークン量は出すが USD 換算を持たない |
-| **同梱スクリプト** | プロンプト**本文**・生 transcript の時系列・**compaction の発生記録**・分析対象範囲の明示 |
+| **同梱スクリプト** | プロンプト**本文**・生 transcript の時系列・**ツールの入出力本文**（実行コマンド・stdout/stderr・終了状態）・**compaction の発生記録**・分析対象範囲の明示 |
 
 境界の理由:
 
@@ -131,7 +131,12 @@ script の共通オプション: `--project <部分一致>` / `--since` / `--unt
 ```bash
 UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/session-insights" uv run --project "<skill-dir>" python "<skill-dir>/scripts/collect_sessions.py" transcript --session <ID> --tail 40
 UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/session-insights" uv run --project "<skill-dir>" python "<skill-dir>/scripts/collect_sessions.py" transcript --session <ID> --include-tools
+UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/session-insights" uv run --project "<skill-dir>" python "<skill-dir>/scripts/collect_sessions.py" transcript --session <ID> --tool-detail --tail 40
 ```
+
+- `--include-tools` はツール名と説明（`brief`）だけ。実行したコマンドと結果（`status` / `exit_code` / stdout・stderr の抜粋）まで読むときは `--tool-detail` を使う
+- `--tool-detail` の上限: 入力 `--input-chars 300`、結果 `--result-chars 600`（先頭と末尾を残す）、セッション全体 `--detail-budget 30000`（超えた分は `brief` に戻り、件数が `detail_omitted` に出る）。`--tail` と組み合わせて範囲を絞ってから使う
+- 成功した Bash の `exit_code` は `null`（transcript に記録が無い）。`status: ok` を成功と読む
 
 深掘りは**仮説の検証に必要なセッションに絞る**（目安: 1観点あたり3〜5件まで）。
 全セッションの transcript を順に読むような使い方はこのスキルの禁止事項。

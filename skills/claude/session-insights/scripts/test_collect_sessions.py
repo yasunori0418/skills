@@ -424,6 +424,148 @@ class TestReports(unittest.TestCase):
         self.assertIn("compact", turns[3]["text"])
 
 
+def tool_result_rec(tool_id, content, tool_use_result, is_error=False, ts="2026-07-01T03:02:00.000Z"):
+    block = {"type": "tool_result", "tool_use_id": tool_id, "content": content}
+    if is_error:
+        block["is_error"] = True
+    rec = user_rec([block], ts=ts)
+    rec["toolUseResult"] = tool_use_result
+    return rec
+
+
+def detail_records():
+    """ツールの入力と結果を突き合わせる検証用の合成セッション。"""
+    return [
+        user_rec("ignore 状態を確認して"),
+        assistant_rec(
+            [
+                tool_use("Bash", {"command": "git check-ignore -v tmp_claude/", "description": "確認"}, "tu_ok"),
+                tool_use("Bash", {"command": "false"}, "tu_ng"),
+                tool_use("Read", {"file_path": "/x/a.py"}, "tu_rd"),
+            ]
+        ),
+        tool_result_rec(
+            "tu_ok",
+            ".gitignore:3:tmp_claude/\ttmp_claude/",
+            {"stdout": ".gitignore:3:tmp_claude/\ttmp_claude/", "stderr": "", "interrupted": False},
+        ),
+        tool_result_rec("tu_ng", "Exit code 1\nboom", "Error: Exit code 1\nboom", is_error=True),
+        tool_result_rec(
+            "tu_rd",
+            "1\tprint(1)",
+            {"type": "text", "file": {"filePath": "/x/a.py", "content": "print(1)", "numLines": 1}},
+        ),
+    ]
+
+
+class TestToolResults(unittest.TestCase):
+    def test_classify(self):
+        ok = {"type": "tool_result", "content": "x"}
+        err = {"type": "tool_result", "content": "x", "is_error": True}
+        cases = [
+            (ok, {"stdout": "x", "interrupted": False}, ("ok", None)),
+            (ok, {"stdout": "", "interrupted": True}, ("interrupted", None)),
+            (err, "Error: Exit code 2\nno such file", ("exit", 2)),
+            (err, "Error: PreToolUse:Bash hook error: 🚫 blocked", ("hook_blocked", None)),
+            (err, "Error: Permission for this action was denied", ("permission_denied", None)),
+            (err, "User rejected tool use", ("user_rejected", None)),
+            (err, "Error: File has not been read yet.", ("error", None)),
+        ]
+        for block, tur, expected in cases:
+            with self.subTest(tur=tur):
+                self.assertEqual(cs.classify_tool_result(block, tur), expected)
+
+    def test_classify_falls_back_to_block_content(self):
+        block = {"type": "tool_result", "content": "Exit code 127\ncmd: not found", "is_error": True}
+        self.assertEqual(cs.classify_tool_result(block, None), ("exit", 127))
+
+    def test_result_body_per_tool(self):
+        ok = {"type": "tool_result", "content": "raw"}
+        self.assertEqual(cs.result_body("Bash", ok, {"stdout": "out", "stderr": ""}), "out")
+        self.assertEqual(
+            cs.result_body("Bash", ok, {"stdout": "out", "stderr": "warn"}), "out\n[stderr]\nwarn"
+        )
+        read = {"file": {"filePath": "/a", "content": "SECRET BODY", "numLines": 9}}
+        body = cs.result_body("Read", ok, read)
+        self.assertNotIn("SECRET BODY", body)
+        self.assertIn("/a", body)
+        edit = {"filePath": "/b", "structuredPatch": [{}, {}], "oldString": "o", "newString": "n"}
+        self.assertEqual(cs.result_body("Edit", ok, edit), "/b（2 hunk を変更）")
+        agent = {"type": "tool_result", "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}
+        self.assertEqual(cs.result_body("Agent", agent, {"status": "completed"}), "a\nb")
+        err = {"type": "tool_result", "content": "Exit code 1\nboom", "is_error": True}
+        self.assertEqual(cs.result_body("Bash", err, "Error: Exit code 1\nboom"), "Exit code 1\nboom")
+
+    def test_index_tool_results_and_persisted(self):
+        recs = detail_records()
+        recs.append(
+            tool_result_rec(
+                "tu_big",
+                "…",
+                {"stdout": "x", "stderr": "", "persistedOutputPath": "/t/r.txt", "persistedOutputSize": 99999},
+            )
+        )
+        idx = cs.index_tool_results(recs)
+        self.assertEqual(idx["tu_ok"].status, "ok")
+        self.assertIsNone(idx["tu_ok"].exit_code)
+        self.assertEqual((idx["tu_ng"].status, idx["tu_ng"].exit_code), ("exit", 1))
+        self.assertEqual(idx["tu_big"].persisted, {"path": "/t/r.txt", "size": 99999})
+
+    def test_truncate_head_tail(self):
+        self.assertEqual(cs.truncate_head_tail("abc", 10), "abc")
+        self.assertEqual(cs.truncate_head_tail("abcdef", 0), "abcdef")
+        out = cs.truncate_head_tail("0123456789", 5)
+        self.assertEqual(out, "012…(中略 5字)…89")
+
+
+class TestTranscriptToolDetail(unittest.TestCase):
+    def test_include_tools_stays_brief(self):
+        """--include-tools だけなら従来どおり {tool, brief}。"""
+        turns = cs.transcript_turns(detail_records(), max_chars=100, include_tools=True)
+        tools = next(t for t in turns if t["role"] == "assistant:tools")["tools"]
+        self.assertEqual(tools[0], {"tool": "Bash", "brief": "確認"})
+
+    def test_detail_joins_input_and_result(self):
+        turns = cs.transcript_turns(
+            detail_records(), max_chars=100, include_tools=False, tool_detail=cs.ToolDetailOptions()
+        )
+        tools = next(t for t in turns if t["role"] == "assistant:tools")["tools"]
+        ok, ng, rd = tools
+        self.assertEqual(ok["input"], "git check-ignore -v tmp_claude/")
+        self.assertEqual(ok["result"]["status"], "ok")
+        self.assertIn(".gitignore:3", ok["result"]["body"])
+        self.assertEqual((ng["result"]["status"], ng["result"]["exit_code"]), ("exit", 1))
+        self.assertNotIn("print(1)", rd["result"]["body"])
+
+    def test_detail_redacts_and_clips(self):
+        token = "ghp_" + "d" * 36
+        recs = [
+            assistant_rec([tool_use("Bash", {"command": f"echo {token}"}, "tu_s")]),
+            tool_result_rec("tu_s", token, {"stdout": "A" * 50 + token + "Z" * 50, "stderr": ""}),
+        ]
+        opts = cs.ToolDetailOptions(input_chars=300, result_chars=40)
+        turns = cs.transcript_turns(recs, max_chars=100, include_tools=False, tool_detail=opts)
+        e = turns[0]["tools"][0]
+        self.assertEqual(e["input"], "echo [REDACTED:github_token]")
+        self.assertNotIn("ghp_", e["result"]["body"])
+        self.assertTrue(e["result"]["body"].endswith("Z" * 16))
+
+    def test_missing_result_is_none(self):
+        recs = [assistant_rec([tool_use("Bash", {"command": "sleep 9"}, "tu_x")])]
+        turns = cs.transcript_turns(recs, 100, False, cs.ToolDetailOptions())
+        self.assertIsNone(turns[0]["tools"][0]["result"])
+
+    def test_budget_falls_back_to_brief(self):
+        turns = cs.transcript_turns(detail_records(), 100, False, cs.ToolDetailOptions())
+        first = turns[1]["tools"][0]
+        budget = len(first["input"]) + len(first["result"]["body"])
+        limited, omitted = cs.apply_detail_budget(turns, budget)
+        self.assertEqual(omitted, 2)
+        self.assertIn("input", limited[1]["tools"][0])
+        self.assertEqual(limited[1]["tools"][1], {"tool": "Bash", "brief": "false"})
+        self.assertEqual(cs.apply_detail_budget(turns, 0), (turns, 0))
+
+
 class TestCcusageArgv(unittest.TestCase):
     def test_daily_with_range(self):
         argv = cs.ccusage_argv("2026-07-01", "2026-07-08", None)
@@ -532,6 +674,15 @@ class TestCli(unittest.TestCase):
         rep = self.run_cli("transcript", "--session", "aaaa1111")
         self.assertEqual(rep["session"]["session_id"], "aaaa1111-0000-0000-0000-000000000000")
         self.assertEqual(rep["turns"][0]["text"], "最初の依頼")
+
+    def test_transcript_tool_detail(self):
+        proj = self.root / "projects" / "-home-u-proj"
+        with open(proj / "dddd4444-0000-0000-0000-000000000000.jsonl", "w") as f:
+            f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in detail_records())
+        rep = self.run_cli("transcript", "--session", "dddd4444", "--tool-detail")
+        self.assertEqual(rep["detail_omitted"], 0)
+        tools = next(t for t in rep["turns"] if t["role"] == "assistant:tools")["tools"]
+        self.assertEqual(tools[1]["result"]["exit_code"], 1)
 
     def test_paths_runs(self):
         rep = self.run_cli("paths")

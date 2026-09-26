@@ -32,7 +32,7 @@ Claude Code のセッション JSONL を機械的に読み出して JSON で標�
   sessions    セッション一覧（メタデータ + セッション単位の集計値）
   prompts     ユーザープロンプトの抽出（本文つき）
   cost        トークン消費と金額（USD）を ccusage から取得
-  transcript  単一セッションの会話を時系列で抽出
+  transcript  単一セッションの会話を時系列で抽出（--tool-detail でツールの入力と結果も）
 
 設計: 「純粋層」と「副作用層」を分離している。
   純粋層 … レコード解釈（prompt_text 等）、セッション畳み込み
@@ -55,7 +55,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -180,6 +180,20 @@ def clip(text: str, max_chars: int) -> str:
     return truncate(redact(text), max_chars)
 
 
+def truncate_head_tail(text: str, max_chars: int, head_ratio: float = 0.6) -> str:
+    """先頭と末尾を残して中央を省く。失敗メッセージや確認結果は末尾に出やすいため。"""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    head = int(max_chars * head_ratio)
+    tail = max_chars - head
+    return f"{text[:head]}…(中略 {len(text) - max_chars}字)…{text[len(text) - tail:]}"
+
+
+def clip_head_tail(text: str, max_chars: int) -> str:
+    """伏せ字 → 先頭末尾を残す切り詰め。"""
+    return truncate_head_tail(redact(text), max_chars)
+
+
 def in_range(dt: datetime, since: datetime | None, until: datetime | None) -> bool:
     """since <= dt < until+1日 の判定（until はその日を含む）。"""
     if since and dt < since:
@@ -256,6 +270,32 @@ class Compaction:
 
     def as_dict(self) -> dict:
         return {"trigger": self.trigger, "pre_tokens": self.pre_tokens}
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    """tool_use に対応する tool_result の解釈結果。
+
+    status: ok / exit / hook_blocked / permission_denied / user_rejected /
+            interrupted / error。exit_code は失敗時に `Exit code N` から取れた
+            ときだけ入る（成功時は記録が無いので 0 と推定せず None）。
+    body は伏せ字・切り詰め前の生テキスト。persisted は大きな出力が
+    tool-results/ へ退避されたときの {path, size}。
+    """
+
+    status: str
+    exit_code: int | None
+    body: str
+    persisted: dict | None = None
+
+
+@dataclass(frozen=True)
+class ToolDetailOptions:
+    """transcript --tool-detail の上限値。0 は無制限。"""
+
+    input_chars: int = 300
+    result_chars: int = 600
+    budget: int = 30000
 
 
 @dataclass
@@ -423,6 +463,116 @@ def tool_result_errors(rec: dict, tool_use_names: dict) -> list:
                 message=(raw or "").strip().replace("\n", " "),
             )
         )
+    return out
+
+
+EXIT_CODE_RE = re.compile(r"(?:Error: )?Exit code (-?\d+)")
+PERMISSION_RE = re.compile(r"(?:Error: )?Permission\b")
+
+
+def tool_result_text(block: dict) -> str:
+    """tool_result ブロックの content をテキストに（list なら text を連結）。"""
+    raw = block.get("content")
+    if isinstance(raw, list):
+        return "\n".join(
+            x.get("text", "") for x in raw if isinstance(x, dict) and x.get("type") == "text"
+        )
+    return raw if isinstance(raw, str) else ""
+
+
+def classify_tool_result(block: dict, tool_use_result) -> tuple:
+    """tool_result と record の toolUseResult から (status, exit_code) を決める。
+
+    成功時の Bash は toolUseResult に exit code を持たないので exit_code は None。
+    失敗時は toolUseResult が文字列（`Error: Exit code N` 等）になる。
+    """
+    if not block.get("is_error"):
+        if isinstance(tool_use_result, dict) and tool_use_result.get("interrupted"):
+            return "interrupted", None
+        return "ok", None
+    err = tool_use_result if isinstance(tool_use_result, str) else tool_result_text(block)
+    err = err.strip()
+    m = EXIT_CODE_RE.match(err)
+    if m:
+        return "exit", int(m.group(1))
+    first_line = err.split("\n", 1)[0]
+    if "PreToolUse:" in first_line:
+        return "hook_blocked", None
+    if PERMISSION_RE.match(err):
+        return "permission_denied", None
+    if "User rejected" in first_line or "doesn't want to proceed" in first_line:
+        return "user_rejected", None
+    if isinstance(tool_use_result, dict) and tool_use_result.get("interrupted"):
+        return "interrupted", None
+    return "error", None
+
+
+def result_body(tool: str, block: dict, tool_use_result) -> str:
+    """結果本文として見せるテキストをツール別に選ぶ（伏せ字・切り詰め前）。
+
+    Read はファイル全文、Write/Edit は書いた内容を持つが、それらを出すと
+    1 回で本文が溢れるため、パスと量だけにする。
+    """
+    tur = tool_use_result if isinstance(tool_use_result, dict) else None
+    if block.get("is_error") or tur is None:
+        return tool_result_text(block)
+    if tool == "Bash" and "stdout" in tur:
+        out = tur.get("stdout") or ""
+        err = tur.get("stderr") or ""
+        return f"{out}\n[stderr]\n{err}" if err else out
+    if tool == "Read" and isinstance(tur.get("file"), dict):
+        f = tur["file"]
+        return f"{f.get('filePath', '?')}（{f.get('numLines', '?')}行を読み込み）"
+    if tool == "Write" and "filePath" in tur:
+        return f"{tur['filePath']}（{len(tur.get('content') or '')}字を書き込み）"
+    if tool == "Edit" and "filePath" in tur:
+        patch = tur.get("structuredPatch")
+        hunks = len(patch) if isinstance(patch, list) else 0
+        return f"{tur['filePath']}（{hunks} hunk を変更）"
+    return tool_result_text(block)
+
+
+def tool_input_text(tool: str, tool_input) -> str:
+    """tool_use の入力を表示用テキストに（Bash はコマンド全文、他は JSON）。"""
+    if not isinstance(tool_input, dict):
+        return ""
+    if tool == "Bash" and isinstance(tool_input.get("command"), str):
+        return tool_input["command"]
+    return json.dumps(tool_input, ensure_ascii=False)
+
+
+def index_tool_results(records: Iterable[dict]) -> dict:
+    """tool_use_id -> ToolResult。tool_result は後続の user 行にあるため先に索引化する。"""
+    names: dict = {}
+    out: dict = {}
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        for b in iter_assistant_blocks(rec):
+            if b.get("type") == "tool_use":
+                names[b.get("id")] = b.get("name") or "?"
+        if rec.get("type") != "user":
+            continue
+        content = (rec.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        tur = rec.get("toolUseResult")
+        for b in content:
+            if not (isinstance(b, dict) and b.get("type") == "tool_result"):
+                continue
+            status, code = classify_tool_result(b, tur)
+            persisted = None
+            if isinstance(tur, dict) and tur.get("persistedOutputPath"):
+                persisted = {
+                    "path": tur["persistedOutputPath"],
+                    "size": tur.get("persistedOutputSize"),
+                }
+            out[b.get("tool_use_id")] = ToolResult(
+                status=status,
+                exit_code=code,
+                body=result_body(names.get(b.get("tool_use_id"), "?"), b, tur),
+                persisted=persisted,
+            )
     return out
 
 
@@ -598,8 +748,38 @@ def prompts_report(stats: list, filters: SessionFilters, limit: int, max_chars: 
     }
 
 
-def transcript_turns(records: Iterable[dict], max_chars: int, include_tools: bool) -> list:
-    """レコード列を表示用ターン列に変換する（順序保存）。"""
+def tool_detail_entry(block: dict, result: ToolResult | None, opts: ToolDetailOptions) -> dict:
+    """--tool-detail 用に 1 ツール呼び出しの入力と結果を整形する。"""
+    name = block.get("name") or "?"
+    entry = {
+        "tool": name,
+        "brief": tool_brief(block.get("input")),
+        "input": clip(tool_input_text(name, block.get("input")), opts.input_chars),
+        "result": None,  # セッション中断等で結果が無いこともある
+    }
+    if result is not None:
+        entry["result"] = {
+            "status": result.status,
+            "exit_code": result.exit_code,
+            "body": clip_head_tail(result.body, opts.result_chars),
+            "persisted": result.persisted,
+        }
+    return entry
+
+
+def transcript_turns(
+    records: Sequence[dict],
+    max_chars: int,
+    include_tools: bool,
+    tool_detail: ToolDetailOptions | None = None,
+) -> list:
+    """レコード列を表示用ターン列に変換する（順序保存）。
+
+    tool_detail 指定時は tool_use と後続の tool_result を突き合わせるため、
+    records は 2 回走査する（Sequence で受ける）。
+    """
+    results = index_tool_results(records) if tool_detail else {}
+    include_tools = include_tools or tool_detail is not None
     turns = []
     for rec in records:
         if not isinstance(rec, dict):
@@ -614,6 +794,8 @@ def transcript_turns(records: Iterable[dict], max_chars: int, include_tools: boo
             for b in iter_assistant_blocks(rec):
                 if b.get("type") == "text" and b.get("text", "").strip():
                     texts.append(b["text"].strip())
+                elif b.get("type") == "tool_use" and tool_detail:
+                    tool_uses.append(tool_detail_entry(b, results.get(b.get("id")), tool_detail))
                 elif b.get("type") == "tool_use":
                     tool_uses.append({"tool": b.get("name"), "brief": tool_brief(b.get("input"))})
             if texts:
@@ -625,6 +807,37 @@ def transcript_turns(records: Iterable[dict], max_chars: int, include_tools: boo
         elif rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
             turns.append({"role": "system", "ts": ts, "text": "--- compact 発生 ---"})
     return turns
+
+
+def apply_detail_budget(turns: list, budget: int) -> tuple:
+    """ツール詳細の合計文字数が budget を超えたら、以降を {tool, brief} に戻す。
+
+    先頭から数える（--tail 適用後のターン列に掛ける）。戻り値は
+    (新しいターン列, brief に戻した件数)。budget <= 0 は無制限。
+    """
+    if budget <= 0:
+        return turns, 0
+    used = 0
+    omitted = 0
+    out = []
+    for t in turns:
+        if t.get("role") != "assistant:tools":
+            out.append(t)
+            continue
+        tools = []
+        for e in t["tools"]:
+            if "input" not in e:
+                tools.append(e)
+                continue
+            size = len(e["input"]) + len((e.get("result") or {}).get("body") or "")
+            if used + size > budget:
+                tools.append({"tool": e["tool"], "brief": e["brief"]})
+                omitted += 1
+                continue
+            used += size
+            tools.append(e)
+        out.append({**t, "tools": tools})
+    return out, omitted
 
 
 def ccusage_argv(since: str | None, until: str | None, session: str | None) -> list:
@@ -906,18 +1119,27 @@ def cmd_transcript(config_dir: Path, args) -> None:
         emit({"error": "セッションIDが曖昧。候補:", "candidates": [f.stem for f in files[:10]]})
         sys.exit(1)
     path = files[0]
-    s = reduce_session(path.stem, path.parent.name, iter_records(path))
+    records = list(iter_records(path))
+    s = reduce_session(path.stem, path.parent.name, records)
     s.subagent_files = subagent_file_count(path)
-    turns = transcript_turns(iter_records(path), args.max_chars, args.include_tools)
+    detail = (
+        ToolDetailOptions(
+            input_chars=args.input_chars,
+            result_chars=args.result_chars,
+            budget=args.detail_budget,
+        )
+        if args.tool_detail
+        else None
+    )
+    turns = transcript_turns(records, args.max_chars, args.include_tools, detail)
     if args.tail > 0:
         turns = turns[-args.tail :]
-    emit(
-        {
-            "session": summarize_session(s),
-            "turn_count": len(turns),
-            "turns": turns,
-        }
-    )
+    out = {"session": summarize_session(s), "turn_count": len(turns)}
+    if detail:
+        turns, omitted = apply_detail_budget(turns, detail.budget)
+        out["detail_omitted"] = omitted
+    out["turns"] = turns
+    emit(out)
 
 
 # ============================================================
@@ -976,6 +1198,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("--tail", type=int, default=0, help="末尾Nターンのみ表示（既定0=全部）")
     sp.add_argument("--include-tools", action="store_true", help="ツール呼び出し行も含める")
+    sp.add_argument(
+        "--tool-detail",
+        action="store_true",
+        help="ツールの入力全文と結果（status・exit_code・本文抜粋）も含める（--include-tools を含意）",
+    )
+    sp.add_argument(
+        "--input-chars", type=int, default=300, help="ツール入力の切り詰め文字数（既定300、0で無制限）"
+    )
+    sp.add_argument(
+        "--result-chars",
+        type=int,
+        default=600,
+        help="ツール結果の切り詰め文字数。先頭と末尾を残す（既定600、0で無制限）",
+    )
+    sp.add_argument(
+        "--detail-budget",
+        type=int,
+        default=30000,
+        help="ツール詳細の合計文字数の上限。超えた分は brief に戻す（既定30000、0で無制限）",
+    )
     return p
 
 

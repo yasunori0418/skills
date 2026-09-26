@@ -109,9 +109,41 @@ cclens は同じ transcript を SQLite（`sessions` / `events` / `subagent_runs`
 友好的な列名が要るなら `tool_errors` ビューを使う。cclens は本文を保持しないため、
 本文を読む・本文で探す用途はスクリプト側の担当になる。
 
+## ツール結果（tool_result と toolUseResult）
+
+`tool_use`（assistant 行の content）の結果は、後続の `type=user` 行に
+`tool_result` ブロック（`tool_use_id` で対応）として入る。同じ行のトップレベル
+`toolUseResult` にツール固有の構造化結果が付く。`transcript --tool-detail` は
+先に `tool_use_id -> 結果` の索引を作ってから突き合わせる（`index_tool_results`）。
+
+| ツール | 成功時の `toolUseResult` | `--tool-detail` の body |
+|---|---|---|
+| Bash | `{stdout, stderr, interrupted, isImage, noOutputExpected, …}`。**exit code のキーは無い** | stdout（stderr があれば `[stderr]` 以下に続ける） |
+| Read | `{type, file: {filePath, content, numLines, startLine, totalLines}}` | パスと行数のみ（本文は出さない） |
+| Write | `{type, filePath, content, structuredPatch, originalFile, …}` | パスと文字数のみ |
+| Edit | `{filePath, oldString, newString, structuredPatch, originalFile, …}` | パスと hunk 数のみ |
+| Agent | `{agentId, status, prompt, …}`。本文は `tool_result.content` の text ブロック | text ブロックの連結 |
+| その他 | ツールごとに異なる | `tool_result.content` のテキスト |
+
+失敗時は `tool_result.is_error: true` になり、`toolUseResult` は文字列になる。
+`status` の判定:
+
+| `toolUseResult`（文字列）の先頭 | status |
+|---|---|
+| `Error: Exit code N` | `exit`（`exit_code: N`） |
+| `Error: PreToolUse:<Tool> hook error: …` | `hook_blocked` |
+| `Error: Permission for this action was denied…` | `permission_denied` |
+| `User rejected tool use` / `…doesn't want to proceed…` | `user_rejected` |
+| それ以外 | `error` |
+
+成功時は `ok`（`interrupted: true` なら `interrupted`）で、`exit_code` は `null`
+（記録が無いので 0 と推定しない）。大きな出力は `persistedOutputPath` /
+`persistedOutputSize` が付いて本体が `<session-id>/tool-results/` に退避される。
+スクリプトはこれを追わず `persisted: {path, size}` の目印だけを出す。
+
 ## 出力時の伏せ字
 
-スクリプトは本文を出す全箇所（`prompts` の本文、`transcript` の発話・ツール要約）で
+スクリプトは本文を出す全箇所（`prompts` の本文、`transcript` の発話・ツール要約・ツールの入出力）で
 `redact()` を通し、秘密情報らしき文字列を `[REDACTED:<kind>]` に置き換える。
 **伏せ字 → 切り詰めの順**で適用する（逆にすると、切り詰めで途中が切れた
 トークンに正規表現が当たらず断片が漏れる）。
