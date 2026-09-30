@@ -366,7 +366,7 @@ case "$cmd" in
         echo "=== HOW TO READ ==="
         echo "変更後のファイル:   git show $head_sha:<path>"
         echo "変更前のファイル:   git show $base_sha:<path>"
-        echo "参照箇所の検索:     git grep -n -e '<関数名>' $head_sha -- [<path>...]"
+        echo "参照箇所の検索:     git grep -n -w -e '<関数名>' $head_sha -- [<path>...]"
         echo "ファイル単位の差分: git diff $base_sha $head_sha -- <path>"
         ;;
 
