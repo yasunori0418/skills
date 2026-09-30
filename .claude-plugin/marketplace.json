@@ -20,7 +20,7 @@
     {
       "name": "github-skills",
       "source": "./skills/github",
-      "description": "GitHub 運用スキル群（gh-ci-investigate / gh-fetch / gh-push / pr-create）。",
+      "description": "GitHub 運用スキル群（gh-ci-investigate / gh-fetch / gh-push / pr-create / pr-visualize）。",
       "author": {
         "name": "yasunori0418"
       },
