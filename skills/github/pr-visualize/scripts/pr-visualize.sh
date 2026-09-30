@@ -397,15 +397,20 @@ case "$cmd" in
         while IFS=$'\t' read -r n line; do
             src="$tmp/block-$n.mmd"
             [ -f "$src" ] || : >"$src"
-            # 構文エラーでも exit 0 で「Syntax error in text」の図を出す版があるため、出力も確認する
+            # 終了コードに加え、SVG が実際に出たかも見る（何も出さずに exit 0 で終わる失敗を拾う）。
+            # SVG の中身は見ない: 図の文言に左右され、正しい図を誤って落とすため。
             if "$mm" -q ${extra[@]+"${extra[@]}"} -i "$src" -o "$tmp/block-$n.svg" >"$tmp/log-$n" 2>&1 &&
-                [ -s "$tmp/block-$n.svg" ] &&
-                ! grep -q 'Syntax error in text' "$tmp/block-$n.svg"; then
+                [ -s "$tmp/block-$n.svg" ]; then
                 echo "block $n (line $line): OK"
             else
                 failed=$((failed + 1))
                 echo "block $n (line $line): FAIL"
-                grep -v '^[[:space:]]*$' "$tmp/log-$n" | head -n 12 | sed 's/^/    /'
+                if grep -q '[^[:space:]]' "$tmp/log-$n"; then
+                    # ログが空・head の打ち切りでもスクリプトを止めず、残りの図の検証を続ける
+                    { grep -v '^[[:space:]]*$' "$tmp/log-$n" | head -n 12 | sed 's/^/    /'; } || true
+                else
+                    echo "    (mmdc がログを出さずに失敗した)"
+                fi
             fi
         done <"$tmp/index"
         if [ "$failed" -gt 0 ]; then

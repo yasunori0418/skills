@@ -12,7 +12,7 @@
 #   - diff           lockfile の差分本文を落としてファイルへ退避、--out 必須
 #   - fetch          refs/pull/N/head を ref を作らず取得し head/base の sha を出す、degraded は拒否
 #   - mermaid-check  mmdc なし -> UNVERIFIED(exit 0)、全通過 -> OK、構文エラー -> FAIL(exit 1)と行番号、
-#                    図なし -> NO DIAGRAMS
+#                    ログなしの失敗でも残りの図を検証する、図の文言では誤判定しない、図なし -> NO DIAGRAMS
 #   - comment        dry-run は投稿しない（--out で投稿される本文を書き出す）、新規は POST、目印付きの自分のコメントがあれば PATCH、
 #                    1 枚目の図は開いたまま 2 枚目以降を <details> に畳む、承認後に本文が変われば拒否、
 #                    上限超過は拒否（バイト数ではなく文字数で数える）、degraded は拒否
@@ -111,6 +111,7 @@ if grep -q BROKEN "$in"; then
     echo "Error: Parse error on line 2:" >&2
     exit 1
 fi
+grep -q SILENT "$in" && exit 0 # 何も出力せず正常終了する失敗
 echo "<svg/>" >"$out"
 EOS
 } >"$WORK/bin/mmdc"
@@ -293,6 +294,18 @@ has "mermaid-fail-block" "$OUT" "block 2 (line 16): FAIL"
 has "mermaid-fail-log" "$OUT" "Parse error"
 has "mermaid-fail-others-ok" "$OUT" "block 3 (line 23): OK"
 has "mermaid-fail-result" "$OUT" "RESULT: FAIL (1 of 3 diagrams)"
+# ログなしの失敗でも止まらず、残りの図を検証して RESULT を出す
+sed 's/A->>B: foo(x)/A->>B: SILENT/' "$DOC" >"$WORK/silent.md"
+run mermaid-check "$WORK/silent.md"
+check "mermaid-silent-rc" 1 "$RC"
+has "mermaid-silent-block" "$OUT" "block 2 (line 16): FAIL"
+has "mermaid-silent-note" "$OUT" "mmdc がログを出さずに失敗した"
+has "mermaid-silent-continues" "$OUT" "block 3 (line 23): OK"
+has "mermaid-silent-result" "$OUT" "RESULT: FAIL (1 of 3 diagrams)"
+# 図の文言に「Syntax error in text」を含んでも、描画できていれば通す
+sed 's/A->>B: foo(x)/A->>B: Syntax error in text/' "$DOC" >"$WORK/phrase.md"
+run mermaid-check "$WORK/phrase.md"
+has "mermaid-phrase-ok" "$OUT" "RESULT: OK (3 diagrams)"
 printf '# no diagrams\n' >"$WORK/plain.md"
 run mermaid-check "$WORK/plain.md"
 has "mermaid-none" "$OUT" "RESULT: NO DIAGRAMS"
