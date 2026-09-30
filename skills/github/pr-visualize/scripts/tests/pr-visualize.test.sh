@@ -9,12 +9,14 @@
 #   - parse          URL / #N / pr:N / N / GHE の URL / 解釈できない入力
 #   - preflight      remote 一致 -> mode: full（https / scp 形式 / ssh:// 形式）、不一致 -> degraded、
 #                    lockfile の excluded 表示、mmdc の有無
+#   - stack          スタックの並びと現在の段、各段の変更ファイル、図（現在の段だけ強調・記号は文字参照）、
+#                    スタックでない PR、スタックの情報を取得できない GitHub
 #   - diff           lockfile の差分本文を落としてファイルへ退避、--out 必須
 #   - fetch          refs/pull/N/head を ref を作らず取得し head/base の sha を出す、degraded は拒否
 #   - mermaid-check  mmdc なし -> UNVERIFIED(exit 0)、全通過 -> OK、構文エラー -> FAIL(exit 1)と行番号、
 #                    ログなしの失敗でも残りの図を検証する、図の文言では誤判定しない、図なし -> NO DIAGRAMS
 #   - comment        dry-run は投稿しない（--out で投稿される本文を書き出す）、新規は POST、目印付きの自分のコメントがあれば PATCH、
-#                    1 枚目の図は開いたまま 2 枚目以降を <details> に畳む、承認後に本文が変われば拒否、
+#                    最初の図と同じ節の図は開いたまま、以降の節の図を <details> に畳む、承認後に本文が変われば拒否、
 #                    上限超過は拒否（バイト数ではなく文字数で数える）、degraded は拒否
 set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -76,7 +78,7 @@ for a in "$@"; do
         -X) method="$a" ;;
         -F) bodyfile="${a#body=@}" ;;
         --hostname | -R | --json) ;;
-        *) case "$a" in repos/* | user) endpoint="$a" ;; esac ;;
+        *) case "$a" in repos/* | user | graphql) endpoint="$a" ;; esac ;;
     esac
     prev="$a"
 done
@@ -87,6 +89,10 @@ case "$1 $2" in
     "api "*)
         case "$method $endpoint" in
             "GET user") echo '{"login":"me"}' | out ;;
+            "GET graphql")
+                [ -f "$FAKE_GH_DIR/stack.json" ] || exit 1 # スタックの項目が無い GitHub を模す
+                out <"$FAKE_GH_DIR/stack.json"
+                ;;
             "GET repos/"*"/comments") out <"$FAKE_GH_DIR/comments.json" ;;
             "POST repos/"* | "PATCH repos/"*)
                 cp "$bodyfile" "$FAKE_GH_DIR/posted.md"
@@ -217,6 +223,47 @@ run preflight "https://github.com/o/r/pull/7"
 check "preflight-degraded-rc" 0 "$RC"
 has "preflight-degraded" "$OUT" "mode:   degraded"
 
+# --- stack ---
+cd "$WORK/work" || exit 1
+run stack "#7"
+check "stack-unknown-rc" 0 "$RC"
+has "stack-unknown" "$OUT" "size:     unknown"
+echo '{"data":{"repository":{"pullRequest":{"stackEntry":null,"stack":null}}}}' >"$FAKE_GH_DIR/stack.json"
+run stack "#7"
+has "stack-none" "$OUT" "size:     1 (スタックではない)"
+lacks "stack-none-no-mermaid" "$OUT" "STACK MERMAID"
+run preflight "#7"
+has "preflight-stack-none" "$OUT" "size:     1 (スタックではない)"
+cat >"$FAKE_GH_DIR/stack.json" <<'EOS'
+{"data":{"repository":{"pullRequest":{"stackEntry":{"position":2},"stack":{"size":3,"baseRefName":"main",
+ "entries":{"nodes":[
+  {"position":3,"pullRequest":{"number":8,"state":"OPEN","title":"test: 検証を足す","headRefName":"test/c","additions":5,"deletions":0,"changedFiles":1,
+   "files":{"nodes":[{"path":"tests/c_test.py","additions":5,"deletions":0}]}}},
+  {"position":1,"pullRequest":{"number":6,"state":"MERGED","title":"feat: 土台 \"A\"; <B> #1","headRefName":"feat/a","additions":10,"deletions":2,"changedFiles":2,
+   "files":{"nodes":[{"path":"src/a.py","additions":8,"deletions":2},{"path":"src/foo.py","additions":2,"deletions":0}]}}},
+  {"position":2,"pullRequest":{"number":7,"state":"OPEN","title":"feat: foo を加算に変える","headRefName":"feat/foo","additions":3,"deletions":1,"changedFiles":1,
+   "files":{"nodes":[{"path":"src/foo.py","additions":1,"deletions":1}]}}}
+ ]}}}}}}
+EOS
+run stack "#7"
+check "stack-rc" 0 "$RC"
+has "stack-size" "$OUT" "size:     3"
+has "stack-position" "$OUT" "position: 2 of 3"
+has "stack-current-mark" "$OUT" "2 * #7	OPEN"
+has "stack-other-unmarked" "$OUT" "1   #6	MERGED"
+has "stack-files-header" "$OUT" "#6 (1 段目):"
+has "stack-files-entry" "$OUT" "  +8 -2	src/a.py"
+has "stack-mermaid-current" "$OUT" '+3 -1 / 1 files"]:::current'
+has "stack-mermaid-chain" "$OUT" "    base --> p1 --> p2 --> p3"
+has "stack-mermaid-escaped" "$OUT" 'p1["#35;6 feat: 土台 #quot;A#quot;#59; #lt;B#gt; #35;1<br/>'
+check "stack-mermaid-one-current" 1 "$(printf '%s\n' "$OUT" | grep -c ':::current$')"
+printf '%s\n' "$OUT" >"$WORK/stack.md"
+run mermaid-check "$WORK/stack.md"
+has "stack-mermaid-extractable" "$OUT" "RESULT: OK (1 diagrams)"
+run preflight "#7"
+has "preflight-stack-position" "$OUT" "position: 2 of 3"
+lacks "preflight-stack-no-files" "$OUT" "STACK FILES"
+
 # --- diff ---
 cd "$WORK/work" || exit 1
 run diff "#7"
@@ -343,6 +390,47 @@ check "comment-details-count" 2 "$(grep -c '^<details>$' "$FAKE_GH_DIR/posted.md
 check "comment-details-closed" 2 "$(grep -c '^</details>$' "$FAKE_GH_DIR/posted.md")"
 has "comment-keeps-prose" "$POSTED" "説明文。"
 has "comment-keeps-code" "$POSTED" 'print("mermaid ではない")'
+
+# 最初の図と同じ節にある図はすべて開いたままにする（スタックの全体像と変更の全体像）
+cat >"$WORK/two-overviews.md" <<'EOS'
+# PR
+
+## 全体像
+
+**図1: スタックの全体像**
+
+```mermaid
+flowchart BT
+    a --> b
+```
+
+**図2: 変更の全体像**
+
+```mermaid
+flowchart LR
+    c --> d
+```
+
+```text
+## これは見出しではない
+```
+
+## 変更の詳細
+
+**図3: foo**
+
+```mermaid
+sequenceDiagram
+    A->>B: foo()
+```
+EOS
+run comment "#7" --from "$WORK/two-overviews.md" --dry-run --out "$WORK/out/two.md"
+check "comment-two-open-rc" 0 "$RC"
+TWO=$(cat "$WORK/out/two.md")
+has "comment-two-open-first" "$TWO" "**図1: スタックの全体像**"
+has "comment-two-open-second" "$TWO" "**図2: 変更の全体像**"
+has "comment-two-fold-third" "$TWO" "<summary>図3: foo</summary>"
+check "comment-two-details-count" 1 "$(grep -c '^<details>$' "$WORK/out/two.md")"
 
 # 目印付きの自分のコメントだけを上書き対象にする（他人の目印付き・自分の目印なしは対象外）
 cat >"$FAKE_GH_DIR/comments.json" <<'EOS'

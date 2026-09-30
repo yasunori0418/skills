@@ -8,6 +8,7 @@
 # 使い方:
 #   pr-visualize.sh parse         <url|#PR|pr:PR|PR>            解決結果(host/repo/pr)のみ出力
 #   pr-visualize.sh preflight     [url|#PR|pr:PR|PR]            PR のメタ情報・本文・コミット・変更ファイル・動作モード
+#   pr-visualize.sh stack         [url|#PR|pr:PR|PR]            スタックの並び・各段の変更ファイル・スタックの図
 #   pr-visualize.sh diff          [url|#PR|pr:PR|PR] --out <file>   差分をファイルへ退避（lockfile・生成物は除く）
 #   pr-visualize.sh fetch         [url|#PR|pr:PR|PR]            PR の head を取得（作業ツリー・ブランチ・ref は変えない）
 #   pr-visualize.sh mermaid-check <markdown>                    ```mermaid ブロックを mmdc で描画して構文検証
@@ -19,6 +20,10 @@
 #   https://HOST/OWNER/REPO/pull/PRNUM[/...]
 #   #PRNUM / pr:PRNUM / PRNUM … repo は cwd から gh が解決
 #   (空)                       … 現在ブランチの PR
+#
+# スタック:
+#   GitHub のスタック機能に登録された PR だけを検出する（マージ後も取得できる）。
+#   登録されていない PR は単独の PR として扱う。
 #
 # 動作モード:
 #   full     … PR のリポジトリが cwd の remote と一致。head を取得でき、差分の外（呼び出し元）を読める
@@ -151,13 +156,85 @@ resolve_pr() {
     RARGS=(-R "$HOST/$REPO")
 }
 
+STACK_QUERY='query($o: String!, $n: String!, $p: Int!) {
+  repository(owner: $o, name: $n) {
+    pullRequest(number: $p) {
+      stackEntry { position }
+      stack {
+        size
+        baseRefName
+        entries(first: 50) {
+          nodes {
+            position
+            pullRequest {
+              number state title headRefName additions deletions changedFiles
+              files(first: 100) { nodes { path additions deletions } }
+            }
+          }
+        }
+      }
+    }
+  }
+}'
+
+# jq: スタックの並び。現在の段に * を付ける。
+STACK_JQ_LIST='
+.data.repository.pullRequest as $pr
+| if $pr.stack == null then "size:     1 (スタックではない)"
+  else
+    $pr.stackEntry.position as $cur
+    | ($pr.stack.entries.nodes | map(select(.pullRequest != null)) | sort_by(.position)) as $es
+    | "size:     \($pr.stack.size)",
+      "base:     \($pr.stack.baseRefName)",
+      "position: \($cur) of \($pr.stack.size)",
+      ($es[] | "\(.position)\(if .position == $cur then " *" else "  " end) #\(.pullRequest.number)\t\(.pullRequest.state)\t+\(.pullRequest.additions) -\(.pullRequest.deletions)\t\(.pullRequest.changedFiles) files\t\(.pullRequest.headRefName)\t\(.pullRequest.title)")
+  end'
+
+# jq: 各段の変更ファイルと、スタックの図。図の文は mermaid が解釈する記号を文字参照へ置き換える。
+STACK_JQ_DETAIL='
+def esc: gsub("(?<c>[#;\"<>])"; {"#": "#35;", ";": "#59;", "\"": "#quot;", "<": "#lt;", ">": "#gt;"}[.c]);
+.data.repository.pullRequest as $pr
+| if $pr.stack == null then empty
+  else
+    $pr.stackEntry.position as $cur
+    | ($pr.stack.entries.nodes | map(select(.pullRequest != null)) | sort_by(.position)) as $es
+    | "",
+      "=== STACK FILES ===",
+      ($es[] | "#\(.pullRequest.number) (\(.position) 段目):", (.pullRequest.files.nodes[] | "  +\(.additions) -\(.deletions)\t\(.path)")),
+      "",
+      "=== STACK MERMAID ===",
+      "```mermaid",
+      "flowchart BT",
+      "    classDef current fill:#ffc40066,stroke:#d39e00,stroke-width:3px",
+      "    classDef base stroke-dasharray: 4 3",
+      "",
+      "    base[\"\($pr.stack.baseRefName | esc)\"]:::base",
+      ($es[] | "    p\(.position)[\"#35;\(.pullRequest.number) \(.pullRequest.title | esc)<br/>+\(.pullRequest.additions) -\(.pullRequest.deletions) / \(.pullRequest.changedFiles) files\"]\(if .position == $cur then ":::current" else "" end)"),
+      "",
+      "    base" + ($es | map(" --> p\(.position)") | join("")),
+      "```"
+  end'
+
+# スタックの情報を出す。$1 = jq の式。取得できない GitHub（スタックの項目が無い版など）では 1 を返す。
+stack_query() {
+    gh api --hostname "$HOST" graphql -f query="$STACK_QUERY" \
+        -f o="${REPO%%/*}" -f n="${REPO#*/}" -F p="$PR" --jq "$1" 2>/dev/null
+}
+
+print_stack_list() {
+    stack_query "$STACK_JQ_LIST" ||
+        echo "size:     unknown (この GitHub からスタックの情報を取得できない。単独の PR として扱う)"
+}
+
 mmdc_bin() {
     local bin="${PR_VISUALIZE_MMDC:-mmdc}"
     command -v "$bin" 2>/dev/null || true
 }
 
-# 図を折りたたんだコメント本文を組み立てる。1 枚目の図（俯瞰図）は開いたまま、2 枚目以降は
-# <details> に入れる。図の直前にある太字だけの行（**図: …**）を見出し（summary）に使う。
+# 図を折りたたんだコメント本文を組み立てる。最初の図と同じ節（## の見出し単位）にある図は
+# 開いたままにし、以降の節の図は <details> に入れる。全体像の節に図が複数あっても（スタックの
+# 全体像と変更の全体像）すべて開いたままになる。図の直前にある太字だけの行（**図: …**）を
+# 見出し（summary）に使う。
 compose_comment() { # $1 = 正本の markdown
     printf '%s\n' "$MARKER"
     awk '
@@ -166,39 +243,48 @@ compose_comment() { # $1 = 正本の markdown
             cap = ""
         }
         {
-            if (!inblk) {
-                if ($0 ~ /^[ \t]*```mermaid[ \t]*$/) {
-                    n++; inblk = 1
-                    if (n >= 2) {
-                        s = (cap != "") ? cap : "diagram " n
-                        held = ""; cap = ""
-                        print "<details>"
-                        print "<summary>" s "</summary>"
-                        print ""
-                    } else {
-                        flush()
-                    }
-                    print
-                    next
+            if (inblk) {
+                print
+                if ($0 ~ /^[ \t]*```[ \t]*$/) {
+                    inblk = 0
+                    if (fold) { print ""; print "</details>" }
                 }
-                if ($0 ~ /^\*\*.+\*\*[ \t]*$/) {
+                next
+            }
+            if (incode) {
+                print
+                if ($0 ~ /^[ \t]*```[ \t]*$/) incode = 0
+                next
+            }
+            if ($0 ~ /^[ \t]*```mermaid[ \t]*$/) {
+                n++; inblk = 1
+                if (n == 1) opensec = sec
+                fold = (sec != opensec)
+                if (fold) {
+                    s = (cap != "") ? cap : "diagram " n
+                    held = ""; cap = ""
+                    print "<details>"
+                    print "<summary>" s "</summary>"
+                    print ""
+                } else {
                     flush()
-                    cap = $0
-                    sub(/^\*\*/, "", cap)
-                    sub(/\*\*[ \t]*$/, "", cap)
-                    held = $0 "\n"
-                    next
                 }
-                if ($0 ~ /^[ \t]*$/ && held != "") { held = held $0 "\n"; next }
-                flush()
                 print
                 next
             }
-            print
-            if ($0 ~ /^[ \t]*```[ \t]*$/) {
-                inblk = 0
-                if (n >= 2) { print ""; print "</details>" }
+            if ($0 ~ /^[ \t]*```/) { flush(); incode = 1; print; next }
+            if ($0 ~ /^## /) sec++
+            if ($0 ~ /^\*\*.+\*\*[ \t]*$/) {
+                flush()
+                cap = $0
+                sub(/^\*\*/, "", cap)
+                sub(/\*\*[ \t]*$/, "", cap)
+                held = $0 "\n"
+                next
             }
+            if ($0 ~ /^[ \t]*$/ && held != "") { held = held $0 "\n"; next }
+            flush()
+            print
         }
         END { flush() }
     ' "$1"
@@ -268,6 +354,9 @@ case "$cmd" in
             echo "effect: 参照箇所起点の図を省く / fetch と comment は実行できない"
         fi
         echo
+        echo "=== STACK ==="
+        print_stack_list
+        echo
         echo "=== TITLE ==="
         gh pr view "$PR" "${RARGS[@]}" --json title --jq '.title'
         echo
@@ -292,6 +381,15 @@ case "$cmd" in
         else
             echo "mmdc: (not found) 図は構文検証できず「未検証」になる"
         fi
+        ;;
+
+    stack)
+        command -v gh >/dev/null 2>&1 || die "gh が見つかりません。GitHub CLI を導入してください"
+        parse_input "$input"
+        resolve_pr
+        echo "=== STACK ==="
+        print_stack_list
+        stack_query "$STACK_JQ_DETAIL" || true
         ;;
 
     diff)
@@ -478,6 +576,6 @@ case "$cmd" in
         ;;
 
     *)
-        die "未知のサブコマンド: $cmd （parse | preflight | diff | fetch | mermaid-check | comment）"
+        die "未知のサブコマンド: $cmd （parse | preflight | stack | diff | fetch | mermaid-check | comment）"
         ;;
 esac
