@@ -9,11 +9,11 @@
 #   pr-visualize.sh parse         <url|#PR|pr:PR|PR>            解決結果(host/repo/pr)のみ出力
 #   pr-visualize.sh preflight     [url|#PR|pr:PR|PR]            PR のメタ情報・本文・コミット・変更ファイル・動作モード
 #   pr-visualize.sh stack         [url|#PR|pr:PR|PR]            スタックの並び・各段の変更ファイル・スタックの図
-#   pr-visualize.sh diff          [url|#PR|pr:PR|PR] --out <file>   差分をファイルへ退避（lockfile・生成物は除く）
+#   pr-visualize.sh diff          [url|#PR|pr:PR|PR] --out <file>   差分をファイルへ退避（lockfile・縮小済み js/css は除く）
 #   pr-visualize.sh fetch         [url|#PR|pr:PR|PR]            PR の head を取得（作業ツリー・ブランチ・ref は変えない）
 #   pr-visualize.sh mermaid-check <markdown>                    ```mermaid ブロックを mmdc で描画して構文検証
 #   pr-visualize.sh comment       [url|#PR|pr:PR|PR] --from <markdown> (--dry-run [--out <file>] | --expect <hash>)
-#                                                               図を折りたたんだ本文を PR コメントへ新規投稿/上書き
+#                                                               全体像より後の節を折りたたんだ本文を PR コメントへ新規投稿/上書き
 #                                                               （--dry-run --out で投稿される本文そのものを書き出す）
 #
 # 受理する入力:
@@ -45,7 +45,7 @@ die() {
 MARKER='<!-- pr-visualize -->'
 COMMENT_LIMIT=65536 # GitHub の issue comment 本文の上限（文字数）
 
-# lockfile・生成物: 差分本文は読んでも図にならないので、統計だけ残して本文は落とす
+# lockfile・縮小済みの js/css: 差分本文は読んでも図にならないので、統計だけ残して本文は落とす
 EXCLUDE_RE='(\.lock|\.lockfile|package-lock\.json|pnpm-lock\.yaml|go\.sum|\.min\.js|\.min\.css)$'
 
 HOST=""
@@ -168,7 +168,7 @@ STACK_QUERY='query($o: String!, $n: String!, $p: Int!) {
             position
             pullRequest {
               number state title headRefName additions deletions changedFiles
-              files(first: 100) { nodes { path additions deletions } }
+              files(first: 100) { nodes { path additions deletions changeType } }
             }
           }
         }
@@ -200,7 +200,8 @@ def esc: gsub("(?<c>[#;\"<>])"; {"#": "#35;", ";": "#59;", "\"": "#quot;", "<": 
     | ($pr.stack.entries.nodes | map(select(.pullRequest != null)) | sort_by(.position)) as $es
     | "",
       "=== STACK FILES ===",
-      ($es[] | "#\(.pullRequest.number) (\(.position) 段目):", (.pullRequest.files.nodes[] | "  +\(.additions) -\(.deletions)\t\(.path)")),
+      "(A: 新規  M: 変更  D: 削除  R: 改名  C: 複製)",
+      ($es[] | "#\(.pullRequest.number) (\(.position) 段目):", (.pullRequest.files.nodes[] | "  +\(.additions) -\(.deletions)\t\((.changeType // "?")[0:1])\t\(.path)")),
       "",
       "=== STACK MERMAID ===",
       "```mermaid",
@@ -231,24 +232,20 @@ mmdc_bin() {
     command -v "$bin" 2>/dev/null || true
 }
 
-# 図を折りたたんだコメント本文を組み立てる。最初の図と同じ節（## の見出し単位）にある図は
-# 開いたままにし、以降の節の図は <details> に入れる。全体像の節に図が複数あっても（スタックの
-# 全体像と変更の全体像）すべて開いたままになる。図の直前にある太字だけの行（**図: …**）を
-# 見出し（summary）に使う。
+# コメント本文を組み立てる。最初の図がある節（## の見出し単位）までは開いたまま、それより後の
+# 節は見出しごとに <details> へ入れる。全体像（スタックでは 2 枚）はそのまま見え、変更の詳細・
+# テスト・ドキュメントなどの長い節は見出しだけが並ぶ。節の中の図は個別には折りたたまない
+# （二重の折りたたみを避ける）。見出しの文字列は言語を問わずそのまま summary に使う。
 compose_comment() { # $1 = 正本の markdown
     printf '%s\n' "$MARKER"
     awk '
-        function flush() {
-            if (held != "") { printf "%s", held; held = "" }
-            cap = ""
+        function close_section() {
+            if (folded) { print ""; print "</details>"; folded = 0 }
         }
         {
             if (inblk) {
                 print
-                if ($0 ~ /^[ \t]*```[ \t]*$/) {
-                    inblk = 0
-                    if (fold) { print ""; print "</details>" }
-                }
+                if ($0 ~ /^[ \t]*```[ \t]*$/) inblk = 0
                 next
             }
             if (incode) {
@@ -256,37 +253,21 @@ compose_comment() { # $1 = 正本の markdown
                 if ($0 ~ /^[ \t]*```[ \t]*$/) incode = 0
                 next
             }
-            if ($0 ~ /^[ \t]*```mermaid[ \t]*$/) {
-                n++; inblk = 1
-                if (n == 1) opensec = sec
-                fold = (sec != opensec)
-                if (fold) {
-                    s = (cap != "") ? cap : "diagram " n
-                    held = ""; cap = ""
-                    print "<details>"
-                    print "<summary>" s "</summary>"
-                    print ""
-                } else {
-                    flush()
-                }
-                print
+            if ($0 ~ /^[ \t]*```mermaid[ \t]*$/) { seen = 1; inblk = 1; print; next }
+            if ($0 ~ /^[ \t]*```/) { incode = 1; print; next }
+            if ($0 ~ /^## / && seen) {
+                close_section()
+                title = $0
+                sub(/^## +/, "", title)
+                print "<details>"
+                print "<summary><b>" title "</b></summary>"
+                print ""
+                folded = 1
                 next
             }
-            if ($0 ~ /^[ \t]*```/) { flush(); incode = 1; print; next }
-            if ($0 ~ /^## /) sec++
-            if ($0 ~ /^\*\*.+\*\*[ \t]*$/) {
-                flush()
-                cap = $0
-                sub(/^\*\*/, "", cap)
-                sub(/\*\*[ \t]*$/, "", cap)
-                held = $0 "\n"
-                next
-            }
-            if ($0 ~ /^[ \t]*$/ && held != "") { held = held $0 "\n"; next }
-            flush()
             print
         }
-        END { flush() }
+        END { close_section() }
     ' "$1"
 }
 

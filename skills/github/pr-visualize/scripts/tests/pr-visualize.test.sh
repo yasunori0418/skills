@@ -16,7 +16,7 @@
 #   - mermaid-check  mmdc なし -> UNVERIFIED(exit 0)、全通過 -> OK、構文エラー -> FAIL(exit 1)と行番号、
 #                    ログなしの失敗でも残りの図を検証する、図の文言では誤判定しない、図なし -> NO DIAGRAMS
 #   - comment        dry-run は投稿しない（--out で投稿される本文を書き出す）、新規は POST、目印付きの自分のコメントがあれば PATCH、
-#                    最初の図と同じ節の図は開いたまま、以降の節の図を <details> に畳む、承認後に本文が変われば拒否、
+#                    最初の図がある節までは開いたまま、以降の節を見出しごとに <details> に畳む、承認後に本文が変われば拒否、
 #                    上限超過は拒否（バイト数ではなく文字数で数える）、degraded は拒否
 set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -240,7 +240,7 @@ cat >"$FAKE_GH_DIR/stack.json" <<'EOS'
   {"position":3,"pullRequest":{"number":8,"state":"OPEN","title":"test: 検証を足す","headRefName":"test/c","additions":5,"deletions":0,"changedFiles":1,
    "files":{"nodes":[{"path":"tests/c_test.py","additions":5,"deletions":0}]}}},
   {"position":1,"pullRequest":{"number":6,"state":"MERGED","title":"feat: 土台 \"A\"; <B> #1","headRefName":"feat/a","additions":10,"deletions":2,"changedFiles":2,
-   "files":{"nodes":[{"path":"src/a.py","additions":8,"deletions":2},{"path":"src/foo.py","additions":2,"deletions":0}]}}},
+   "files":{"nodes":[{"path":"src/a.py","additions":8,"deletions":2,"changeType":"ADDED"},{"path":"src/foo.py","additions":2,"deletions":0,"changeType":"MODIFIED"}]}}},
   {"position":2,"pullRequest":{"number":7,"state":"OPEN","title":"feat: foo を加算に変える","headRefName":"feat/foo","additions":3,"deletions":1,"changedFiles":1,
    "files":{"nodes":[{"path":"src/foo.py","additions":1,"deletions":1}]}}}
  ]}}}}}}
@@ -252,7 +252,9 @@ has "stack-position" "$OUT" "position: 2 of 3"
 has "stack-current-mark" "$OUT" "2 * #7	OPEN"
 has "stack-other-unmarked" "$OUT" "1   #6	MERGED"
 has "stack-files-header" "$OUT" "#6 (1 段目):"
-has "stack-files-entry" "$OUT" "  +8 -2	src/a.py"
+has "stack-files-entry" "$OUT" "  +8 -2	A	src/a.py"
+has "stack-files-modified" "$OUT" "  +2 -0	M	src/foo.py"
+has "stack-files-unknown" "$OUT" "  +5 -0	?	tests/c_test.py"
 has "stack-mermaid-current" "$OUT" '+3 -1 / 1 files"]:::current'
 has "stack-mermaid-chain" "$OUT" "    base --> p1 --> p2 --> p3"
 has "stack-mermaid-escaped" "$OUT" 'p1["#35;6 feat: 土台 #quot;A#quot;#59; #lt;B#gt; #35;1<br/>'
@@ -383,15 +385,17 @@ has "comment-post-call" "$(cat "$FAKE_GH_LOG")" "-X POST repos/o/r/issues/7/comm
 POSTED=$(cat "$FAKE_GH_DIR/posted.md")
 check "comment-marker-first" "<!-- pr-visualize -->" "$(head -n 1 "$FAKE_GH_DIR/posted.md")"
 has "comment-first-caption-open" "$POSTED" "**図1: 俯瞰**"
-has "comment-second-folded" "$POSTED" "<summary>図2: foo のシーケンス</summary>"
-lacks "comment-second-caption-moved" "$POSTED" "**図2: foo のシーケンス**"
-has "comment-third-folded" "$POSTED" "<summary>diagram 3</summary>"
-check "comment-details-count" 2 "$(grep -c '^<details>$' "$FAKE_GH_DIR/posted.md")"
-check "comment-details-closed" 2 "$(grep -c '^</details>$' "$FAKE_GH_DIR/posted.md")"
+has "comment-section-folded" "$POSTED" "<summary><b>foo</b></summary>"
+lacks "comment-section-heading-removed" "$POSTED" "## foo"
+has "comment-second-caption-kept" "$POSTED" "**図2: foo のシーケンス**"
+lacks "comment-no-diagram-details" "$POSTED" "<summary>diagram 3</summary>"
+check "comment-details-count" 1 "$(grep -c '^<details>$' "$FAKE_GH_DIR/posted.md")"
+check "comment-details-closed" 1 "$(grep -c '^</details>$' "$FAKE_GH_DIR/posted.md")"
+check "comment-details-last-line" "</details>" "$(tail -n 1 "$FAKE_GH_DIR/posted.md")"
 has "comment-keeps-prose" "$POSTED" "説明文。"
 has "comment-keeps-code" "$POSTED" 'print("mermaid ではない")'
 
-# 最初の図と同じ節にある図はすべて開いたままにする（スタックの全体像と変更の全体像）
+# 最初の図がある節までは開いたまま（スタックの全体像と変更の全体像）、後の節は見出しごとに畳む
 cat >"$WORK/two-overviews.md" <<'EOS'
 # PR
 
@@ -423,14 +427,29 @@ flowchart LR
 sequenceDiagram
     A->>B: foo()
 ```
+
+## テスト
+
+| 観点 | 結果 |
+| --- | --- |
+| a | b |
+
+## 図にしなかった変更
+
+- なし
 EOS
 run comment "#7" --from "$WORK/two-overviews.md" --dry-run --out "$WORK/out/two.md"
 check "comment-two-open-rc" 0 "$RC"
 TWO=$(cat "$WORK/out/two.md")
 has "comment-two-open-first" "$TWO" "**図1: スタックの全体像**"
 has "comment-two-open-second" "$TWO" "**図2: 変更の全体像**"
-has "comment-two-fold-third" "$TWO" "<summary>図3: foo</summary>"
-check "comment-two-details-count" 1 "$(grep -c '^<details>$' "$WORK/out/two.md")"
+has "comment-two-fold-details" "$TWO" "<summary><b>変更の詳細</b></summary>"
+has "comment-two-fold-tests" "$TWO" "<summary><b>テスト</b></summary>"
+has "comment-two-fold-last" "$TWO" "<summary><b>図にしなかった変更</b></summary>"
+lacks "comment-two-overview-open" "$TWO" "<summary><b>全体像</b></summary>"
+lacks "comment-two-code-heading-ignored" "$TWO" "<summary><b>これは見出しではない</b></summary>"
+check "comment-two-details-count" 3 "$(grep -c '^<details>$' "$WORK/out/two.md")"
+check "comment-two-details-closed" 3 "$(grep -c '^</details>$' "$WORK/out/two.md")"
 
 # 目印付きの自分のコメントだけを上書き対象にする（他人の目印付き・自分の目印なしは対象外）
 cat >"$FAKE_GH_DIR/comments.json" <<'EOS'
