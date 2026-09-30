@@ -1,6 +1,6 @@
 ---
 name: pr-visualize
-description: "GitHub の PR を入力に、変更されたコードやドキュメントを mermaid の図（全体像・関数単位のシーケンス図・参照箇所起点のシーケンス図）で可視化し、短い解説を付けて `tmp-agents/pr-<番号>-visualize.md` に書き出す。`/pr-visualize` の明示起動のみ。`--comment` で PR コメントへ投稿（承認必須）、`--artifact` で Artifact として公開する。レビューの指摘は行わない。GitHub(gh) 前提。"
+description: "GitHub の PR を入力に、変更されたコードやドキュメントを mermaid の図（全体像・関数単位のシーケンス図・参照箇所起点のシーケンス図）で可視化し、短い解説を付けて Markdown ファイルに書き出す。`/pr-visualize` の明示起動のみ。`--comment` で PR コメントへ投稿（承認必須）、`--artifact` で Artifact として公開する。レビューの指摘は行わない。GitHub(gh) 前提。"
 disable-model-invocation: true
 argument-hint: "[PR の URL・#N・pr:N（省略時は現在ブランチの PR）] [--comment] [--artifact]"
 ---
@@ -27,6 +27,20 @@ gh や git を手で並べ直さない。
 
 PR になっていないローカルの差分は対象外。その場合は diff-review を案内して終える。
 
+## 出力先
+
+解説と中間ファイルは一時的な成果物。置き場所は次の順で決める。以下 `<out-dir>` と書く。
+
+1. tmp-output スキルがあれば、その手順で決める。
+2. 無ければ、ユーザーやプロジェクトが決めている運用に従う。
+3. それも無ければ、使っているコーディングエージェントの一時出力の慣例に従う。
+
+ファイル名は次のとおり。再実行時は上書きする。
+
+- `pr-<番号>-visualize.md`: 解説
+- `pr-<番号>-visualize.diff`: 退避した差分
+- `pr-<番号>-visualize.comment.md`: 投稿用の本文（`--comment` のときだけ）
+
 ## 手順
 
 ### 1. PR を把握する
@@ -46,15 +60,11 @@ bash <skill-dir>/scripts/pr-visualize.sh preflight "<PR>"
 ### 2. 差分を退避する
 
 ```bash
-bash <skill-dir>/scripts/pr-visualize.sh diff "<PR>" --out tmp-agents/pr-<番号>-visualize.diff
+bash <skill-dir>/scripts/pr-visualize.sh diff "<PR>" --out <out-dir>/pr-<番号>-visualize.diff
 ```
 
 差分は標準出力に流さずファイルへ置く。大きな差分を会話に抱えると、後の読解と執筆の精度が落ちるため。
 lockfile と生成物の差分は自動で除かれる（統計は手順 1 の FILES に残る）。
-
-`tmp-agents/` へ初めて書き出す前に、git の ignore を保証する。tmp-output スキルがあればその手順に従う。
-無ければ `git check-ignore -q tmp-agents` で確認し、ignore されていなければ `.git/info/exclude` に
-`tmp-agents` を追記する。`.gitignore` は編集しない。
 
 ### 3. head を取得する（full のみ）
 
@@ -117,7 +127,7 @@ git grep -n -w -e '<関数名>' <head_sha> -- [<path>...]
 
 `references/writing.md` を読んでから書く。構成・文章の規則・言語はそこに従う。
 
-書き出し先は `tmp-agents/pr-<番号>-visualize.md`。再実行時は上書きする。
+書き出し先は `<out-dir>/pr-<番号>-visualize.md`。
 
 PR 本文の説明とコードが食い違うときは、コードを正として解説し、食い違いを専用の節に書く。
 それ以外の指摘（不具合、改善案）は書かない。
@@ -125,7 +135,7 @@ PR 本文の説明とコードが食い違うときは、コードを正とし�
 ### 7. 図を検証する
 
 ```bash
-bash <skill-dir>/scripts/pr-visualize.sh mermaid-check tmp-agents/pr-<番号>-visualize.md
+bash <skill-dir>/scripts/pr-visualize.sh mermaid-check <out-dir>/pr-<番号>-visualize.md
 ```
 
 - `RESULT: OK` → 冒頭の「図の検証」に「検証済み」と書く。
@@ -145,8 +155,8 @@ mermaid の図は描画した状態で見せる。公開できない環境では
 
 1. 投稿内容を確定させる。
    ```bash
-   bash <skill-dir>/scripts/pr-visualize.sh comment "<PR>" --from tmp-agents/pr-<番号>-visualize.md \
-       --dry-run --out tmp-agents/pr-<番号>-visualize.comment.md
+   bash <skill-dir>/scripts/pr-visualize.sh comment "<PR>" --from <out-dir>/pr-<番号>-visualize.md \
+       --dry-run --out <out-dir>/pr-<番号>-visualize.comment.md
    ```
    本文は解説から自動で組み立てられる（1 枚目の図は開いたまま、2 枚目以降は折りたたむ）。
    `--out` のファイルが、投稿される本文そのもの。`action`（新規か上書きか）、`chars`、`body_hash` を控える。
@@ -159,7 +169,7 @@ mermaid の図は描画した状態で見せる。公開できない環境では
    本文にも書く。使えないときは選択肢を番号付きで列挙して回答を待つ。
 3. 承認されたら、控えた `body_hash` を渡して投稿する。
    ```bash
-   bash <skill-dir>/scripts/pr-visualize.sh comment "<PR>" --from tmp-agents/pr-<番号>-visualize.md --expect <body_hash>
+   bash <skill-dir>/scripts/pr-visualize.sh comment "<PR>" --from <out-dir>/pr-<番号>-visualize.md --expect <body_hash>
    ```
    承認後に解説を書き換えると `body_hash` が合わず拒否される。その場合は 1 からやり直す。
 
