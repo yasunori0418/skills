@@ -1,12 +1,14 @@
 # 図の描き方
 
 図は 5 種類。どれも「差分の行」ではなく「処理とデータの流れ」を見せるために描く。
+stacked PR では、全体像の図が 2 枚になる。
 
 ## 目次
 
 - [共通の規則](#共通の規則)
 - [壊れやすい記法](#壊れやすい記法)
 - [全体像の図](#全体像の図)
+- [stacked PR の全体像](#stacked-pr-の全体像)
 - [関数単位のシーケンス図](#関数単位のシーケンス図)
 - [参照箇所起点のシーケンス図](#参照箇所起点のシーケンス図)
 - [変更前後を 2 枚に分ける場合](#変更前後を-2-枚に分ける場合)
@@ -84,6 +86,60 @@ flowchart LR
 ```
 
 黄: 変更、緑: 新規、破線: 変更なし
+
+## stacked PR の全体像
+
+stacked PR では、全体像の節に図を 2 枚置く。
+
+### スタックの全体像
+
+スタックのどの段を読んでいるかを示す。自分では描かない。`stack` サブコマンドが出す STACK MERMAID を、
+書き換えずにそのまま貼る。スタックの全ての PR で同じ形の図になり、現在の段だけ色が変わる。
+図題は `**図1: スタックの全体像**`。図の直後に凡例を 1 行書く（「濃い色: この PR」）。
+
+### 変更の全体像（スタック全体）
+
+スタック全体で変更されるモジュールを描き、その中で現在の PR が担当する領域を目立たせる。
+他の段の変更も載せるのは、現在の PR の位置づけが、周りがあって初めて分かるため。
+
+- 材料は `stack` の STACK FILES。ノードには、そこを変更する PR の番号を書く（`#35;412` のように `#` は `#35;` にする）。
+- 現在の PR が変更するノードは `changed`（黄）か `added`（緑）にする。濃い色と太い枠で目立たせる。
+- 他の段だけが変更するノードは `other`（灰）にする。未変更のものは `context`（破線）。
+- グループ（`subgraph`）の中が全て現在の PR のノードなら、`style` でグループの背景にも色を付ける。
+- ノードが 15 個を超えるなら、他の段だけが変更するものからディレクトリ単位にまとめる。
+  現在の PR のノードは最後までファイルや関数の単位で残す。
+- 図の直後に凡例を 1 行書く。
+
+**図2: 変更の全体像（スタック全体）**
+
+```mermaid
+flowchart LR
+    classDef changed fill:#ffc40066,stroke:#d39e00,stroke-width:3px
+    classDef added fill:#2ea04366,stroke:#2ea043,stroke-width:3px
+    classDef other fill:#8b949e22,stroke:#8b949e
+    classDef context stroke-dasharray: 4 3
+
+    subgraph cmd["cmd/app/"]
+        apply["apply.go<br/>#35;412 #35;413 #35;414"]:::changed
+        nix["nix.go<br/>#35;412"]:::other
+        engine["engine/"]:::context
+    end
+    subgraph pool["cmd/app/pool/"]
+        worker["worker.go<br/>#35;413"]:::added
+        workertest["worker_test.go<br/>#35;413"]:::added
+    end
+    subgraph e2e["tests/"]
+        e2etest["e2e.sh<br/>#35;415"]:::other
+    end
+    style pool fill:#2ea04318,stroke:#2ea043,stroke-width:2px
+
+    apply --> worker
+    apply --> nix
+    apply --> engine
+    e2etest --> apply
+```
+
+黄: この PR の変更、緑: この PR の新規、灰: スタックの他の段の変更、破線: 変更なし
 
 ## 関数単位のシーケンス図
 
