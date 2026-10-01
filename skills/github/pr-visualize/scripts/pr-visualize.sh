@@ -13,7 +13,7 @@
 #   pr-visualize.sh fetch         [url|#PR|pr:PR|PR]            PR の head を取得（作業ツリー・ブランチ・ref は変えない）
 #   pr-visualize.sh mermaid-check <markdown>                    ```mermaid ブロックを mmdc で描画して構文検証
 #   pr-visualize.sh comment       [url|#PR|pr:PR|PR] --from <markdown> (--dry-run [--out <file>] | --expect <hash>)
-#                                                               全体像より後の節を折りたたんだ本文を PR コメントへ新規投稿/上書き
+#                                                               全体像より後の節と、その中の図を折りたたんだ本文を PR コメントへ新規投稿/上書き
 #                                                               （--dry-run --out で投稿される本文そのものを書き出す）
 #
 # 受理する入力:
@@ -233,19 +233,27 @@ mmdc_bin() {
 }
 
 # コメント本文を組み立てる。最初の図がある節（## の見出し単位）までは開いたまま、それより後の
-# 節は見出しごとに <details> へ入れる。全体像（スタックでは 2 枚）はそのまま見え、変更の詳細・
-# テスト・ドキュメントなどの長い節は見出しだけが並ぶ。節の中の図は個別には折りたたまない
-# （二重の折りたたみを避ける）。見出しの文字列は言語を問わずそのまま summary に使う。
+# 節は見出しごとに <details> へ入れる。畳んだ節の中の図は、さらに図ごとに <details> へ入れる
+# （節を開いても図は閉じたままで、読みたい図だけ開ける）。図の直前にある太字だけの行
+# （**図N: …**）を図の見出し（summary）に使う。見出しの文字列は言語を問わずそのまま使う。
 compose_comment() { # $1 = 正本の markdown
     printf '%s\n' "$MARKER"
     awk '
+        function flush() {
+            if (held != "") { printf "%s", held; held = "" }
+            cap = ""
+        }
         function close_section() {
+            flush()
             if (folded) { print ""; print "</details>"; folded = 0 }
         }
         {
             if (inblk) {
                 print
-                if ($0 ~ /^[ \t]*```[ \t]*$/) inblk = 0
+                if ($0 ~ /^[ \t]*```[ \t]*$/) {
+                    inblk = 0
+                    if (wrapped) { print ""; print "</details>"; wrapped = 0 }
+                }
                 next
             }
             if (incode) {
@@ -253,8 +261,22 @@ compose_comment() { # $1 = 正本の markdown
                 if ($0 ~ /^[ \t]*```[ \t]*$/) incode = 0
                 next
             }
-            if ($0 ~ /^[ \t]*```mermaid[ \t]*$/) { seen = 1; inblk = 1; print; next }
-            if ($0 ~ /^[ \t]*```/) { incode = 1; print; next }
+            if ($0 ~ /^[ \t]*```mermaid[ \t]*$/) {
+                seen = 1; inblk = 1; n++
+                if (folded) {
+                    s = (cap != "") ? cap : "diagram " n
+                    held = ""; cap = ""
+                    print "<details>"
+                    print "<summary>" s "</summary>"
+                    print ""
+                    wrapped = 1
+                } else {
+                    flush()
+                }
+                print
+                next
+            }
+            if ($0 ~ /^[ \t]*```/) { flush(); incode = 1; print; next }
             if ($0 ~ /^## / && seen) {
                 close_section()
                 title = $0
@@ -265,6 +287,16 @@ compose_comment() { # $1 = 正本の markdown
                 folded = 1
                 next
             }
+            if (folded && $0 ~ /^\*\*.+\*\*[ \t]*$/) {
+                flush()
+                cap = $0
+                sub(/^\*\*/, "", cap)
+                sub(/\*\*[ \t]*$/, "", cap)
+                held = $0 "\n"
+                next
+            }
+            if ($0 ~ /^[ \t]*$/ && held != "") { held = held $0 "\n"; next }
+            flush()
             print
         }
         END { close_section() }

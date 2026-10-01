@@ -16,7 +16,8 @@
 #   - mermaid-check  mmdc なし -> UNVERIFIED(exit 0)、全通過 -> OK、構文エラー -> FAIL(exit 1)と行番号、
 #                    ログなしの失敗でも残りの図を検証する、図の文言では誤判定しない、図なし -> NO DIAGRAMS
 #   - comment        dry-run は投稿しない（--out で投稿される本文を書き出す）、新規は POST、目印付きの自分のコメントがあれば PATCH、
-#                    最初の図がある節までは開いたまま、以降の節を見出しごとに <details> に畳む、承認後に本文が変われば拒否、
+#                    最初の図がある節までは開いたまま、以降の節を見出しごとに <details> に畳み、
+#                    畳んだ節の中の図はさらに図ごとに畳む、承認後に本文が変われば拒否、
 #                    上限超過は拒否（バイト数ではなく文字数で数える）、degraded は拒否
 set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -387,10 +388,11 @@ check "comment-marker-first" "<!-- pr-visualize -->" "$(head -n 1 "$FAKE_GH_DIR/
 has "comment-first-caption-open" "$POSTED" "**図1: 俯瞰**"
 has "comment-section-folded" "$POSTED" "<summary><b>foo</b></summary>"
 lacks "comment-section-heading-removed" "$POSTED" "## foo"
-has "comment-second-caption-kept" "$POSTED" "**図2: foo のシーケンス**"
-lacks "comment-no-diagram-details" "$POSTED" "<summary>diagram 3</summary>"
-check "comment-details-count" 1 "$(grep -c '^<details>$' "$FAKE_GH_DIR/posted.md")"
-check "comment-details-closed" 1 "$(grep -c '^</details>$' "$FAKE_GH_DIR/posted.md")"
+has "comment-second-folded" "$POSTED" "<summary>図2: foo のシーケンス</summary>"
+lacks "comment-second-caption-moved" "$POSTED" "**図2: foo のシーケンス**"
+has "comment-third-folded" "$POSTED" "<summary>diagram 3</summary>"
+check "comment-details-count" 3 "$(grep -c '^<details>$' "$FAKE_GH_DIR/posted.md")"
+check "comment-details-closed" 3 "$(grep -c '^</details>$' "$FAKE_GH_DIR/posted.md")"
 check "comment-details-last-line" "</details>" "$(tail -n 1 "$FAKE_GH_DIR/posted.md")"
 has "comment-keeps-prose" "$POSTED" "説明文。"
 has "comment-keeps-code" "$POSTED" 'print("mermaid ではない")'
@@ -444,12 +446,16 @@ TWO=$(cat "$WORK/out/two.md")
 has "comment-two-open-first" "$TWO" "**図1: スタックの全体像**"
 has "comment-two-open-second" "$TWO" "**図2: 変更の全体像**"
 has "comment-two-fold-details" "$TWO" "<summary><b>変更の詳細</b></summary>"
+has "comment-two-fold-diagram" "$TWO" "<summary>図3: foo</summary>"
+has "comment-two-open-caption" "$TWO" "**図2: 変更の全体像**"
 has "comment-two-fold-tests" "$TWO" "<summary><b>テスト</b></summary>"
 has "comment-two-fold-last" "$TWO" "<summary><b>図にしなかった変更</b></summary>"
 lacks "comment-two-overview-open" "$TWO" "<summary><b>全体像</b></summary>"
 lacks "comment-two-code-heading-ignored" "$TWO" "<summary><b>これは見出しではない</b></summary>"
-check "comment-two-details-count" 3 "$(grep -c '^<details>$' "$WORK/out/two.md")"
-check "comment-two-details-closed" 3 "$(grep -c '^</details>$' "$WORK/out/two.md")"
+check "comment-two-details-count" 4 "$(grep -c '^<details>$' "$WORK/out/two.md")"
+check "comment-two-details-closed" 4 "$(grep -c '^</details>$' "$WORK/out/two.md")"
+# 入れ子の順序: 節を開く → 図を開く → 図を閉じる → 節を閉じる
+check "comment-two-nesting" "<details><summary><b>変更の詳細</b></summary><details><summary>図3: foo</summary></details></details><details><summary><b>テスト</b></summary></details><details><summary><b>図にしなかった変更</b></summary></details>" "$(grep -E '^</?details>$|^<summary>' "$WORK/out/two.md" | tr -d '\n')"
 
 # 目印付きの自分のコメントだけを上書き対象にする（他人の目印付き・自分の目印なしは対象外）
 cat >"$FAKE_GH_DIR/comments.json" <<'EOS'
