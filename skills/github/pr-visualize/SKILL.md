@@ -1,8 +1,8 @@
 ---
 name: pr-visualize
-description: "GitHub の PR を入力に、変更されたコードやドキュメントを mermaid の図（全体像・関数単位のシーケンス図・参照箇所起点のシーケンス図）で可視化し、短い解説を付けて Markdown ファイルに書き出す。stacked PR では、スタックの全体像と、現在の段を強調した変更の全体像を描く。`/pr-visualize` の明示起動のみ。`--comment` で PR コメントへ投稿（承認必須）、`--artifact` で Artifact として公開する。レビューの指摘は行わない。GitHub(gh) 前提。"
+description: "GitHub の PR を入力に、変更されたコードやドキュメントを mermaid の図（全体像・関数単位のシーケンス図・参照箇所起点のシーケンス図）で可視化し、短い解説を付けて Markdown ファイルに書き出す。stacked PR では、スタックの全体像と、現在の段を強調した変更の全体像を描く。`/pr-visualize` の明示起動のみ。`--comment` で PR コメントへ投稿（承認必須）。レビューの指摘は行わない。GitHub(gh) 前提。"
 disable-model-invocation: true
-argument-hint: "[PR の URL・#N・pr:N（省略時は現在ブランチの PR）] [--comment] [--artifact]"
+argument-hint: "[PR の URL・#N・pr:N（省略時は現在ブランチの PR）] [--comment]"
 ---
 
 # pr-visualize — PR の変更を図で解説する
@@ -22,8 +22,7 @@ gh や git を手で並べ直さない。
 `$ARGUMENTS` から次を読み取る。
 
 - PR の指定: URL、`#N`、`pr:N`。省略時は現在ブランチの PR。以下 `<PR>` と書く。
-- `--comment`: 解説を PR コメントへ投稿する（手順 9）。
-- `--artifact`: 解説を Artifact として公開する（手順 8）。
+- `--comment`: 解説を PR コメントへ投稿する（手順 8）。
 
 PR になっていないローカルの差分は対象外。その場合は diff-review を案内して終える。
 
@@ -162,12 +161,7 @@ bash <skill-dir>/scripts/pr-visualize.sh mermaid-check <out-dir>/pr-<番号>-vis
   外した図の番号を冒頭の「図の検証」に書く。
 - `RESULT: UNVERIFIED` → `mmdc` が無い。冒頭の「図の検証」に「未検証（mmdc なし）」と書く。
 
-### 8. Artifact として公開する（`--artifact` のみ）
-
-Artifact を公開できる環境（Claude Code の Artifact ツールなど）でだけ行う。解説と同じ内容をページにし、
-mermaid の図は描画した状態で見せる。公開できない環境では、その旨を伝えて省く。
-
-### 9. PR コメントへ投稿する（`--comment` のみ）
+### 8. PR コメントへ投稿する（`--comment` のみ）
 
 投稿は他人の目に触れ、通知も飛ぶ。`--comment` は「投稿する意思」であって「この内容で投稿してよい」
 ではないので、必ず内容の承認を挟む。
@@ -198,10 +192,10 @@ mermaid の図は描画した状態で見せる。公開できない環境では
 - `degraded`（図が欠けた解説を投稿しない）
 - 本文が 65,536 文字を超える（分割投稿はしない）
 
-### 10. 報告する
+### 9. 報告する
 
 解説ファイルの場所、描いた図の枚数、図の検証結果、図にしなかった変更の件数を伝える。
-投稿や公開をしたときはその URL も伝える。
+投稿したときはその URL も伝える。
 
 ## 制約
 
