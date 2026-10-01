@@ -7,7 +7,8 @@
 #
 # 使い方:
 #   pr-visualize.sh parse         <url|#PR|pr:PR|PR>            解決結果(host/repo/pr)のみ出力
-#   pr-visualize.sh preflight     [url|#PR|pr:PR|PR]            PR のメタ情報・本文・コミット・変更ファイル・動作モード
+#   pr-visualize.sh preflight     [url|#PR|pr:PR|PR] [--full]   PR のメタ情報・本文・コミット・変更ファイル・動作モード
+#                                                               （--full でコミットの本文も出す。既定は見出しだけ）
 #   pr-visualize.sh stack         [url|#PR|pr:PR|PR]            スタックの並び・各段の変更ファイル・スタックの図
 #   pr-visualize.sh diff          [url|#PR|pr:PR|PR] --out <file>   差分をファイルへ退避（lockfile・縮小済み js/css は除く）
 #   pr-visualize.sh fetch         [url|#PR|pr:PR|PR]            PR の head を取得（作業ツリー・ブランチ・ref は変えない）
@@ -315,6 +316,7 @@ OUT=""
 FROM=""
 EXPECT=""
 DRY_RUN=0
+FULL=0
 want=""
 for a in "$@"; do
     if [ -n "$want" ]; then
@@ -331,6 +333,7 @@ for a in "$@"; do
         --from) want=from ;;
         --expect) want=expect ;;
         --dry-run) DRY_RUN=1 ;;
+        --full) FULL=1 ;;
         -*) die "不明なオプション: $a" ;;
         *) input="$a" ;;
     esac
@@ -377,8 +380,14 @@ case "$cmd" in
         gh pr view "$PR" "${RARGS[@]}" --json body --jq '.body'
         echo
         echo "=== COMMITS ==="
-        gh pr view "$PR" "${RARGS[@]}" --json commits \
-            --jq '.commits[] | "\(.oid[0:7]) \(.messageHeadline)" + (if (.messageBody // "") != "" then "\n" + (.messageBody | split("\n") | map("    " + .) | join("\n")) else "" end)'
+        # 本文まで出すと長い PR で読む量が膨らむ。既定は見出しだけにし、--full のときだけ本文を付ける
+        if [ "$FULL" -eq 1 ]; then
+            gh pr view "$PR" "${RARGS[@]}" --json commits \
+                --jq '.commits[] | "\(.oid[0:7]) \(.messageHeadline)" + (if (.messageBody // "") != "" then "\n" + (.messageBody | split("\n") | map("    " + .) | join("\n")) else "" end)'
+        else
+            gh pr view "$PR" "${RARGS[@]}" --json commits --jq '.commits[] | "\(.oid[0:7]) \(.messageHeadline)"'
+            echo "(本文は --full で表示)"
+        fi
         echo
         echo "=== FILES ==="
         # jq の文字列リテラルへ埋め込むため、正規表現のバックスラッシュを二重にする

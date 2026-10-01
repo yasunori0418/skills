@@ -7,7 +7,7 @@
 #
 # 検証内容:
 #   - parse          URL / #N / pr:N / N / GHE の URL / 解釈できない入力
-#   - preflight      remote 一致 -> mode: full（https / scp 形式 / ssh:// 形式）、不一致 -> degraded、
+#   - preflight      コミットは既定で見出しだけ（--full で本文）、remote 一致 -> mode: full（https / scp 形式 / ssh:// 形式）、不一致 -> degraded、
 #                    lockfile の excluded 表示、mmdc の有無
 #   - stack          スタックの並びと現在の段、各段の変更ファイル、図（現在の段だけ強調・記号は文字参照）、
 #                    スタックでない PR、スタックの情報を取得できない GitHub
@@ -203,7 +203,11 @@ has "preflight-mode-full" "$OUT" "mode:   full"
 has "preflight-remote" "$OUT" "remote: origin"
 has "preflight-title" "$OUT" "feat: foo を加算に変える"
 has "preflight-body" "$OUT" "二行目"
-has "preflight-commit-body" "$OUT" "    理由の説明"
+has "preflight-commit-headline" "$OUT" " change"
+lacks "preflight-commit-body-hidden" "$OUT" "    理由の説明"
+has "preflight-commit-body-hint" "$OUT" "(本文は --full で表示)"
+run preflight "#7" --full
+has "preflight-commit-body-full" "$OUT" "    理由の説明"
 has "preflight-excluded" "$OUT" "uv.lock	(excluded"
 lacks "preflight-not-excluded" "$OUT" "src/foo.py	(excluded"
 has "preflight-total" "$OUT" "total: 2 files, +3 -1"
