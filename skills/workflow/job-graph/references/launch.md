@@ -73,6 +73,7 @@ exec env -u CLAUDE_CODE_CHILD_SESSION -u … wt switch feat-a -x bash -- -c '<�
 `-x bash` の本文は、境界 bootstrap・起動末尾より前に task ごとの前置きを持つ。worktree 内で claude を exec する直前に評価されるので、ここで export した値は claude とその hook へ引き継がれる。
 
 - **`--parent-name` 指定時だけ** `export LANE_OPS_PARENT=<親名> LANE_OPS_TASK=<task id> LANE_OPS_REPORT_SH=<lane-ops/scripts/report.sh の絶対パス>` を置く。レーン内の permission-gate がダイアログを出したとき、この宛先で親へ「ダイアログ待ち」を報告する（未指定なら export せず、hook はデスクトップ通知へ縮退する）
+- **`mode: "implement"` だけ** `git rev-parse --git-path push-flow.armed`（worktree ごとに別）へ 1 行 `<起動時 epoch> 86400 <task.branch>` を書いて push を arm する。ワーカー規約で implement レーンの自ブランチへの push は計画承認済みなので、permission-gate がこの marker を見て確認ダイアログを省く。書き込みに失敗しても起動は止めない（push が確認ダイアログへ戻るだけ）。**maintain では書かない**（push は親の承認制のまま。`maintain.md`）
 
 ## 起動確認
 
