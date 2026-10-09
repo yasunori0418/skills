@@ -120,7 +120,7 @@ Conventional Commits 形式（`<type>(<scope>): <subject>`、commit-flow スキ�
 
 1. タイトルと本文をチャットに提示 → ユーザー承認。
 2. §1 の PUSH STATUS が WARNING（未 push／未 push コミットあり）なら、**AskUserQuestion で push 可否の承認**を取る（要点と選択肢は本文にも記載／CLAUDE.md 準拠）。
-   - 承認 → push する。SSH 認証（publickey）で弾かれる非対話環境では gh-push スキルに従い HTTPS+gh トークン経由で push。
+   - 承認 → **`bash <gh-push skill-dir>/scripts/push-arm.sh <branch>` で arm してから** push する（承認済みの push を permission-gate hook に通させる marker。順序は「push 承認 → arm → push」で固定）。SSH 認証（publickey）で弾かれる非対話環境では gh-push スキルに従い HTTPS+gh トークン経由で push（`gh-push.sh push` は push 直前に自ら arm する）。
    - 拒否 → push せず、ユーザーが push してから作成する旨を伝えて停止。
    - 既に push 済み（WARNING なし）ならこの手順は不要。
 3. **CREATE 直前の最終ゲート**（テンプレありのとき必須）。§5 の照合は「その時点のファイル」の保証でしかなく、その後の Write や外部変更で無効化される。**作成コマンドに渡すまさにそのファイルを再検証する**:
