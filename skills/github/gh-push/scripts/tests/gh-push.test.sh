@@ -14,6 +14,8 @@
 #     フィルタへパイプしていた頃は SIGPIPE で exit 141・出力ゼロになった）
 #   - リモートに無いブランチ               -> state=new
 #   - fast-forward                        -> 送るコミットが列挙される
+#   - push 実行                            -> 直前に push-flow.armed へ "<epoch> 1800 <branch>" を書く
+#   - push-arm.sh 単体                     -> --ttl を反映し path と期限を出す / 不正引数は exit 1
 #   - 履歴分岐 + force 無しの push         -> ERROR で停止
 #   - 保護ブランチへの force               -> ERROR で停止
 #   - --expect がリモート実測と不一致      -> ERROR で停止
@@ -146,6 +148,36 @@ D="$WORK/ff" && new_pair "$D"
 commit_on "$D/work" "feat: first"
 run "$D/work" push
 check "ff-push-exit" 0 "$RC"
+# --- push 直前の arm: push-flow.armed に "<epoch> 1800 <branch>" を 1 行で書く ---
+marker_of() { # dir
+    local m
+    m="$(git -C "$1" rev-parse --git-path push-flow.armed)"
+    case "$m" in /*) printf '%s\n' "$m" ;; *) printf '%s/%s\n' "$1" "$m" ;; esac
+}
+MARKER="$(marker_of "$D/work")"
+read -r M_EPOCH M_TTL M_BRANCH M_REST <"$MARKER" 2>/dev/null || true
+check "arm-ttl" 1800 "${M_TTL:-}"
+check "arm-branch" feat "${M_BRANCH:-}"
+check "arm-single-line" 1 "$(wc -l <"$MARKER" 2>/dev/null | tr -d ' ')"
+case "${M_EPOCH:-x}" in *[!0-9]*) check "arm-epoch" "numeric" "${M_EPOCH:-}" ;;
+    *) check "arm-epoch-recent" ok "$([ $(($(date +%s) - M_EPOCH)) -le 60 ] && echo ok || echo stale)" ;; esac
+check "arm-no-extra-field" "" "${M_REST:-}"
+
+# --- push-arm.sh 単体: --ttl 指定・path と期限の出力・不正引数 ---
+OUT="$(cd "$D/work" && bash "$SCRIPT_DIR/../push-arm.sh" feat --ttl 60 2>&1)"
+RC=$?
+check "push-arm-exit" 0 "$RC"
+read -r M_EPOCH M_TTL M_BRANCH <"$MARKER" 2>/dev/null || true
+check "push-arm-ttl" 60 "${M_TTL:-}"
+has "push-arm-path" "$OUT" "push-flow.armed"
+has "push-arm-expires" "$OUT" "expires: $((${M_EPOCH:-0} + 60))"
+(cd "$D/work" && bash "$SCRIPT_DIR/../push-arm.sh" >/dev/null 2>&1)
+check "push-arm-no-branch" 1 "$?"
+for bad in abc 0 08; do
+    (cd "$D/work" && bash "$SCRIPT_DIR/../push-arm.sh" feat --ttl "$bad" >/dev/null 2>&1)
+    check "push-arm-bad-ttl-$bad" 1 "$?"
+done
+
 commit_on "$D/work" "feat: second"
 run "$D/work" preflight
 check "ff-exit" 0 "$RC"
@@ -166,8 +198,11 @@ git -C "$D/work" reset --quiet --hard HEAD~1
 commit_on "$D/work" "feat: rewritten"
 run "$D/work" preflight
 has "div-state" "$OUT" "remote state: diverged"
+rm -f "$(marker_of "$D/work")"
 run "$D/work" push
 check "div-noforce-exit" 1 "$RC"
+# push 分岐内で停止したら arm しない（arm は実際の git push の直前）
+[ -e "$(marker_of "$D/work")" ] && check "div-noforce-no-arm" absent present || check "div-noforce-no-arm" absent absent
 has "div-noforce-msg" "$OUT" "履歴が分岐しています"
 
 # --- --expect がリモート実測と不一致: 停止 ---
@@ -181,6 +216,15 @@ run "$D/work" push --force --expect="$ORIG_TIP"
 check "force-exit" 0 "$RC"
 has "force-ok" "$OUT" "OK: [ssh]"
 check "force-remote-tip" "$NEW_TIP" "$(git -C "$D/remote.git" rev-parse refs/heads/feat)"
+
+# --- リモートが push を拒否: 失敗しても arm 済み（arm は git push より前） ---
+D="$WORK/rej" && new_pair "$D"
+commit_on "$D/work" "feat: rejected"
+printf '#!%s\nexit 1\n' "$BASH" >"$D/remote.git/hooks/pre-receive"
+chmod +x "$D/remote.git/hooks/pre-receive"
+run "$D/work" push
+check "rejected-exit" 1 "$RC"
+[ -e "$(marker_of "$D/work")" ] && check "rejected-armed" present present || check "rejected-armed" present absent
 
 # --- 保護ブランチへの force: 拒否 ---
 D="$WORK/prot" && new_pair "$D"

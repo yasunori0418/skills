@@ -12,7 +12,8 @@
 # Claude Code の PreToolUse hook として stdin で JSON を受け取り、stdout の JSON が
 # そのまま応答になる。旧 cchook 構成では対象コマンドの絞り込み（command_contains）を
 # cchook 側の条件が担っていたが、本スクリプトは matcher: Bash で全コマンドを受け、
-# 対象操作（rebase / reset / push）の検出も自前で行う。対象外コマンドは沈黙（exit 0）。
+# 対象操作（rebase / reset / push）の検出も自前で行う。対象外コマンドと通常 push
+# （force なし）は沈黙（exit 0。通常 push の確認は settings の ask に委ねる）。
 # 対象コマンドの判定:
 #   pass = permissionDecision: ask  → ユーザー確認へ（allow は権限バイパスに
 #                                      なるため使わない。settings の ask とも整合）
@@ -279,13 +280,11 @@ fi
 
 # push: raw の force push（--force / --force-with-lease / -f / +refspec）を拒否し、
 # gh-push スキル（保護ブランチ拒否・明示 lease を script が強制）へ誘導する。
-# 通常 push は ask → settings の ask と同じくユーザー確認に落ちる。
+# 通常 push は判定を返さない（settings の ask に委ね、arm 済みなら permission-gate が通す）。
 guard_push() {
     if printf '%s' "$cmd" | grep -Eq -- 'push[^|;&]*(--force|[[:space:]]-f([[:space:]]|$)|[[:space:]]\+[[:graph:]])'; then
         deny "🚫 raw の force push は禁止。gh-push スキル（gh-push.sh push <branch> --force [--expect=<sha>]）経由でのみ実行可 — 保護ブランチ拒否と明示 lease が強制される。rebase 後の push は rebase-flow §7 の手順に従うこと。"
-        return 0
     fi
-    pass "通常 push（force なし）— ユーザー確認へ"
 }
 
 guard_flow() { # <rebase|reset>
@@ -339,7 +338,7 @@ done
 if [ -n "$DENY_REASON" ]; then
     jq -cn --arg r "$DENY_REASON" \
         '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
-else
+elif [ -n "$PASS_REASON" ]; then
     jq -cn --arg r "$PASS_REASON" \
         '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: $r}}'
 fi
