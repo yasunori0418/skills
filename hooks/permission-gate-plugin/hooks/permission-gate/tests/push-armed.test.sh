@@ -17,10 +17,16 @@ export XDG_STATE_HOME="$TMP/state"
 REPO="$TMP/repo"     # feat/x、origin/HEAD -> main
 OTHER="$TMP/other"   # feat/x、marker なし(cd 先の marker を見ることの確認用)
 MAINREPO="$TMP/main" # main、origin/HEAD なし(main / master フォールバック)
+DEVREPO="$TMP/dev"   # develop、origin/HEAD -> develop(default branch の主経路)
+WT="$TMP/wt"         # REPO の linked worktree(feat/w)。marker は worktree ごとに別
 git init -q -b feat/x "$REPO"
 git -C "$REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+git -C "$REPO" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m init
+git -C "$REPO" worktree add -q -b feat/w "$WT"
 git init -q -b feat/x "$OTHER"
 git init -q -b main "$MAINREPO"
+git init -q -b develop "$DEVREPO"
+git -C "$DEVREPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/develop
 
 fail=0
 check() { # label expected actual
@@ -43,8 +49,13 @@ behavior() { # command [cwd] [tool_name]
     printf '%s' "$out" | jq -r 'select(.hookSpecificOutput.hookEventName == "PermissionRequest")
         | .hookSpecificOutput.decision.behavior // empty'
 }
+marker() { # repo -> marker の絶対パス(git rev-parse --git-path で解決)
+    local m
+    m=$(git -C "$1" rev-parse --git-path push-flow.armed)
+    case "$m" in /*) echo "$m" ;; *) echo "$1/$m" ;; esac
+}
 arm() { # repo branch [age秒] [ttl秒]
-    echo "$(($(date +%s) - ${3:-0})) ${4:-1800} $2" >|"$1/.git/push-flow.armed"
+    echo "$(($(date +%s) - ${3:-0})) ${4:-1800} $2" >|"$(marker "$1")"
 }
 
 # marker なし -> 沈黙
@@ -56,7 +67,26 @@ check "armed-bare" "allow" "$(behavior 'git push')"
 check "armed-upstream" "allow" "$(behavior 'git push -u origin feat/x')"
 check "armed-head" "allow" "$(behavior 'git push origin HEAD')"
 check "armed-refspec" "allow" "$(behavior 'git push origin feat/x:feat/x')"
+check "armed-remote-only" "allow" "$(behavior 'git push origin')"
+check "armed-refs-heads" "allow" "$(behavior 'git push origin refs/heads/feat/x')"
 check "armed-cd" "allow" "$(behavior "cd $REPO && git push" /)"
+check "armed-cd-relative" "allow" "$(behavior 'cd repo && git push' "$TMP")"
+
+# worktree: marker は worktree ごと(git rev-parse --git-path)
+check "worktree-unarmed" "" "$(behavior 'git push' "$WT")"
+arm "$WT" feat/w
+check "worktree-armed" "allow" "$(behavior 'git push' "$WT")"
+rm -f "$(marker "$REPO")"
+check "worktree-separate" "" "$(behavior 'git push')"
+arm "$REPO" feat/x
+
+# push 先を設定で書き換えうる構成 -> 沈黙
+git -C "$REPO" config push.default upstream
+check "push-default-upstream" "" "$(behavior 'git push')"
+git -C "$REPO" config --unset push.default
+git -C "$REPO" config remote.origin.push 'refs/heads/*:refs/heads/main'
+check "remote-push-mapping" "" "$(behavior 'git push')"
+git -C "$REPO" config --unset remote.origin.push
 
 # cd 先の marker で判定する(cwd 側が arm 済みでも cd 先が未 arm なら沈黙)
 check "cd-other-unarmed" "" "$(behavior "cd $OTHER && git push")"
@@ -71,6 +101,8 @@ check "marker-mismatch" "" "$(behavior 'git push')"
 # 複合コマンド・他の ask 対象 -> 沈黙
 arm "$REPO" feat/x
 check "seq" "" "$(behavior 'git push; ls')"
+check "newline" "" "$(behavior $'git push\nls')"
+check "too-many-refspecs" "" "$(behavior 'git push origin feat/x feat/y')"
 check "and-prefix" "" "$(behavior 'git status && git push')"
 check "and-suffix" "" "$(behavior 'git push && ls')"
 check "pipe" "" "$(behavior 'git push 2>&1 | tail -3')"
@@ -92,16 +124,26 @@ check "delete" "" "$(behavior 'git push origin --delete feat/x')"
 check "non-bash" "" "$(behavior 'git push' "$REPO" Write)"
 
 # default branch への push -> 沈黙(arm があっても)
-check "to-default" "" "$(behavior 'git push origin HEAD:main')"
+check "dst-main-mismatch" "" "$(behavior 'git push origin HEAD:main')"
+arm "$DEVREPO" develop
+check "default-origin-head" "" "$(behavior 'git push' "$DEVREPO")"
 arm "$MAINREPO" main
 check "default-fallback-main" "" "$(behavior 'git push' "$MAINREPO")"
 git -C "$MAINREPO" symbolic-ref HEAD refs/heads/master
 arm "$MAINREPO" master
 check "default-fallback-master" "" "$(behavior 'git push' "$MAINREPO")"
 
+# marker の内容が不正 -> 沈黙
+: >|"$(marker "$REPO")"
+check "marker-empty" "" "$(behavior 'git push')"
+echo "abc 1800 feat/x" >|"$(marker "$REPO")"
+check "marker-epoch-nan" "" "$(behavior 'git push')"
+echo "$(date +%s) 1800" >|"$(marker "$REPO")"
+check "marker-no-branch" "" "$(behavior 'git push')"
+
 # 期限切れ -> 沈黙 + marker 削除
 arm "$REPO" feat/x 3600 1800
 check "expired" "" "$(behavior 'git push')"
-check "expired-removed" "absent" "$([ -e "$REPO/.git/push-flow.armed" ] && echo present || echo absent)"
+check "expired-removed" "absent" "$([ -e "$(marker "$REPO")" ] && echo present || echo absent)"
 
 exit "$fail"

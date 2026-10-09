@@ -97,4 +97,12 @@ OUT=$(run "$STUB" Read '{"file_path": "/etc/hosts"}')
 check "notify-prompt" "Read prompt" "$(jq -r '"\(.tool_name) \(.decision)"' "$TMP/notified.json")"
 check "notify-prompt-silent" "" "$OUT"
 
+# notify.sh の失敗・ログに書けない状況でも exit 0 で allow を保つ
+printf '#!/usr/bin/env bash\ncat >/dev/null\necho "from a"\n' >|"$STUB/rules/10-a.sh"
+printf '#!%s\ncat >/dev/null\nexit 1\n' "$BASH" >|"$STUB/notify.sh"
+check "notify-fail" "allow" "$(run "$STUB" Bash "$(bash_input 'ls')" | jq -r '.hookSpecificOutput.decision.behavior')"
+: >"$TMP/not-a-dir"
+OUT=$(XDG_STATE_HOME="$TMP/not-a-dir" run "$STUB" Bash "$(bash_input 'ls')")
+check "log-unwritable" "allow" "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.decision.behavior')"
+
 exit "$fail"
