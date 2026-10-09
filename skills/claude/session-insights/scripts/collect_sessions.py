@@ -37,6 +37,7 @@ Claude Code のセッション JSONL を機械的に読み出して JSON で標�
   search      全セッションの本文（プロンプト・応答・ツールの入出力）を横断検索
   transcript  単一セッションの会話を時系列で抽出（--tool-detail でツールの入力と結果も）
   dialogs     許可判定（permission-gate のログ・hook の判定・permissionDecision）を時系列で
+  waits       tool_use から tool_result までの経過秒を集計（Bash は ask 対象の種別ごと）
 
 設計: 「純粋層」と「副作用層」を分離している。
   純粋層 … レコード解釈（prompt_text 等）、セッション畳み込み
@@ -56,6 +57,7 @@ import json
 import os
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 from collections import Counter
@@ -1056,9 +1058,11 @@ def clip_around(text: str, matcher: Matcher, max_chars: int) -> str:
 
 
 # ============================================================
-# 純粋層: 許可ダイアログ（dialogs）
+# 純粋層: 許可ダイアログ・待ち時間（dialogs / waits）
 # ============================================================
 
+ASK_HEADS = ("rm", "curl", "wget")  # git push は 2 語目で判定する
+SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||[;|\n]")
 COMMAND_CHARS = 160
 
 
@@ -1073,6 +1077,17 @@ class DialogEntry:
     command: str
     decision: str | None
     detail: dict
+
+
+@dataclass(frozen=True)
+class WaitEntry:
+    """tool_use から tool_result までの経過。ask は Bash のみ（該当なしは "none"、複数は + 連結）。"""
+
+    ts: datetime
+    tool: str
+    ask: str | None
+    command: str
+    elapsed: float
 
 
 def index_tool_uses(records: Iterable[dict]) -> dict:
@@ -1174,6 +1189,95 @@ def dialogs_report(entries: list, filters: SessionFilters, prompt_log: dict, lim
         ],
     }
 
+
+def ask_kinds(command: str) -> tuple:
+    """settings の ask 対象（git push / rm / curl / wget）を segment 先頭語で判定する。
+
+    クォートは考慮しない軽量な分割（&& || ; | 改行）。
+    """
+    kinds: list = []
+    for seg in SEGMENT_SPLIT_RE.split(command):
+        words = seg.split()
+        if not words:
+            continue
+        if words[0] == "git" and words[1:2] == ["push"]:
+            kind = "git push"
+        elif words[0] in ASK_HEADS:
+            kind = words[0]
+        else:
+            continue
+        if kind not in kinds:
+            kinds.append(kind)
+    return tuple(kinds)
+
+
+def tool_waits(records: Iterable[dict]) -> list:
+    """tool_use（assistant 行の時刻）から対応する tool_result（user 行の時刻）までの経過秒。
+
+    run_in_background の呼び出しは即座に返るので除外する。経過には許可ダイアログの
+    待ちと実行時間の両方が含まれる。
+    """
+    pending: dict = {}
+    out = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        ts = parse_ts(rec.get("timestamp"))
+        if ts is None:
+            continue
+        for b in iter_assistant_blocks(rec):
+            if b.get("type") == "tool_use":
+                pending[b.get("id")] = (ts, b.get("name") or "?", b.get("input"))
+        if rec.get("type") != "user":
+            continue
+        for tool_id in tool_result_ids(rec):
+            hit = pending.pop(tool_id, None)
+            if hit is None:
+                continue
+            start, name, inp = hit
+            if isinstance(inp, dict) and inp.get("run_in_background"):
+                continue
+            command = tool_input_text(name, inp)
+            ask = ("+".join(ask_kinds(command)) or "none") if name == "Bash" else None
+            out.append(WaitEntry(start, name, ask, command, round((ts - start).total_seconds(), 1)))
+    return out
+
+
+def waits_report(items: list, filters: SessionFilters, threshold: float, limit: int) -> dict:
+    """items: list[(session_id, WaitEntry)]。閾値超過は経過の長い順。"""
+    groups: dict = {}
+    for _, w in items:
+        groups.setdefault((w.tool, w.ask), []).append(w.elapsed)
+    over = sorted((x for x in items if x[1].elapsed > threshold), key=lambda x: -x[1].elapsed)
+    shown = over[:limit] if limit > 0 else over
+    return {
+        "filters": filters.as_dict(),
+        "threshold_sec": threshold,
+        "total": len(items),
+        "groups": [
+            {
+                "tool": tool,
+                "ask": ask,
+                "count": len(v),
+                "median_sec": round(statistics.median(v), 1),
+                "over_threshold": sum(1 for x in v if x > threshold),
+            }
+            for (tool, ask), v in sorted(groups.items(), key=lambda kv: -len(kv[1]))
+        ],
+        "over_threshold_total": len(over),
+        "shown": len(shown),
+        "over": [
+            {
+                "session_id": sid[:8],
+                "ts": jst_str(w.ts, seconds=True),
+                "tool": w.tool,
+                "ask": w.ask,
+                "command": clip(w.command.replace("\n", " "), COMMAND_CHARS),
+                "elapsed_sec": w.elapsed,
+            }
+            for sid, w in shown
+        ],
+    }
 
 
 def ccusage_argv(since: str | None, until: str | None, session: str | None) -> list:
@@ -1549,6 +1653,11 @@ def cmd_dialogs(config_dir: Path, args) -> None:
     emit(dialogs_report(entries, filters, {"path": str(log), "exists": log.is_file()}, args.limit))
 
 
+def cmd_waits(config_dir: Path, args) -> None:
+    filters = SessionFilters.from_args(args)
+    items = [(f.stem, w) for f, records in iter_human_sessions(config_dir, filters) for w in tool_waits(records)]
+    emit(waits_report(items, filters, args.threshold, args.limit))
+
 
 # ============================================================
 # main
@@ -1652,6 +1761,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--prompt-log", help="permission-gate のログ（既定: $XDG_STATE_HOME/claude/permission-prompts.jsonl）")
     sp.add_argument("--limit", type=int, default=200, help="最大件数（既定200、0で無制限）")
 
+    sp = sub.add_parser("waits", help="tool_use から tool_result までの経過秒を集計")
+    add_filter_args(sp)
+    sp.add_argument("--threshold", type=float, default=20, help="閾値超過とみなす秒数（既定20）")
+    sp.add_argument("--limit", type=int, default=50, help="閾値超過一覧の最大件数（既定50、0で無制限）")
     return p
 
 
@@ -1670,6 +1783,7 @@ def main(argv: list | None = None) -> int:
         "search": lambda: cmd_search(config_dir, args),
         "transcript": lambda: cmd_transcript(config_dir, args),
         "dialogs": lambda: cmd_dialogs(config_dir, args),
+        "waits": lambda: cmd_waits(config_dir, args),
     }
     handlers[args.cmd]()
     return 0
