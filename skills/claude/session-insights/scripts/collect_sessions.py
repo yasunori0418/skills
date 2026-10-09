@@ -1141,10 +1141,17 @@ def project_dir_name(cwd: str) -> str:
     return re.sub(r"[^A-Za-z0-9-]", "-", cwd)
 
 
-def log_dialog_entries(records: Iterable[dict], filters: SessionFilters) -> list:
-    """permission-gate のログ行を共通フィルタで絞る（--project は cwd を変換して部分一致）。"""
+def in_date_range(ts: datetime | None, filters: SessionFilters) -> bool:
+    """--since / --until をイベント時刻で判定する（指定時に時刻が無ければ外す）。"""
     since = parse_jst_date(filters.since)
     until = parse_jst_date(filters.until)
+    if not (since or until):
+        return True
+    return ts is not None and in_range(ts, since, until)
+
+
+def log_dialog_entries(records: Iterable[dict], filters: SessionFilters) -> list:
+    """permission-gate のログ行を共通フィルタで絞る（--project は cwd を変換して部分一致）。"""
     out = []
     for rec in records:
         if not isinstance(rec, dict):
@@ -1156,7 +1163,7 @@ def log_dialog_entries(records: Iterable[dict], filters: SessionFilters) -> list
             continue
         if filters.project and filters.project.lower() not in project_dir_name(cwd).lower():
             continue
-        if (since or until) and (ts is None or not in_range(ts, since, until)):
+        if not in_date_range(ts, filters):
             continue
         detail = {"rule": rec.get("rule"), "reason": rec.get("reason"), "cwd": rec.get("cwd")}
         out.append(
@@ -1633,11 +1640,11 @@ def cmd_transcript(config_dir: Path, args) -> None:
     emit(out)
 
 
-def iter_human_sessions(config_dir: Path, filters: SessionFilters) -> Iterator[tuple]:
+def load_session_records(config_dir: Path, filters: SessionFilters) -> Iterator[tuple]:
     """(ファイル, レコード列) を新しい順に。Agent 起動由来は --include-agents が無ければ除く。"""
     for f in find_session_files(config_dir, filters):
         records = list(iter_records(f))
-        if not filters.include_agents and any(r.get("type") in ("agent-setting", "agent-name") for r in records):
+        if not filters.include_agents and reduce_session(f.stem, f.parent.name, records).spawned_as_agent:
             continue
         yield f, records
 
@@ -1645,8 +1652,9 @@ def iter_human_sessions(config_dir: Path, filters: SessionFilters) -> Iterator[t
 def cmd_dialogs(config_dir: Path, args) -> None:
     filters = SessionFilters.from_args(args)
     entries = []
-    for f, records in iter_human_sessions(config_dir, filters):
-        entries += dialog_entries(f.stem, records)
+    # ファイルの選別は mtime だが、期間はイベント時刻でも絞る（長いセッションの期間外の判定を混ぜない）
+    for f, records in load_session_records(config_dir, filters):
+        entries += [e for e in dialog_entries(f.stem, records) if in_date_range(e.ts, filters)]
     log = Path(args.prompt_log).expanduser() if args.prompt_log else prompt_log_path()
     if log.is_file():
         entries += log_dialog_entries(iter_records(log), filters)
@@ -1655,7 +1663,12 @@ def cmd_dialogs(config_dir: Path, args) -> None:
 
 def cmd_waits(config_dir: Path, args) -> None:
     filters = SessionFilters.from_args(args)
-    items = [(f.stem, w) for f, records in iter_human_sessions(config_dir, filters) for w in tool_waits(records)]
+    items = [
+        (f.stem, w)
+        for f, records in load_session_records(config_dir, filters)
+        for w in tool_waits(records)
+        if in_date_range(w.ts, filters)
+    ]
     emit(waits_report(items, filters, args.threshold, args.limit))
 
 

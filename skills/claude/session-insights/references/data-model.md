@@ -161,7 +161,8 @@ cclens は同じ transcript を SQLite（`sessions` / `events` / `subagent_runs`
 permission-gate hook のログ（`${XDG_STATE_HOME:-$HOME/.local/state}/claude/permission-prompts.jsonl`）は
 1 行 JSON で `ts`（ISO 8601 JST）・`session_id`・`cwd`・`tool_name`・`command`・`decision`（`allow` / `prompt`）・
 `rule`・`reason` を持つ。`--project` は `cwd` を projects/ のディレクトリ名と同じ形へ変換して部分一致、
-`--since` / `--until` は `ts` で判定する。
+`--since` / `--until` は `ts` で判定する。transcript 側もファイル mtime での選別に加えて
+判定・tool_use の時刻で絞る（`dialogs` / `waits` 共通。長いセッションの期間外のイベントを混ぜない）。
 
 ## 出力時の伏せ字
 
