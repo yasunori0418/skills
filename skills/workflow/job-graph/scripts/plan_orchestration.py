@@ -182,6 +182,16 @@ class Mode(Enum):
         """ワーカーの push に親の承認が要るか（親の監視項目が変わる）。"""
         return self is Mode.MAINTAIN
 
+    @property
+    def arms_push_at_launch(self) -> bool:
+        """レーン起動時に push を arm するか（push-flow.armed を書く）。
+
+        implement の push は計画承認済みなので起動時に arm し、permission-gate に
+        確認ダイアログを省かせる。maintain は push の親承認制を保つため arm せず、
+        implement が残した marker を消す。
+        """
+        return self is Mode.IMPLEMENT
+
 
 class SpecError(Exception):
     """spec の構造そのものが壊れていて解析不能な場合。"""
@@ -812,6 +822,38 @@ def wt_switch(task: Task, base: str, mode: Mode) -> str:
     return f"wt switch --create {shlex.quote(task.branch)} --base {shlex.quote(base)}"
 
 
+# push arm marker の有効秒数。レーンは 1 日以内に PR 作成まで進む前提。
+LANE_PUSH_ARM_TTL = 86400
+
+
+def lane_prelude(task: Task, mode: Mode, launch: Launch) -> str:
+    """-x bash の本文の先頭（CLAUDE_EXEC より前）へ置くレーン前置き（純粋）。
+
+    --parent-name があれば、レーン内の hook（permission-gate の notify）が親へ報告
+    できるよう宛先を export する。claude の exec へ環境変数として引き継がれる。
+    mode が起動時 arm なら worktree ごとの push-flow.armed へ `<epoch> <ttl秒> <branch>`
+    を書く（epoch は生成時でなく起動時に評価する）。書けなくても起動は止めない
+    （arm が無いだけで push は確認ダイアログに戻る）。arm しない mode（maintain）は、同じ
+    worktree の implement が残した marker を消す（残すと push の親承認制が成り立たない）。
+    """
+    out = ""
+    if launch.parent_name:
+        report_sh = str(LANE_OPS_SCRIPTS / "report.sh")
+        out += (
+            f"export LANE_OPS_PARENT={shlex.quote(launch.parent_name)}"
+            f" LANE_OPS_TASK={shlex.quote(task.id)}"
+            f" LANE_OPS_REPORT_SH={shlex.quote(report_sh)}; "
+        )
+    if mode.arms_push_at_launch:
+        out += (
+            f"printf '%s {LANE_PUSH_ARM_TTL} %s\\n' \"$(date +%s)\" {shlex.quote(task.branch)}"
+            ' >| "$(git rev-parse --git-path push-flow.armed)"; '
+        )
+    else:
+        out += 'rm -f "$(git rev-parse --git-path push-flow.armed)"; '
+    return out
+
+
 def launch_script(
     task: Task, base: str, plan: Plan, launch: Launch, prompt_dir: str
 ) -> LaunchScript:
@@ -828,12 +870,14 @@ def launch_script(
     flags_str = "".join(f" {shlex.quote(a)}" for a in launch_flags(task, launch))
     prompt_ref = f'"$(cat {shlex.quote(ppath)})"'
     switch = wt_switch(task, base, plan.mode)
+    # 前置きは BOUNDARY_BOOTSTRAP の set -e より前に連結する（arm の失敗で起動を止めないため）。
+    prelude = lane_prelude(task, plan.mode, launch)
     if task.boundary:
         # 境界宣言ありは -x bash の bootstrap 経由（worktree 生成後・claude 起動前に
         # 境界ファイルを置く）。境界 JSON は 1 行なので positional で渡す。
         cmd = (
             f"{ENV_STRIP_PREFIX} {switch}"
-            f" -x bash -- -c {shlex.quote(BOUNDARY_BOOTSTRAP)}"
+            f" -x bash -- -c {shlex.quote(prelude + BOUNDARY_BOOTSTRAP)}"
             f" {shlex.quote('wt-boundary-' + task.id)} {shlex.quote(boundary_json(task))}"
             f"{flags_str}{rc_args} {prompt_ref}"
         )
@@ -842,7 +886,7 @@ def launch_script(
         # できないため。CLAUDE_EXEC 参照）。
         cmd = (
             f"{ENV_STRIP_PREFIX} {switch}"
-            f" -x bash -- -c {shlex.quote(CLAUDE_EXEC)} {shlex.quote('wt-launch-' + task.id)}"
+            f" -x bash -- -c {shlex.quote(prelude + CLAUDE_EXEC)} {shlex.quote('wt-launch-' + task.id)}"
             f"{flags_str}{rc_args} {prompt_ref}"
         )
     where = "既存 worktree へ switch" if plan.mode.uses_existing_worktree else f"base={base}"

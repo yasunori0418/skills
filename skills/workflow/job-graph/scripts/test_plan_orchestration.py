@@ -8,7 +8,9 @@ herdr/wt の実行はしない。
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+import time
 
 import pytest
 
@@ -97,6 +99,8 @@ def test_mode_behaviour_properties():
     assert not po.Mode.MAINTAIN.creates_pull_request
     assert po.Mode.MAINTAIN.push_needs_parent_approval
     assert not po.Mode.IMPLEMENT.push_needs_parent_approval
+    assert po.Mode.IMPLEMENT.arms_push_at_launch
+    assert not po.Mode.MAINTAIN.arms_push_at_launch
 
 
 def test_parse_spec_rejects_empty_tasks():
@@ -581,6 +585,32 @@ def test_launch_script_boundary_uses_bootstrap():
     assert "task-boundary.json" in body
 
 
+def test_launch_script_exports_lane_ops_env_only_with_parent_name():
+    # 親名があれば permission-gate の notify がレーン報告できるよう宛先を渡す。
+    # 境界あり・なしの両経路で、claude の exec より前に export する。
+    # export は mode に依らない（maintain でも親へ報告する）。
+    report_sh = str(po.LANE_OPS_SCRIPTS / "report.sh")
+    launch = po.Launch(parent_name="orc")
+    tasks = [task("A"), task("B", boundary=["pkg/**"])]
+    for tid, body in [*launch_body(tasks, launch=launch).items(), *launch_body(tasks, launch=launch, mode="maintain").items()]:
+        assert f"export LANE_OPS_PARENT=orc LANE_OPS_TASK={tid} LANE_OPS_REPORT_SH={report_sh};" in body
+        assert body.index("export LANE_OPS_PARENT") < body.index("exec claude")
+    assert all("LANE_OPS_" not in b for b in launch_body([task("A"), task("B", boundary=["pkg/**"])]).values())
+
+
+def test_launch_script_arms_push_only_in_implement():
+    # implement の push は計画承認済みなので起動時に arm する。maintain は親承認制を保つ。
+    arm = '>| "$(git rev-parse --git-path push-flow.armed)"'
+    bodies = launch_body([task("A"), task("B", boundary=["pkg/**"])])
+    for body in bodies.values():
+        assert arm in body
+        assert body.index(arm) < body.index("exec claude")
+    # 境界ありの bootstrap では set -e より前（arm の失敗で起動を止めない）。
+    assert bodies["B"].index(arm) < bodies["B"].index("set -e; ")
+    maintain = launch_body([task("A"), task("B", boundary=["pkg/**"])], mode="maintain", default_base="main")
+    assert all(arm not in b for b in maintain.values())
+
+
 # ------------------------------------------------------------
 # BOUNDARY_BOOTSTRAP（統合: 実 git repo で bash 実行）
 # ------------------------------------------------------------
@@ -841,6 +871,49 @@ def test_claude_exec_still_launches_on_dangling_symlink(tmp_path):
     proc = run_exec(repo, "the prompt")
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.splitlines() == ["ARGC=1", "ARG=the prompt"]
+
+
+def lane_worktree(tmp_path):
+    # レーンは linked worktree なので、marker が worktree ごとの git dir に置かれることまで見る。
+    main = git_repo(tmp_path)
+    repo = tmp_path / "lane"
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", "-b", "br-A", str(repo)], check=True)
+    return main, repo, main / ".git" / "worktrees" / "lane" / "push-flow.armed"
+
+
+def test_lane_prelude_writes_marker_and_exports_env(tmp_path):
+    # marker は permission-gate が読む 1 行 `<epoch> <ttl秒> <branch>`。epoch は起動時に評価する。
+    main, repo, marker_path = lane_worktree(tmp_path)
+    plan = spec([task("A")])
+    prelude = po.lane_prelude(plan.tasks[0], plan.mode, po.Launch(parent_name="orc"))
+    probe = prelude + 'printf "%s|%s|%s" "$LANE_OPS_PARENT" "$LANE_OPS_TASK" "$LANE_OPS_REPORT_SH"'
+    proc = subprocess.run(["bash", "-c", probe], cwd=repo, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == f"orc|A|{po.LANE_OPS_SCRIPTS / 'report.sh'}"
+    assert not (main / ".git" / "push-flow.armed").exists()
+    marker = marker_path.read_text()
+    m = re.fullmatch(r"(\d+) 86400 br-A\n", marker)
+    assert m and abs(int(m.group(1)) - time.time()) < 60
+
+
+def test_lane_prelude_maintain_clears_leftover_marker(tmp_path):
+    # 同じ worktree の implement が残した arm を maintain の起動で消す（push の親承認制を保つ）。
+    _, repo, marker = lane_worktree(tmp_path)
+    marker.write_text(f"{int(time.time())} 86400 br-A\n")
+    plan = spec([task("A")], mode="maintain")
+    proc = subprocess.run(["bash", "-c", po.lane_prelude(plan.tasks[0], plan.mode, po.Launch())], cwd=repo)
+    assert proc.returncode == 0
+    assert not marker.exists()
+
+
+def test_lane_prelude_arm_failure_does_not_stop_launch(tmp_path):
+    # git 管理外で marker の解決・書き込みに失敗しても、後続（claude の exec）へ進む。
+    plan = spec([task("A")])
+    probe = po.lane_prelude(plan.tasks[0], plan.mode, po.Launch()) + "echo REACHED"
+    proc = subprocess.run(["bash", "-c", probe], cwd=tmp_path, capture_output=True, text=True)
+    assert proc.returncode == 0
+    assert proc.stdout == "REACHED\n"
+
 
 def test_render_lanes_section():
     out = rendered([task("A"), task("B", deps=["A"]), task("C")])
