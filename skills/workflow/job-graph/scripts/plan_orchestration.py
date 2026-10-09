@@ -812,6 +812,22 @@ def wt_switch(task: Task, base: str, mode: Mode) -> str:
     return f"wt switch --create {shlex.quote(task.branch)} --base {shlex.quote(base)}"
 
 
+def lane_prelude(task: Task, launch: Launch) -> str:
+    """-x bash の本文の先頭（CLAUDE_EXEC より前）へ置くレーン前置き（純粋）。
+
+    --parent-name があれば、レーン内の hook（permission-gate の notify）が親へ報告
+    できるよう宛先を export する。claude の exec へ環境変数として引き継がれる。
+    """
+    if not launch.parent_name:
+        return ""
+    report_sh = str(LANE_OPS_SCRIPTS / "report.sh")
+    return (
+        f"export LANE_OPS_PARENT={shlex.quote(launch.parent_name)}"
+        f" LANE_OPS_TASK={shlex.quote(task.id)}"
+        f" LANE_OPS_REPORT_SH={shlex.quote(report_sh)}; "
+    )
+
+
 def launch_script(
     task: Task, base: str, plan: Plan, launch: Launch, prompt_dir: str
 ) -> LaunchScript:
@@ -828,12 +844,13 @@ def launch_script(
     flags_str = "".join(f" {shlex.quote(a)}" for a in launch_flags(task, launch))
     prompt_ref = f'"$(cat {shlex.quote(ppath)})"'
     switch = wt_switch(task, base, plan.mode)
+    prelude = lane_prelude(task, launch)
     if task.boundary:
         # 境界宣言ありは -x bash の bootstrap 経由（worktree 生成後・claude 起動前に
         # 境界ファイルを置く）。境界 JSON は 1 行なので positional で渡す。
         cmd = (
             f"{ENV_STRIP_PREFIX} {switch}"
-            f" -x bash -- -c {shlex.quote(BOUNDARY_BOOTSTRAP)}"
+            f" -x bash -- -c {shlex.quote(prelude + BOUNDARY_BOOTSTRAP)}"
             f" {shlex.quote('wt-boundary-' + task.id)} {shlex.quote(boundary_json(task))}"
             f"{flags_str}{rc_args} {prompt_ref}"
         )
@@ -842,7 +859,7 @@ def launch_script(
         # できないため。CLAUDE_EXEC 参照）。
         cmd = (
             f"{ENV_STRIP_PREFIX} {switch}"
-            f" -x bash -- -c {shlex.quote(CLAUDE_EXEC)} {shlex.quote('wt-launch-' + task.id)}"
+            f" -x bash -- -c {shlex.quote(prelude + CLAUDE_EXEC)} {shlex.quote('wt-launch-' + task.id)}"
             f"{flags_str}{rc_args} {prompt_ref}"
         )
     where = "既存 worktree へ switch" if plan.mode.uses_existing_worktree else f"base={base}"

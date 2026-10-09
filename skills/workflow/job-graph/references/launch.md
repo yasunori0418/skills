@@ -68,6 +68,12 @@ exec env -u CLAUDE_CODE_CHILD_SESSION -u … wt switch feat-a -x bash -- -c '<�
 
 `--model` / `--permission-mode` / `--effort` / `--remote-control` は `-x bash -- -c '<起動末尾>' <$0>` の後・プロンプトより前に置かれ、起動末尾がそのまま claude へ渡す。解決順は spec の task 個別指定 > CLI フラグ（グローバル既定）> 未指定（claude 自身のデフォルト。permission mode はユーザー設定の `defaultMode` に従う）。permission mode は `auto` が既定の推奨で、`bypassPermissions` / `dontAsk` は指定しない（SKILL.md Phase 1 末尾の注意を参照）。`--remote-control <名前>` を付けると起動した claude へ claude.ai 等からリモート接続できる。
 
+## レーン前置き（起動末尾の前）
+
+`-x bash` の本文は、境界 bootstrap・起動末尾より前に task ごとの前置きを持つ。worktree 内で claude を exec する直前に評価されるので、ここで export した値は claude とその hook へ引き継がれる。
+
+- **`--parent-name` 指定時だけ** `export LANE_OPS_PARENT=<親名> LANE_OPS_TASK=<task id> LANE_OPS_REPORT_SH=<lane-ops/scripts/report.sh の絶対パス>` を置く。レーン内の permission-gate がダイアログを出したとき、この宛先で親へ「ダイアログ待ち」を報告する（未指定なら export せず、hook はデスクトップ通知へ縮退する）
+
 ## 起動確認
 
 `herdr --session "$HSESSION" agent list` に pane が現れれば認識済み。現れないまま `herdr --session "$HSESSION" pane read <pane>` で shell エラーが見えるなら wt の失敗（ブランチ名衝突など）なので preflight に戻る。
