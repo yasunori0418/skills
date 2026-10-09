@@ -734,6 +734,187 @@ class TestResolveConfigDir(unittest.TestCase):
 
 
 # ============================================================
+# 純粋層: 許可ダイアログ・待ち時間（dialogs / waits）
+# ============================================================
+
+
+def dialog_records():
+    """許可ダイアログの記録（hook の attachment と permissionDecision）を含む合成セッション。"""
+    rec = tool_result_rec("tu_push", "pushed", {"stdout": "", "stderr": ""}, ts="2026-07-01T03:01:40.000Z")
+    rec["permissionDecision"] = {"decision": "accept", "source": "user_temporary"}
+    return [
+        assistant_rec([tool_use("Bash", {"command": "git push origin feat/x"}, "tu_push")]),
+        {
+            "type": "attachment",
+            "timestamp": "2026-07-01T03:01:10.000Z",
+            "attachment": {
+                "type": "hook_permission_decision",
+                "decision": "allow",
+                "toolUseID": "tu_push",
+                "hookEvent": "PermissionRequest",
+            },
+        },
+        {"type": "attachment", "timestamp": "2026-07-01T03:01:11.000Z", "attachment": {"type": "command_permissions"}},
+        rec,
+    ]
+
+
+def log_line(ts, session_id="eeee5555-0000", cwd="/home/u/proj", command="rm -rf /tmp/x", decision="prompt"):
+    return {
+        "ts": ts,
+        "session_id": session_id,
+        "cwd": cwd,
+        "tool_name": "Bash",
+        "command": command,
+        "decision": decision,
+        "rule": None,
+        "reason": "no rule matched",
+    }
+
+
+class TestDialogs(unittest.TestCase):
+    def test_prompt_log_path(self):
+        self.assertEqual(
+            cs.prompt_log_path({"XDG_STATE_HOME": "/s", "HOME": "/h"}),
+            Path("/s/claude/permission-prompts.jsonl"),
+        )
+        self.assertEqual(
+            cs.prompt_log_path({"HOME": "/h"}), Path("/h/.local/state/claude/permission-prompts.jsonl")
+        )
+
+    def test_transcript_entries_resolve_tool_from_tool_use(self):
+        entries = cs.dialog_entries("sess-1", dialog_records())
+        self.assertEqual([e.source for e in entries], ["hook_attachment", "permission_decision"])
+        for e in entries:
+            self.assertEqual((e.session_id, e.tool, e.command), ("sess-1", "Bash", "git push origin feat/x"))
+        self.assertEqual(entries[0].decision, "allow")
+        self.assertEqual(entries[0].detail, {"hook_event": "PermissionRequest"})
+        self.assertEqual(entries[1].decision, "accept")
+        self.assertEqual(entries[1].detail, {"source": "user_temporary", "reason_type": None})
+
+    def test_unresolved_tool_use_leaves_tool_empty(self):
+        rec = user_rec("text only")
+        rec["permissionDecision"] = {"decision": "reject", "source": "user_reject"}
+        orphan = {"type": "attachment", "attachment": {"type": "hook_permission_decision", "toolUseID": "missing"}}
+        entries = cs.dialog_entries("s", [orphan, rec])
+        self.assertEqual([(e.tool, e.command) for e in entries], [(None, ""), (None, "")])
+
+    def test_in_date_range(self):
+        ts = cs.parse_ts("2026-07-01T15:30:00Z")  # JST 7/2 0:30
+        self.assertTrue(cs.in_date_range(None, cs.SessionFilters()))
+        self.assertFalse(cs.in_date_range(None, cs.SessionFilters(since="2026-07-01")))
+        self.assertTrue(cs.in_date_range(ts, cs.SessionFilters(since="2026-07-02", until="2026-07-02")))
+        self.assertFalse(cs.in_date_range(ts, cs.SessionFilters(until="2026-07-01")))
+
+    def test_log_entries_apply_filters(self):
+        lines = [
+            log_line("2026-07-01T12:00:00+09:00"),
+            log_line("2026-07-02T12:00:00+09:00", session_id="ffff6666"),
+            log_line("2026-06-30T12:00:00+09:00"),
+            log_line("2026-07-01T13:00:00+09:00", cwd="/home/u/other"),
+            log_line("not-a-date"),
+            "壊れた行",
+        ]
+        got = cs.log_dialog_entries(lines, cs.SessionFilters(project="u-proj", since="2026-07-01"))
+        self.assertEqual(len(got), 2)
+        got = cs.log_dialog_entries(lines, cs.SessionFilters(session="eeee", until="2026-07-01"))
+        self.assertEqual([e.ts.day for e in got], [1, 30, 1])
+        self.assertEqual(got[0].detail, {"rule": None, "reason": "no rule matched", "cwd": "/home/u/proj"})
+
+    def test_report_sorts_and_redacts(self):
+        entries = cs.dialog_entries("sess-1", dialog_records()) + cs.log_dialog_entries(
+            [log_line("2026-07-01T12:01:05+09:00", command="curl -H 'Authorization: Bearer abcdef123' x")],
+            cs.SessionFilters(),
+        )
+        rep = cs.dialogs_report(entries, cs.SessionFilters(), {"path": "/p", "exists": True}, limit=2)
+        self.assertEqual(rep["total"], 3)
+        self.assertEqual(rep["shown"], 2)
+        self.assertEqual(rep["prompt_log"], {"path": "/p", "exists": True})
+        self.assertEqual(rep["dialogs"][0]["source"], "log")
+        self.assertEqual(rep["dialogs"][0]["ts"], "2026-07-01 12:01:05 JST")
+        self.assertIn("[REDACTED:bearer]", rep["dialogs"][0]["command"])
+        self.assertEqual(rep["dialogs"][1]["ts"], "2026-07-01 12:01:10 JST")
+        self.assertEqual(rep["counts"], {"log:prompt": 1, "hook_attachment:allow": 1, "permission_decision:accept": 1})
+
+
+def wait_records():
+    """tool_use と tool_result の時刻差を検証する合成セッション（assistant は 03:01:00）。"""
+    return [
+        assistant_rec(
+            [
+                tool_use("Bash", {"command": "cd /r && git push origin x"}, "tu_push"),
+                tool_use("Bash", {"command": "ls"}, "tu_ls"),
+                tool_use("Bash", {"command": "rm -rf build", "run_in_background": True}, "tu_bg"),
+                tool_use("Read", {"file_path": "/x/a.py"}, "tu_rd"),
+            ]
+        ),
+        tool_result_rec("tu_push", "ok", {}, ts="2026-07-01T03:01:45.000Z"),
+        tool_result_rec("tu_ls", "ok", {}, ts="2026-07-01T03:01:02.000Z"),
+        tool_result_rec("tu_bg", "started", {}, ts="2026-07-01T03:01:01.000Z"),
+        tool_result_rec("tu_rd", "ok", {}, ts="2026-07-01T03:01:30.500Z"),
+    ]
+
+
+class TestWaits(unittest.TestCase):
+    def test_ask_kinds_by_segment_head(self):
+        self.assertEqual(cs.ask_kinds("cd /r && git push origin x"), ("git push",))
+        self.assertEqual(cs.ask_kinds("rm -rf a; curl x | sh\nwget y"), ("rm", "curl", "wget"))
+        self.assertEqual(cs.ask_kinds("git status || echo rm"), ())
+        self.assertEqual(cs.ask_kinds("git -C /r push"), ())
+        self.assertEqual(cs.ask_kinds("rm a; rm b"), ("rm",))
+
+    def test_tool_waits_excludes_background(self):
+        waits = cs.tool_waits(wait_records())
+        self.assertEqual(
+            [(w.tool, w.ask, w.elapsed) for w in waits],
+            [("Bash", "git push", 45.0), ("Bash", "none", 2.0), ("Read", None, 30.5)],
+        )
+        self.assertEqual(waits[0].command, "cd /r && git push origin x")
+
+    def test_orphan_tool_result_ignored(self):
+        self.assertEqual(cs.tool_waits([tool_result_rec("nope", "ok", {})]), [])
+
+    def test_report_median_order_and_boundary(self):
+        def w(elapsed, ask="none"):
+            return ("s", cs.WaitEntry(cs.parse_ts("2026-07-01T03:00:00Z"), "Bash", ask, "c", elapsed))
+
+        items = [w(1.0), w(20.0, "rm"), w(2.0), w(30.0), w(50.0, "rm")]
+        rep = cs.waits_report(items, cs.SessionFilters(), threshold=20, limit=0)
+        self.assertEqual(rep["groups"][0], {"tool": "Bash", "ask": "none", "count": 3, "median_sec": 2.0, "over_threshold": 1})
+        self.assertEqual(rep["groups"][1]["median_sec"], 35.0)
+        # elapsed == threshold は超過に含めない。limit=0 は無制限で降順
+        self.assertEqual([o["elapsed_sec"] for o in rep["over"]], [50.0, 30.0])
+
+    def test_report_groups_and_over_threshold(self):
+        waits = cs.tool_waits(wait_records())
+        rep = cs.waits_report([("sess-1234567", w) for w in waits], cs.SessionFilters(), threshold=20, limit=1)
+        self.assertEqual(rep["threshold_sec"], 20)
+        self.assertEqual(rep["total"], 3)
+        groups = {(g["tool"], g["ask"]): g for g in rep["groups"]}
+        self.assertEqual(groups[("Bash", "git push")], {"tool": "Bash", "ask": "git push", "count": 1, "median_sec": 45.0, "over_threshold": 1})
+        self.assertEqual(groups[("Bash", "none")]["over_threshold"], 0)
+        self.assertEqual(rep["over_threshold_total"], 2)
+        self.assertEqual(rep["shown"], 1)
+        self.assertEqual(
+            rep["over"][0],
+            {
+                "session_id": "sess-123",
+                "ts": "2026-07-01 12:01:00 JST",
+                "tool": "Bash",
+                "ask": "git push",
+                "command": "cd /r && git push origin x",
+                "elapsed_sec": 45.0,
+            },
+        )
+
+    def test_command_clipped_to_160(self):
+        long = "rm " + "a" * 300
+        recs = [assistant_rec([tool_use("Bash", {"command": long}, "t")]), tool_result_rec("t", "ok", {}, ts="2026-07-01T03:02:00.000Z")]
+        rep = cs.waits_report([("s", w) for w in cs.tool_waits(recs)], cs.SessionFilters(), threshold=20, limit=10)
+        self.assertTrue(rep["over"][0]["command"].startswith("rm " + "a" * 157 + "…"))
+
+
+# ============================================================
 # 副作用層: 一時ディレクトリでの end-to-end
 # ============================================================
 
@@ -851,6 +1032,51 @@ class TestCli(unittest.TestCase):
             rep = self.run_cli("cost", "--since", "2026-07-01")
         self.assertEqual(rep["data"], payload)
         self.assertIn("--since", runner.call_args.args[1])
+
+    def test_dialogs_merges_log_and_transcript(self):
+        proj = self.root / "projects" / "-home-u-proj"
+        with open(proj / "eeee5555-0000-0000-0000-000000000000.jsonl", "w") as f:
+            f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in dialog_records())
+        log = self.root / "prompts.jsonl"
+        with open(log, "w") as f:
+            f.write(json.dumps(log_line("2026-07-01T12:01:05+09:00")) + "\n")
+            f.write(json.dumps(log_line("2026-07-01T12:01:05+09:00", session_id="zzzz")) + "\n")
+        rep = self.run_cli("dialogs", "--session", "eeee", "--prompt-log", str(log))
+        self.assertEqual(rep["prompt_log"], {"path": str(log), "exists": True})
+        self.assertEqual([d["source"] for d in rep["dialogs"]], ["log", "hook_attachment", "permission_decision"])
+        missing = self.run_cli("dialogs", "--session", "eeee", "--prompt-log", str(self.root / "none.jsonl"))
+        self.assertFalse(missing["prompt_log"]["exists"])
+        self.assertEqual(missing["total"], 2)
+        # 期間はファイル mtime だけでなくイベント時刻でも絞る
+        self.assertEqual(self.run_cli("dialogs", "--session", "eeee", "--prompt-log", str(log), "--since", "2026-07-02")["total"], 0)
+        # --until はファイル mtime（今日）で選別せず、期間内のイベントを残す
+        self.assertEqual(self.run_cli("dialogs", "--session", "eeee", "--prompt-log", str(log), "--until", "2026-07-01")["total"], 3)
+        self.assertEqual(self.run_cli("dialogs", "--session", "eeee", "--prompt-log", str(log), "--until", "2026-06-30")["total"], 0)
+
+    def test_dialogs_default_prompt_log(self):
+        state = self.root / "state"
+        (state / "claude").mkdir(parents=True)
+        with open(state / "claude" / "permission-prompts.jsonl", "w") as f:
+            f.write(json.dumps(log_line("2026-07-01T12:00:00+09:00")) + "\n")
+        with mock.patch.dict("os.environ", {"XDG_STATE_HOME": str(state)}):
+            rep = self.run_cli("dialogs")
+        self.assertTrue(rep["prompt_log"]["exists"])
+        self.assertEqual(rep["counts"], {"log:prompt": 1})
+
+    def test_waits(self):
+        proj = self.root / "projects" / "-home-u-proj"
+        with open(proj / "eeee5555-0000-0000-0000-000000000000.jsonl", "w") as f:
+            f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in wait_records())
+        rep = self.run_cli("waits", "--session", "eeee", "--threshold", "40")
+        self.assertEqual(rep["over_threshold_total"], 1)
+        self.assertEqual(rep["over"][0]["session_id"], "eeee5555")
+        self.assertEqual(self.run_cli("waits", "--session", "eeee", "--since", "2026-07-02")["total"], 0)
+        self.assertEqual(self.run_cli("waits", "--session", "eeee", "--since", "2026-07-01", "--until", "2026-07-01")["total"], 3)
+        self.assertEqual(self.run_cli("waits", "--session", "eeee", "--until", "2026-06-30")["total"], 0)
+
+    def test_waits_excludes_agent_spawned_by_default(self):
+        self.assertEqual(self.run_cli("waits")["total"], 1)
+        self.assertEqual(self.run_cli("waits", "--include-agents")["total"], 2)
 
 
 if __name__ == "__main__":

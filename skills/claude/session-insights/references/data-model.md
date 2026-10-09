@@ -56,7 +56,7 @@
 | `user` | ユーザーメッセージ or tool_result 返却 | prompt 抽出・エラー抽出・command 抽出 |
 | `assistant` | アシスタント応答。`message.model` / `message.usage` / content ブロック（`text`, `thinking`, `tool_use`） | ツール・スキル・モデル・トークン集計 |
 | `system` | subtype: `turn_duration`（`durationMs`）, `compact_boundary`（`compactMetadata.preTokens/trigger`）, `local_command`, `stop_hook_summary`, `away_summary` | ターン時間・compact・command 集計 |
-| `attachment` | hook 実行結果等 | 無視 |
+| `attachment` | hook 実行結果等。`attachment.type` で種別が分かれる（[許可判定の記録](#許可判定の記録)） | `hook_permission_decision` のみ `dialogs` が拾う |
 | `permission-mode` | `permissionMode`（plan/acceptEdits等） | セッションの mode 集合 |
 | `ai-title` | `aiTitle` = セッションの自動タイトル | タイトル |
 | `pr-link` | `prUrl` 等、セッション中に作った PR | 成果物リンク |
@@ -142,6 +142,27 @@ cclens は同じ transcript を SQLite（`sessions` / `events` / `subagent_runs`
 （記録が無いので 0 と推定しない）。大きな出力は `persistedOutputPath` /
 `persistedOutputSize` が付いて本体が `<session-id>/tool-results/` に退避される。
 スクリプトはこれを追わず `persisted: {path, size}` の目印だけを出す。
+
+## 許可判定の記録
+
+`dialogs` が読む。いずれも v2.1.27x〜2.1.29x 時点の実測。
+
+| 置き場所 | 形 | 意味 |
+|---|---|---|
+| `type=attachment` の `attachment.type: hook_permission_decision` | `{decision, toolUseID, hookEvent}` | PermissionRequest hook が返した判定（`decision: allow` 等）。tool 名・入力は持たないので `toolUseID` の tool_use から補う |
+| `type=attachment` の `attachment.type: command_permissions` | `{allowedTools: [...]}` | 許可済みツールの一覧（`allowedTools`）。個々の判定ではないので `dialogs` は拾わない |
+| tool_result を返す `type=user` 行のトップレベル `permissionDecision` | `{decision, source, reasonType?}` | そのツール呼び出しの最終的な許可の出所。tool は同じ行の `tool_result.tool_use_id` から引く |
+
+`permissionDecision` の値の例: `decision` は `accept` / `reject`。`source` が `config`
+（`reasonType`: `rule` / `classifier` / `mode` / `other`）なら設定・分類器による自動判定、
+`user_temporary` / `user_reject` ならダイアログで人が答えた、`hook` なら hook による判定。
+ダイアログの件数を数えるときは `source` で切り分ける。
+
+permission-gate hook のログ（`${XDG_STATE_HOME:-$HOME/.local/state}/claude/permission-prompts.jsonl`）は
+1 行 JSON で `ts`（ISO 8601 JST）・`session_id`・`cwd`・`tool_name`・`command`・`decision`（`allow` / `prompt`）・
+`rule`・`reason` を持つ。`--project` は `cwd` を projects/ のディレクトリ名と同じ形へ変換して部分一致、
+`--since` / `--until` は `ts` で判定する。transcript 側も判定・tool_use の時刻で絞る（`dialogs` / `waits` 共通）。
+ファイル mtime での選別は `--since` だけに使い、`--until` より後まで続いたセッションも期間内のイベントは残す。
 
 ## 出力時の伏せ字
 

@@ -86,7 +86,8 @@ UV_PROJECT_ENVIRONMENT="$HOME/.cache/uv-venvs/session-insights" uv run --project
 
 - `UV_PROJECT_ENVIRONMENT` は必ず付ける。スキルディレクトリは read-only（nix store / plugin cache）に配置され得るため、venv をスキル配下に作れない
 - `CLAUDE_CONFIG_DIR` はスクリプトが自動で解決する。手で `~/.claude` をハードコードしない
-- サブコマンドは `paths` / `sessions` / `prompts` / `cost` / `search` / `transcript` の 6 つだけ。横断集計を求められたら cclens へ回す
+- サブコマンドは `paths` / `sessions` / `prompts` / `cost` / `search` / `transcript` / `dialogs` / `waits` の 8 つだけ。横断集計を求められたら cclens へ回す
+- `dialogs` は permission-gate のログ（`${XDG_STATE_HOME:-~/.local/state}/claude/permission-prompts.jsonl`、無ければ `prompt_log.exists: false`）と transcript の許可判定を時系列で返す。`waits` は tool_use から tool_result までの経過秒で、許可ダイアログの待ちと実行時間の両方を含む（`run_in_background` は除外）
 - `search` はヒットした位置（セッション ID・JSONL の行番号・スニペット）を返すだけの横断照会。本文を読む深掘りは従来どおり `transcript` で 3〜5 件に絞る。`--tool` だけを指定すると、検索対象はツールの入出力（`tool-input` / `tool-result`）に絞られる。既定の上限は `--limit 40` / `--per-session 3` / `--context 80` で、切られても `total_hits` と `by_session`（ヒットの多いセッション上位 30 件）で全体量が分かる
 - `cost` は ccusage への薄い移譲（`ccusage claude daily|session --json --timezone Asia/Tokyo`）。ccusage が無ければ理由を返して停止するので、その観点だけ落として分析は続ける
 - 各サブコマンドの limit / max-chars 既定値はコンテキスト保護のための意図的な制約。
@@ -116,6 +117,7 @@ command -v cclens; command -v ccusage   # 使える道具の確認
 | スキル・コマンドの活用度（死にスキル検出） | cclens `usage` + `inventory` + `waste` |
 | ツール運用（MCP・サブエージェント・並列化） | cclens `sql`（`events` の `agent_spawn` 等）+ script `sessions` の `agents`/`subagent_files` |
 | 設定の妥当性（permissions・hooks・モデル選択） | cclens `inventory` / `overhead` + script `sessions` の `models`/`permission_modes` |
+| 許可ダイアログ・待ち時間 | script `dialogs`（判定の出所と時系列）+ `waits`（Bash は ask 対象別の件数・中央値・`--threshold` 超過一覧） |
 | エラー・摩擦ポイント | cclens `failures`（`--scope`）+ `stuck`、深掘りは該当セッションの script `transcript` |
 | 特定の操作・発言を含むセッションを探す | script `search`（`--in` / `--tool` で対象を絞る）→ 該当セッションの `transcript --tool-detail` |
 | 特定プロジェクトの運用 | script は `--project`、cclens は `--scope project:<slug>` |
