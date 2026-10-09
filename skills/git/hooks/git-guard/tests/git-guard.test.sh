@@ -9,7 +9,7 @@
 #   - git reset / marker 無し         -> deny
 #   - git push（force なし）          -> 沈黙（settings の ask に委ねる）
 #   - git push --force / -f           -> deny
-#   - 複合コマンド（deny + ask 混在） -> deny 優先
+#   - 複合コマンド（deny + ask 混在） -> deny 優先（rebase --abort + reset）
 #   - 引数・検索パターン・heredoc 本文のリテラル -> 沈黙（誤検知しない）
 #   - cd 後の segment / git -C の global option / sh -c の引数 -> deny
 #   - here-string（<<<）の後続 segment       -> deny（heredoc 扱いしない）
@@ -73,6 +73,8 @@ check "push-f" "deny" "$(decision 'git push -f origin feature')"
 
 # 複合コマンド: reset(deny) + push -> deny 優先
 check "compound-deny-wins" "deny" "$(decision 'git reset --hard HEAD~1 && git push origin feature')"
+# 複合コマンド: rebase --abort(ask) + reset(deny) -> deny 優先
+check "compound-deny-over-ask" "deny" "$(decision 'git rebase --abort && git reset --hard HEAD~1')"
 
 # --- 検出はコマンド構造で行う: 引数・検索パターン・heredoc 本文のリテラルは素通し ---
 raw() { # command -> hook の生出力
