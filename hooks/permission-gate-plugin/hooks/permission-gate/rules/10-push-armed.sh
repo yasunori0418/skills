@@ -5,6 +5,7 @@
 #     (; | & 改行・置換・リダイレクト・引用符・他の ask 対象 rm / curl / wget を含まない)
 #   - push のオプションは -u / --set-upstream / --no-verify / -v / -q のみ(force・delete 等は対象外)、
 #     refspec は 0〜1 個で送り元が現在のブランチ(HEAD)、+ 付き・削除(:dst)は対象外
+#   - push 先を書き換えうる設定(push.default が simple / current 以外、remote.*.push)が無い
 #   - 判定ディレクトリ(cd 先、無ければ cwd)の `git rev-parse --git-path push-flow.armed` が
 #     `<epoch> <ttl秒> <branch>` で期限内、かつ branch が現在のブランチ・push 先と一致
 #     (期限切れの marker は削除する)
