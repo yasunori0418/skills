@@ -221,5 +221,7 @@ commit_on "$D/work" "feat: on main"
 run "$D/work" push main --force
 check "protected-exit" 1 "$RC"
 has "protected-msg" "$OUT" "保護ブランチ"
+# push 前に停止したら arm しない（arm は実際の git push の直前）
+[ -e "$(marker_of "$D/work")" ] && check "protected-no-arm" absent present || check "protected-no-arm" absent absent
 
 exit $fail

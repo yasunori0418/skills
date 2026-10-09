@@ -383,7 +383,9 @@ case "$cmd" in
             fi
         }
 
-        # 実際の git push の直前に push-arm.sh と同じ形式で arm する（permission-gate 用）
+        # 実際の git push の直前に push-arm.sh で arm する。この内部 push 自体は Bash ツール
+        # 呼び出しではないので hook を通らず、marker は TTL 内の同ブランチへの後続 push を
+        # permission-gate に通させる
         bash "$(dirname "$0")/push-arm.sh" "$branch"
 
         used_route=""
