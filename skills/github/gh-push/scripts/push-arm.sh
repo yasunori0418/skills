@@ -30,8 +30,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$branch" ] || die "push 先ブランチ名を指定してください（Usage: push-arm.sh <branch> [--ttl <秒>]）"
-case "$ttl" in '' | *[!0-9]*) die "--ttl は正の整数（秒）で指定してください: $ttl" ;; esac
-[ "$ttl" -gt 0 ] || die "--ttl は正の整数（秒）で指定してください: $ttl"
+case "$ttl" in '' | *[!0-9]* | 0*) die "--ttl は正の整数（秒）で指定してください: $ttl" ;; esac
 git rev-parse --git-dir >/dev/null 2>&1 || die "git リポジトリ内で実行してください"
 
 marker=$(git rev-parse --git-path push-flow.armed)

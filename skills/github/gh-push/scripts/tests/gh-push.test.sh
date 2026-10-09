@@ -173,8 +173,10 @@ has "push-arm-path" "$OUT" "push-flow.armed"
 has "push-arm-expires" "$OUT" "expires: $((${M_EPOCH:-0} + 60))"
 (cd "$D/work" && bash "$SCRIPT_DIR/../push-arm.sh" >/dev/null 2>&1)
 check "push-arm-no-branch" 1 "$?"
-(cd "$D/work" && bash "$SCRIPT_DIR/../push-arm.sh" feat --ttl abc >/dev/null 2>&1)
-check "push-arm-bad-ttl" 1 "$?"
+for bad in abc 0 08; do
+    (cd "$D/work" && bash "$SCRIPT_DIR/../push-arm.sh" feat --ttl "$bad" >/dev/null 2>&1)
+    check "push-arm-bad-ttl-$bad" 1 "$?"
+done
 
 commit_on "$D/work" "feat: second"
 run "$D/work" preflight
