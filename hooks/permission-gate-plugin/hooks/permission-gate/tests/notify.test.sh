@@ -18,12 +18,12 @@ MOCK="$TMP/mock" BASE="$TMP/base" REC="$TMP/rec"
 mkdir -p "$MOCK" "$BASE" "$REC"
 for c in bash cat jq; do ln -s "$(command -v "$c")" "$BASE/$c"; done
 # モックは実行時生成のため patchShebangs が及ばない。nix sandbox にも存在する /bin/sh で書く
-for c in notify-send osascript; do
+for c in dunstify notify-send osascript; do
     printf '#!/bin/sh\nprintf "%%s|" "$@" >>"%s/%s"\n' "$REC" "$c" >"$TMP/$c"
 done
 printf '#!/bin/sh\nprintf "%%s|" "$@" >>"%s/report"\n' "$REC" >"$TMP/report.sh"
 printf '#!/bin/sh\nexit 1\n' >"$TMP/report-fail.sh"
-chmod +x "$TMP/notify-send" "$TMP/osascript" "$TMP/report.sh" "$TMP/report-fail.sh"
+chmod +x "$TMP/dunstify" "$TMP/notify-send" "$TMP/osascript" "$TMP/report.sh" "$TMP/report-fail.sh"
 
 fail=0
 check() { # label expected actual
@@ -67,16 +67,27 @@ check "lane-report-fail" "rc=0" \
         LANE_OPS_REPORT_SH="$TMP/report-fail.sh")"
 
 # 変数が 1 つ欠ける -> デスクトップ通知
-check "partial-rc" "rc=0" \
-    "$(run notify-send "$(input prompt Bash 'rm x')" LANE_OPS_PARENT=p1 LANE_OPS_TASK=T1)"
-check "partial-no-report" "none" "$(rec report)"
-check "partial-desktop" "claude-code|Bash: rm x|" "$(rec notify-send)"
+for i in 0 1 2; do
+    PARTIAL=("${LANE[@]}")
+    unset "PARTIAL[$i]"
+    run notify-send "$(input prompt Bash 'rm x')" "${PARTIAL[@]}" >/dev/null
+    check "partial-$i" "none claude-code|Bash: rm x|" "$(rec report) $(rec notify-send)"
+done
 
 # 通常セッション: notify-send が呼ばれる / osascript しか無ければ osascript
 run notify-send "$(input prompt Bash 'curl x')" >/dev/null
 check "desktop-notify-send" "claude-code|Bash: curl x|" "$(rec notify-send)"
 run osascript "$(input prompt Bash 'curl x')" >/dev/null
 check "desktop-osascript" "yes" "$(rec osascript | grep -q '|Bash: curl x|$' && echo yes || echo no)"
+# 優先順は dunstify > notify-send > osascript
+run "dunstify notify-send osascript" "$(input prompt Bash 'curl x')" >/dev/null
+check "prefer-dunstify" "claude-code|Bash: curl x| none none" "$(rec dunstify) $(rec notify-send) $(rec osascript)"
+run "notify-send osascript" "$(input prompt Bash 'curl x')" >/dev/null
+check "prefer-notify-send" "claude-code|Bash: curl x| none" "$(rec notify-send) $(rec osascript)"
+
+# command の無い tool(Write 等)-> tool 名だけの本文
+run notify-send '{"tool_name":"Write","tool_input":{"file_path":"/etc/hosts"},"decision":"prompt"}' >/dev/null
+check "no-command" "claude-code|Write: |" "$(rec notify-send)"
 
 # 通知コマンドが無い -> 沈黙
 check "no-notifier" "rc=0" "$(run "" "$(input prompt Bash 'curl x')")"
@@ -88,7 +99,6 @@ run notify-send "$(input allow Bash 'git push')" >/dev/null
 check "allow-no-desktop" "none" "$(rec notify-send)"
 
 # 不正な入力 -> exit 0・何も呼ばない
-check "invalid-rc" "rc=0" "$(run notify-send 'not json')"
-check "invalid-silent" "none" "$(rec notify-send)"
+check "invalid" "rc=0 none" "$(run notify-send 'not json') $(rec notify-send)"
 
 exit "$fail"
