@@ -12,7 +12,8 @@
 #   - cd は以降のセグメントの基準ディレクトリを変える。cd が失敗しても後続が走らないよう、
 #     cd 以降の区切りは && に限る
 #   - 全対象が一時領域の内側(領域そのものは不可): /tmp/claude-<uid>/**、
-#     /tmp/nix-shell.*/claude-<uid>/**、$TMPDIR/**、cwd のリポジトリ直下 tmp-agents/**
+#     /tmp/nix-shell.*/claude-<uid>/**、$TMPDIR/**(/tmp・/var/tmp そのものなら除く)、
+#     cwd のリポジトリ直下 tmp-agents/**
 #     (`git check-ignore` を通るときのみ)。比較は物理パスで行い、対象は親ディレクトリを
 #     解決して末尾要素を保持する(末尾 / なら全体を解決)ので、symlink 越しの削除は外れる
 set -uo pipefail
@@ -62,7 +63,11 @@ physical() { # 絶対パス -> rm が実際に消す実体の物理パスを $RE
 uid=$(id -u)
 tmp_phys=$(realpath -m /tmp)
 roots=("$(realpath -m "/tmp/claude-$uid")")
-case "${TMPDIR:-}" in /?*) roots+=("$(realpath -m -- "$TMPDIR")") ;; esac
+# $TMPDIR が共有の一時ディレクトリ root(/tmp・/var/tmp)そのものなら session 専用ではないので加えない
+if [[ ${TMPDIR:-} == /?* ]] && tmpdir=$(realpath -m -- "$TMPDIR") &&
+    [ "$tmpdir" != "$tmp_phys" ] && [ "$tmpdir" != "$(realpath -m /var/tmp)" ]; then
+    roots+=("$tmpdir")
+fi
 if top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) &&
     git -C "$top" check-ignore -q tmp-agents 2>/dev/null; then
     roots+=("$(realpath -m -- "$top/tmp-agents")")
