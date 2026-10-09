@@ -11,7 +11,11 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 GATE="$SCRIPT_DIR/../main.sh"
 RULE="$SCRIPT_DIR/../rules/20-rm-scratch.sh"
 
-TMP=$(mktemp -d)
+U=$(id -u)
+# fixture は一時領域の外に置く(実行者の TMPDIR が一時領域の中だと「領域外」のケースが成り立たない)
+base=${TMPDIR:-/tmp}
+case "$base/" in /tmp/claude-"$U"/* | /tmp/nix-shell.*/claude-"$U"/*) base=/tmp ;; esac
+TMP=$(mktemp -d -p "$base")
 trap 'rm -rf "$TMP"' EXIT
 export XDG_STATE_HOME="$TMP/state"
 # 実行者の gitconfig と既定の excludesFile($XDG_CONFIG_HOME/git/ignore)に結果を左右させない
@@ -19,7 +23,6 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 XDG_CONFIG_HOME="$TMP/x
 # $TMPDIR/** は一時領域なので、fixture の repo を含まない兄弟ディレクトリに向ける
 export TMPDIR="$TMP/tmpdir"
 mkdir -p "$TMPDIR"
-U=$(id -u)
 SP="/tmp/claude-$U/sess/scratchpad" # scratchpad 相当(存在しなくてよい)
 
 REPO="$TMP/repo"     # tmp-agents/ を .gitignore 済み
@@ -77,6 +80,7 @@ expect "assign-chain" allow "S=$SP; D=\$S/a; rm -rf \$D/b"
 expect "cd-scratchpad" allow "cd $SP && rm -rf smoke"
 expect "abs-scratchpad" allow "rm -rf $SP/x $SP/y"
 expect "multi-rm" allow "rm -f $SP/a; rm -rf $SP/b"
+expect "long-options" allow "rm --recursive --force $SP/x"
 expect "double-dash" allow "rm -f -- $SP/-x"
 expect "nix-shell" allow "rm -rf /tmp/nix-shell.AbC123/claude-$U/x"
 expect "tmpdir" allow "rm -rf $TMPDIR/x"
@@ -97,6 +101,11 @@ expect "root-trailing-slash" "" "S=/tmp/claude-$U; rm -rf \$S/"
 expect "dotdot" "" "rm -rf /tmp/claude-$U/../x"
 expect "dot-last" "" "rm -rf $SP/."
 expect "other-uid" "" "rm -rf /tmp/claude-0$U/x"
+expect "root-prefix" "" "rm -rf /tmp/claude-${U}0/x"
+expect "nix-shell-prefix" "" "rm -rf /tmp/nix-shell.a/claude-${U}0/x"
+expect "cd-symlink-escape" "" "cd $TMPDIR/esc && rm -rf x"
+check "tmpdir-root:rule" "" "$(TMPDIR=/ via_rule "rm -rf $TMP/repo/x")"
+check "tmpdir-root:gate" "" "$(TMPDIR=/ via_gate "rm -rf $TMP/repo/x")"
 expect "nix-shell-nested" "" "rm -rf /tmp/nix-shell.a/b/claude-$U/x"
 expect "nix-shell-other" "" "rm -rf /tmp/nix-shell.a/x"
 expect "symlink-escape" "" "rm -rf $TMPDIR/esc/x"
@@ -116,6 +125,7 @@ expect "glob" "" "rm -rf $SP/*"
 expect "quote" "" "rm -rf '$SP/x'"
 expect "tilde" "" "rm -rf ~/x"
 expect "redirect" "" "rm -rf $SP/x 2>/dev/null"
+expect "brace" "" "cd $SP && rm -rf {/etc,x}"
 expect "caret" "" "rm -rf $SP/^x"
 expect "equals" "" "cd $SP && rm -f =ls"
 expect "equals-assign" "" "S==ls; cd $SP && rm -f \$S"
@@ -125,6 +135,8 @@ expect "assign-cdpath" "" "CDPATH=$SP; rm -f $SP/x"
 expect "cd-cdpath-relative" "" "cd tmp-agents && rm -rf x"
 expect "cd-seq" "" "cd $SP; rm -rf smoke"
 expect "cd-then-seq" "" "cd $SP && rm -f a; rm -f b"
+expect "cd-newline" "" $'cd '"$SP"$'\nrm -rf smoke'
+expect "newline-allow" allow $'rm -f '"$SP"$'/a\nrm -f '"$SP"/b
 expect "cd-dash" "" "cd - && rm -rf x"
 expect "cd-bare" "" "cd && rm -rf x"
 expect "or" "" "rm -rf $SP/x || true"
@@ -137,6 +149,7 @@ expect "no-rm" "" "S=$SP"
 # 沈黙: 他の ask 対象・rm 以外の処理を含む
 expect "git-push" "" "rm -rf $SP/x && git push"
 expect "curl" "" "rm -rf $SP/x; curl -s https://example.com"
+expect "git-push-newline" "" $'rm -rf '"$SP"$'/x\ngit push'
 expect "wget" "" "wget -q https://example.com && rm -rf $SP/x"
 expect "other-cmd" "" "rm -rf $SP/x && python3 x.py"
 expect "export" "" "export S=$SP; rm -rf \$S/x"
