@@ -7,7 +7,7 @@
 #   - git rebase / marker 期限切れ    -> deny + marker 削除
 #   - git pull --rebase / git pull -r -> rebase と同じ扱い
 #   - git reset / marker 無し         -> deny
-#   - git push（force なし）          -> ask
+#   - git push（force なし）          -> 沈黙（settings の ask に委ねる）
 #   - git push --force / -f           -> deny
 #   - 複合コマンド（deny + ask 混在） -> deny 優先
 #   - 引数・検索パターン・heredoc 本文のリテラル -> 沈黙（誤検知しない）
@@ -67,12 +67,11 @@ check "pull-r" "deny" "$(decision 'git pull -r origin main')"
 # reset: marker 無し -> deny
 check "reset-unarmed" "deny" "$(decision 'git reset --hard HEAD~1')"
 
-# push: force なし -> ask / force あり -> deny
-check "push-plain" "ask" "$(decision 'git push origin feature')"
+# push: force なし -> 沈黙（settings の ask に委ねる）/ force あり -> deny
 check "push-force" "deny" "$(decision 'git push --force origin feature')"
 check "push-f" "deny" "$(decision 'git push -f origin feature')"
 
-# 複合コマンド: reset(deny) + push(ask) -> deny 優先
+# 複合コマンド: reset(deny) + push -> deny 優先
 check "compound-deny-wins" "deny" "$(decision 'git reset --hard HEAD~1 && git push origin feature')"
 
 # --- 検出はコマンド構造で行う: 引数・検索パターン・heredoc 本文のリテラルは素通し ---
@@ -80,6 +79,9 @@ raw() { # command -> hook の生出力
     printf '{"cwd": %s, "tool_input": {"command": %s}}' \
         "$(printf '%s' "$REPO" | jq -Rs .)" "$(printf '%s' "$1" | jq -Rs .)" | "$GUARD"
 }
+
+# 通常 push（force なし）-> 沈黙（出力なし。settings の ask に委ねる）
+check "push-plain" "" "$(raw 'git push origin feature')"
 
 # 報告コマンドの引数に載ったリテラル -> 沈黙
 check "literal-in-argument" "" "$(raw 'bash report.sh parent T1 "停止" "git rebase の計画を提示"')"
