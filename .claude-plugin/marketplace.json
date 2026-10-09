@@ -176,6 +176,16 @@
       },
       "category": "hooks",
       "tags": ["claude-code", "hooks", "stop", "hallucination", "tool-use"]
+    },
+    {
+      "name": "yasunori0418-permission-gate-hooks",
+      "source": "./hooks/permission-gate-plugin",
+      "description": "許可ダイアログ(PermissionRequest)のうち arm 済み push を自動応答し、全ダイアログを JSONL に記録する hook。",
+      "author": {
+        "name": "yasunori0418"
+      },
+      "category": "hooks",
+      "tags": ["claude-code", "hooks", "permission", "push"]
     }
   ]
 }

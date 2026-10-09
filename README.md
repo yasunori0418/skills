@@ -21,7 +21,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 ```
 .
 ├── .claude-plugin/
-│   └── marketplace.json              # マーケットプレイス定義(17 プラグインを列挙)
+│   └── marketplace.json              # マーケットプレイス定義(18 プラグインを列挙)
 ├── flake.nix                         # 成果物 + treefmt(formatter) + checks(検証)
 ├── dev/flake.nix                     # 開発用 devShell (default / ci)
 ├── pkgs/
@@ -57,7 +57,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 
 ## Claude Code プラグインとして使う
 
-1 マーケットプレイス(`marketplace.json`)に **17 のプラグイン**(カテゴリ 8 + hook 9)を
+1 マーケットプレイス(`marketplace.json`)に **18 のプラグイン**(カテゴリ 8 + hook 10)を
 列挙している。利用者は必要なカテゴリ・hook だけを選んで install できる。
 
 | プラグイン                                   | source                                | 内容                                                         |
@@ -79,6 +79,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 | `yasunori0418-task-boundary-hooks`           | `./hooks/task-boundary-plugin`        | 境界ファイル `.claude/task-boundary.json` の外への Edit/Write/NotebookEdit を deny(境界ファイルが無ければ沈黙) |
 | `yasunori0418-teammate-leak-guard-hooks`     | `./hooks/teammate-leak-guard-plugin`  | Stop 時に稼働中のサブエージェント/チームメイトが残っていれば TaskStop を促す(idle は終了ではないため放置すると滞留する) |
 | `yasunori0418-fabricated-toolcall-guard-hooks` | `./hooks/fabricated-toolcall-guard-plugin` | Stop 時に、実行されずに text へ書かれた捏造ツール呼び出しを検出して差し戻す |
+| `yasunori0418-permission-gate-hooks`         | `./hooks/permission-gate-plugin`      | settings の ask で出る許可ダイアログのうち arm 済み(`push-flow.armed`)の通常 push を自動応答し、全ダイアログを JSONL に記録 |
 
 > **hook の分離方針**: git rebase/reset をスキル経由へ強制する `git-guard` は、
 > rebase-flow/reset-flow スキルとペアで機能するため `git-skills` プラグインに同梱する。

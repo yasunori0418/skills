@@ -1,0 +1,15 @@
+{
+  "description": "許可ダイアログを規則で自動応答し、全ダイアログを JSONL に記録する hook。",
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/permission-gate/main.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
