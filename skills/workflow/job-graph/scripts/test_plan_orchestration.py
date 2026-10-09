@@ -600,14 +600,15 @@ def test_launch_script_exports_lane_ops_env_only_with_parent_name():
 
 def test_launch_script_arms_push_only_in_implement():
     # implement の push は計画承認済みなので起動時に arm する。maintain は親承認制を保つ。
+    arm = '>| "$(git rev-parse --git-path push-flow.armed)"'
     bodies = launch_body([task("A"), task("B", boundary=["pkg/**"])])
     for body in bodies.values():
-        assert "push-flow.armed" in body
-        assert body.index("push-flow.armed") < body.index("exec claude")
+        assert arm in body
+        assert body.index(arm) < body.index("exec claude")
     # 境界ありの bootstrap では set -e より前（arm の失敗で起動を止めない）。
-    assert bodies["B"].index("push-flow.armed") < bodies["B"].index("set -e; ")
+    assert bodies["B"].index(arm) < bodies["B"].index("set -e; ")
     maintain = launch_body([task("A"), task("B", boundary=["pkg/**"])], mode="maintain", default_base="main")
-    assert all('>| "$(git rev-parse --git-path push-flow.armed)"' not in b for b in maintain.values())
+    assert all(arm not in b for b in maintain.values())
 
 
 # ------------------------------------------------------------
