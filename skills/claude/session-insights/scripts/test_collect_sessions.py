@@ -1051,6 +1051,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(self.run_cli("dialogs", "--session", "eeee", "--prompt-log", str(log), "--since", "2026-07-02")["total"], 0)
         # --until はファイル mtime（今日）で選別せず、期間内のイベントを残す
         self.assertEqual(self.run_cli("dialogs", "--session", "eeee", "--prompt-log", str(log), "--until", "2026-07-01")["total"], 3)
+        self.assertEqual(self.run_cli("dialogs", "--session", "eeee", "--prompt-log", str(log), "--until", "2026-06-30")["total"], 0)
 
     def test_dialogs_default_prompt_log(self):
         state = self.root / "state"
@@ -1071,6 +1072,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rep["over"][0]["session_id"], "eeee5555")
         self.assertEqual(self.run_cli("waits", "--session", "eeee", "--since", "2026-07-02")["total"], 0)
         self.assertEqual(self.run_cli("waits", "--session", "eeee", "--since", "2026-07-01", "--until", "2026-07-01")["total"], 3)
+        self.assertEqual(self.run_cli("waits", "--session", "eeee", "--until", "2026-06-30")["total"], 0)
 
     def test_waits_excludes_agent_spawned_by_default(self):
         self.assertEqual(self.run_cli("waits")["total"], 1)
