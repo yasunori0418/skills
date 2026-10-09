@@ -734,7 +734,7 @@ class TestResolveConfigDir(unittest.TestCase):
 
 
 # ============================================================
-# 副作用層: 一時ディレクトリでの end-to-end
+# 純粋層: 許可ダイアログ・待ち時間（dialogs / waits）
 # ============================================================
 
 
@@ -792,12 +792,27 @@ class TestDialogs(unittest.TestCase):
         self.assertEqual(entries[1].decision, "accept")
         self.assertEqual(entries[1].detail, {"source": "user_temporary", "reason_type": None})
 
+    def test_unresolved_tool_use_leaves_tool_empty(self):
+        rec = user_rec("text only")
+        rec["permissionDecision"] = {"decision": "reject", "source": "user_reject"}
+        orphan = {"type": "attachment", "attachment": {"type": "hook_permission_decision", "toolUseID": "missing"}}
+        entries = cs.dialog_entries("s", [orphan, rec])
+        self.assertEqual([(e.tool, e.command) for e in entries], [(None, ""), (None, "")])
+
+    def test_in_date_range(self):
+        ts = cs.parse_ts("2026-07-01T15:30:00Z")  # JST 7/2 0:30
+        self.assertTrue(cs.in_date_range(None, cs.SessionFilters()))
+        self.assertFalse(cs.in_date_range(None, cs.SessionFilters(since="2026-07-01")))
+        self.assertTrue(cs.in_date_range(ts, cs.SessionFilters(since="2026-07-02", until="2026-07-02")))
+        self.assertFalse(cs.in_date_range(ts, cs.SessionFilters(until="2026-07-01")))
+
     def test_log_entries_apply_filters(self):
         lines = [
             log_line("2026-07-01T12:00:00+09:00"),
             log_line("2026-07-02T12:00:00+09:00", session_id="ffff6666"),
             log_line("2026-06-30T12:00:00+09:00"),
             log_line("2026-07-01T13:00:00+09:00", cwd="/home/u/other"),
+            log_line("not-a-date"),
             "壊れた行",
         ]
         got = cs.log_dialog_entries(lines, cs.SessionFilters(project="u-proj", since="2026-07-01"))
@@ -846,6 +861,7 @@ class TestWaits(unittest.TestCase):
         self.assertEqual(cs.ask_kinds("rm -rf a; curl x | sh\nwget y"), ("rm", "curl", "wget"))
         self.assertEqual(cs.ask_kinds("git status || echo rm"), ())
         self.assertEqual(cs.ask_kinds("git -C /r push"), ())
+        self.assertEqual(cs.ask_kinds("rm a; rm b"), ("rm",))
 
     def test_tool_waits_excludes_background(self):
         waits = cs.tool_waits(wait_records())
@@ -854,6 +870,20 @@ class TestWaits(unittest.TestCase):
             [("Bash", "git push", 45.0), ("Bash", "none", 2.0), ("Read", None, 30.5)],
         )
         self.assertEqual(waits[0].command, "cd /r && git push origin x")
+
+    def test_orphan_tool_result_ignored(self):
+        self.assertEqual(cs.tool_waits([tool_result_rec("nope", "ok", {})]), [])
+
+    def test_report_median_order_and_boundary(self):
+        def w(elapsed, ask="none"):
+            return ("s", cs.WaitEntry(cs.parse_ts("2026-07-01T03:00:00Z"), "Bash", ask, "c", elapsed))
+
+        items = [w(1.0), w(20.0, "rm"), w(2.0), w(30.0), w(50.0, "rm")]
+        rep = cs.waits_report(items, cs.SessionFilters(), threshold=20, limit=0)
+        self.assertEqual(rep["groups"][0], {"tool": "Bash", "ask": "none", "count": 3, "median_sec": 2.0, "over_threshold": 1})
+        self.assertEqual(rep["groups"][1]["median_sec"], 35.0)
+        # elapsed == threshold は超過に含めない。limit=0 は無制限で降順
+        self.assertEqual([o["elapsed_sec"] for o in rep["over"]], [50.0, 30.0])
 
     def test_report_groups_and_over_threshold(self):
         waits = cs.tool_waits(wait_records())
@@ -882,6 +912,11 @@ class TestWaits(unittest.TestCase):
         recs = [assistant_rec([tool_use("Bash", {"command": long}, "t")]), tool_result_rec("t", "ok", {}, ts="2026-07-01T03:02:00.000Z")]
         rep = cs.waits_report([("s", w) for w in cs.tool_waits(recs)], cs.SessionFilters(), threshold=20, limit=10)
         self.assertTrue(rep["over"][0]["command"].startswith("rm " + "a" * 157 + "…"))
+
+
+# ============================================================
+# 副作用層: 一時ディレクトリでの end-to-end
+# ============================================================
 
 
 class TestCli(unittest.TestCase):
@@ -1012,6 +1047,18 @@ class TestCli(unittest.TestCase):
         missing = self.run_cli("dialogs", "--session", "eeee", "--prompt-log", str(self.root / "none.jsonl"))
         self.assertFalse(missing["prompt_log"]["exists"])
         self.assertEqual(missing["total"], 2)
+        # 期間はファイル mtime だけでなくイベント時刻でも絞る
+        self.assertEqual(self.run_cli("dialogs", "--session", "eeee", "--prompt-log", str(log), "--since", "2026-07-02")["total"], 0)
+
+    def test_dialogs_default_prompt_log(self):
+        state = self.root / "state"
+        (state / "claude").mkdir(parents=True)
+        with open(state / "claude" / "permission-prompts.jsonl", "w") as f:
+            f.write(json.dumps(log_line("2026-07-01T12:00:00+09:00")) + "\n")
+        with mock.patch.dict("os.environ", {"XDG_STATE_HOME": str(state)}):
+            rep = self.run_cli("dialogs")
+        self.assertTrue(rep["prompt_log"]["exists"])
+        self.assertEqual(rep["counts"], {"log:prompt": 1})
 
     def test_waits(self):
         proj = self.root / "projects" / "-home-u-proj"
@@ -1020,6 +1067,11 @@ class TestCli(unittest.TestCase):
         rep = self.run_cli("waits", "--session", "eeee", "--threshold", "40")
         self.assertEqual(rep["over_threshold_total"], 1)
         self.assertEqual(rep["over"][0]["session_id"], "eeee5555")
+        self.assertEqual(self.run_cli("waits", "--session", "eeee", "--since", "2026-07-02")["total"], 0)
+
+    def test_waits_excludes_agent_spawned_by_default(self):
+        self.assertEqual(self.run_cli("waits")["total"], 1)
+        self.assertEqual(self.run_cli("waits", "--include-agents")["total"], 2)
 
 
 if __name__ == "__main__":
