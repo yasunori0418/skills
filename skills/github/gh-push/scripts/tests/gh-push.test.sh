@@ -198,8 +198,11 @@ git -C "$D/work" reset --quiet --hard HEAD~1
 commit_on "$D/work" "feat: rewritten"
 run "$D/work" preflight
 has "div-state" "$OUT" "remote state: diverged"
+rm -f "$(marker_of "$D/work")"
 run "$D/work" push
 check "div-noforce-exit" 1 "$RC"
+# push 分岐内で停止したら arm しない（arm は実際の git push の直前）
+[ -e "$(marker_of "$D/work")" ] && check "div-noforce-no-arm" absent present || check "div-noforce-no-arm" absent absent
 has "div-noforce-msg" "$OUT" "履歴が分岐しています"
 
 # --- --expect がリモート実測と不一致: 停止 ---
@@ -221,7 +224,5 @@ commit_on "$D/work" "feat: on main"
 run "$D/work" push main --force
 check "protected-exit" 1 "$RC"
 has "protected-msg" "$OUT" "保護ブランチ"
-# push 前に停止したら arm しない（arm は実際の git push の直前）
-[ -e "$(marker_of "$D/work")" ] && check "protected-no-arm" absent present || check "protected-no-arm" absent absent
 
 exit $fail
