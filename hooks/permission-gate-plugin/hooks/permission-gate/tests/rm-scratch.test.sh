@@ -140,6 +140,8 @@ expect "assign-pwd" "" "PWD=$TMP/a; cd .. && rm -rf tmp-agents/x" "$REPO/tmp-age
 expect "cd-symlink-dotdot" "" "cd $TMPDIR/esc/.. && rm -rf x"
 expect "cd-symlink-in-dotdot" "" "cd $REPO/in/.. && rm -rf x"
 expect "cd-chain-symlink" "" "cd $REPO/in && cd .. && rm -rf x"
+expect "cwd-symlink-dotdot" "" "cd .. && rm -rf x" "$REPO/in"
+expect "cd-chain" allow "cd $SP && cd ./a && rm -rf x"
 expect "cd-cdpath-relative" "" "cd tmp-agents && rm -rf x"
 expect "cd-seq" "" "cd $SP; rm -rf smoke"
 expect "cd-then-seq" "" "cd $SP && rm -f a; rm -f b"
