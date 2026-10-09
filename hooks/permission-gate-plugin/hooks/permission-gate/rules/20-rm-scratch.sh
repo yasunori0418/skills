@@ -76,17 +76,24 @@ in_scratch() { # 物理パス -> いずれかの一時領域の内側か
     [[ ${1#"$tmp_phys"} != "$1" && ${1#"$tmp_phys"} =~ ^/nix-shell\.[^/]+/claude-$uid/.+ ]]
 }
 
-dir=$cwd after_cd=0 count=0 seg=()
+# 基準ディレクトリは論理(cd -L が辿る)と物理(rm の相対パスを kernel が解決する)の両方を持つ
+ldir=$cwd dir=$(realpath -m -- "$cwd") || exit 0
+after_cd=0 count=0 seg=()
 run_segment() { # seg の 1 セグメントを解釈する。扱えなければ失敗
     [ "${#seg[@]}" -gt 0 ] || return 0
     local w t ends=0
     case "${seg[0]}" in
     cd)
         [ "${#seg[@]}" -eq 2 ] && expand "${seg[1]}" || return 1
-        case "$REPLY" in /*) ;; . | .. | ./* | ../*) REPLY=$dir/$REPLY ;; *) return 1 ;; esac
+        case "$REPLY" in
+        /*) t=$REPLY w=$REPLY ;;
+        . | .. | ./* | ../*) t=$ldir/$REPLY w=$dir/$REPLY ;;
+        *) return 1 ;;
+        esac
         # 論理解決(cd -L)と物理解決(set -P・zsh の CHASE_DOTS)で行き先が変わるものは扱わない
-        t=$(realpath -m -s -- "$REPLY") && dir=$(realpath -m -- "$REPLY") || return 1
-        [ "$(realpath -m -- "$t")" = "$dir" ] || return 1
+        t=$(realpath -m -s -- "$t") && w=$(realpath -m -- "$w") || return 1
+        [ "$(realpath -m -- "$t")" = "$w" ] || return 1
+        ldir=$t dir=$w
         after_cd=1
         ;;
     rm)

@@ -35,6 +35,8 @@ echo tmp-agents/ >"$REPO/.gitignore"
 ln -s "$SHARED/" "$LINKED/tmp-agents"
 echo tmp-agents >"$LINKED/.gitignore"
 ln -s "$REPO" "$TMPDIR/esc" # 一時領域から外へ向く symlink
+mkdir -p "$TMPDIR/sub"
+ln -s "$TMPDIR/sub" "$REPO/in" # 一時領域の外から中へ向く symlink
 
 fail=0
 check() { # label expected actual
@@ -136,6 +138,8 @@ expect "assign-path-zsh" "" "path=$SP; rm -f $SP/x"
 expect "assign-cdpath-zsh" "" "cdpath=$SP; rm -f $SP/x"
 expect "assign-pwd" "" "PWD=$TMP/a; cd .. && rm -rf tmp-agents/x" "$REPO/tmp-agents"
 expect "cd-symlink-dotdot" "" "cd $TMPDIR/esc/.. && rm -rf x"
+expect "cd-symlink-in-dotdot" "" "cd $REPO/in/.. && rm -rf x"
+expect "cd-chain-symlink" "" "cd $REPO/in && cd .. && rm -rf x"
 expect "cd-cdpath-relative" "" "cd tmp-agents && rm -rf x"
 expect "cd-seq" "" "cd $SP; rm -rf smoke"
 expect "cd-then-seq" "" "cd $SP && rm -f a; rm -f b"
