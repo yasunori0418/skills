@@ -217,6 +217,15 @@ check "force-exit" 0 "$RC"
 has "force-ok" "$OUT" "OK: [ssh]"
 check "force-remote-tip" "$NEW_TIP" "$(git -C "$D/remote.git" rev-parse refs/heads/feat)"
 
+# --- リモートが push を拒否: 失敗しても arm 済み（arm は git push より前） ---
+D="$WORK/rej" && new_pair "$D"
+commit_on "$D/work" "feat: rejected"
+printf '#!%s\nexit 1\n' "$BASH" >"$D/remote.git/hooks/pre-receive"
+chmod +x "$D/remote.git/hooks/pre-receive"
+run "$D/work" push
+check "rejected-exit" 1 "$RC"
+[ -e "$(marker_of "$D/work")" ] && check "rejected-armed" present present || check "rejected-armed" present absent
+
 # --- 保護ブランチへの force: 拒否 ---
 D="$WORK/prot" && new_pair "$D"
 git -C "$D/work" checkout --quiet main
