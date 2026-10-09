@@ -11,7 +11,6 @@
 set -uo pipefail
 
 input=$(cat)
-printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1 || exit 0
 decision=$(printf '%s' "$input" | jq -r '.decision // ""' 2>/dev/null) || exit 0
 [ "$decision" = allow ] && exit 0
 detail=$(printf '%s' "$input" |
