@@ -866,6 +866,7 @@ def launch_script(
     flags_str = "".join(f" {shlex.quote(a)}" for a in launch_flags(task, launch))
     prompt_ref = f'"$(cat {shlex.quote(ppath)})"'
     switch = wt_switch(task, base, plan.mode)
+    # 前置きは BOUNDARY_BOOTSTRAP の set -e より前に連結する（arm の失敗で起動を止めないため）。
     prelude = lane_prelude(task, plan.mode, launch)
     if task.boundary:
         # 境界宣言ありは -x bash の bootstrap 経由（worktree 生成後・claude 起動前に
