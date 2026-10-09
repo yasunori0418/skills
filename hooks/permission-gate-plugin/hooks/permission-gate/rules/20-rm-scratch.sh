@@ -6,7 +6,8 @@
 #       NAME=value(1 語の単純代入)/ cd <パス> / rm [-rRfvdiI | 長オプション] [--] <対象…>
 #     rm 以外の処理(git push・curl・wget を含む)があれば扱わない。実シェルは zsh のこともあるので
 #     ^(EXTENDED_GLOB)と語頭の =(EQUALS 展開)も扱わず、解決を変える IFS / PATH / CDPATH
-#     (zsh の path / cdpath)への代入と、/ ./ ../ で始まらない cd(CDPATH で解決される)も扱わない
+#     (zsh の path / cdpath)/ PWD / OLDPWD への代入と、/ ./ ../ で始まらない cd(CDPATH で
+#     解決される)・論理解決と物理解決で行き先が変わる cd も扱わない
 #   - $NAME / ${NAME} は同一コマンド内の単純代入だけで解決する(環境の変数は未定義扱い)
 #   - cd は以降のセグメントの基準ディレクトリを変える。cd が失敗しても後続が走らないよう、
 #     cd 以降の区切りは && に限る
@@ -83,7 +84,9 @@ run_segment() { # seg の 1 セグメントを解釈する。扱えなければ�
     cd)
         [ "${#seg[@]}" -eq 2 ] && expand "${seg[1]}" || return 1
         case "$REPLY" in /*) ;; . | .. | ./* | ../*) REPLY=$dir/$REPLY ;; *) return 1 ;; esac
-        dir=$(realpath -m -s -- "$REPLY") || return 1
+        # 論理解決(cd -L)と物理解決(set -P・zsh の CHASE_DOTS)で行き先が変わるものは扱わない
+        t=$(realpath -m -s -- "$REPLY") && dir=$(realpath -m -- "$REPLY") || return 1
+        [ "$(realpath -m -- "$t")" = "$dir" ] || return 1
         after_cd=1
         ;;
     rm)
@@ -107,7 +110,7 @@ run_segment() { # seg の 1 セグメントを解釈する。扱えなければ�
     *)
         [ "${#seg[@]}" -eq 1 ] && [[ ${seg[0]} =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
         w=${BASH_REMATCH[1]}
-        case "$w" in IFS | PATH | CDPATH | path | cdpath) return 1 ;; esac
+        case "$w" in IFS | PATH | CDPATH | path | cdpath | PWD | OLDPWD) return 1 ;; esac
         expand "${BASH_REMATCH[2]}" || return 1
         vars[$w]=$REPLY
         ;;
