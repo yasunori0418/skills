@@ -9,10 +9,15 @@
 #   - 不正な入力でも exit 0・stdout なし
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-GATE_DIR="$SCRIPT_DIR/.."
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
+# 本物の notify.sh は実通知・親レーンへの報告を出すため、ダミーに差し替えたコピー上で検証する
+GATE_DIR="$TMP/gate"
+mkdir -p "$GATE_DIR"
+cp -R "$SCRIPT_DIR/../main.sh" "$SCRIPT_DIR/../rules" "$GATE_DIR/"
+printf '#!%s\ncat >/dev/null\n' "$BASH" >"$GATE_DIR/notify.sh"
+chmod +x "$GATE_DIR/notify.sh"
 export XDG_STATE_HOME="$TMP/state"
 # 実行者の global / system gitconfig(push.default 等)に結果を左右させない
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
