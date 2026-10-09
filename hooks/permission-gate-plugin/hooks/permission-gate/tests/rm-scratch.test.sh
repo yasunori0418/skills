@@ -8,7 +8,6 @@
 #   - いずれも exit 0
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-GATE="$SCRIPT_DIR/../main.sh"
 RULE="$SCRIPT_DIR/../rules/20-rm-scratch.sh"
 
 U=$(id -u)
@@ -17,6 +16,13 @@ base=${TMPDIR:-/tmp}
 case "$base/" in /tmp/claude-"$U"/* | /tmp/nix-shell.*/claude-"$U"/*) base=/tmp ;; esac
 TMP=$(mktemp -d -p "$base")
 trap 'rm -rf "$TMP"' EXIT
+# 本物の notify.sh は実通知・親レーンへの報告を出すため、ダミーに差し替えたコピー上で検証する
+GATE_DIR="$TMP/gate"
+mkdir -p "$GATE_DIR"
+cp -R "$SCRIPT_DIR/../main.sh" "$SCRIPT_DIR/../rules" "$GATE_DIR/"
+printf '#!%s\ncat >/dev/null\n' "$BASH" >"$GATE_DIR/notify.sh"
+chmod +x "$GATE_DIR/notify.sh"
+GATE="$GATE_DIR/main.sh"
 export XDG_STATE_HOME="$TMP/state"
 # 実行者の gitconfig と既定の excludesFile($XDG_CONFIG_HOME/git/ignore)に結果を左右させない
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 XDG_CONFIG_HOME="$TMP/xdg"
