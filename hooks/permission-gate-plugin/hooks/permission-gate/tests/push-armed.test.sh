@@ -13,6 +13,8 @@ GATE="$SCRIPT_DIR/../main.sh"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 export XDG_STATE_HOME="$TMP/state"
+# 実行者の global / system gitconfig(push.default 等)に結果を左右させない
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 REPO="$TMP/repo"     # feat/x、origin/HEAD -> main
 OTHER="$TMP/other"   # feat/x、marker なし(cd 先の marker を見ることの確認用)
@@ -72,15 +74,20 @@ check "armed-refs-heads" "allow" "$(behavior 'git push origin refs/heads/feat/x'
 check "armed-cd" "allow" "$(behavior "cd $REPO && git push" /)"
 check "armed-cd-relative" "allow" "$(behavior 'cd repo && git push' "$TMP")"
 
-# worktree: marker は worktree ごと(git rev-parse --git-path)
-check "worktree-unarmed" "" "$(behavior 'git push' "$WT")"
+# worktree: marker は worktree ごと(git rev-parse --git-path)。main 側の marker は linked worktree に効かない
+arm "$REPO" feat/w
+check "worktree-ignores-main-marker" "" "$(behavior 'git push' "$WT")"
+rm -f "$(marker "$REPO")"
 arm "$WT" feat/w
 check "worktree-armed" "allow" "$(behavior 'git push' "$WT")"
-rm -f "$(marker "$REPO")"
-check "worktree-separate" "" "$(behavior 'git push')"
+check "main-unarmed" "" "$(behavior 'git push')"
 arm "$REPO" feat/x
 
-# push 先を設定で書き換えうる構成 -> 沈黙
+# push 先を設定で書き換えうる構成 -> 沈黙(simple / current は allow)
+git -C "$REPO" config push.default simple
+check "push-default-simple" "allow" "$(behavior 'git push')"
+git -C "$REPO" config push.default current
+check "push-default-current" "allow" "$(behavior 'git push')"
 git -C "$REPO" config push.default upstream
 check "push-default-upstream" "" "$(behavior 'git push')"
 git -C "$REPO" config --unset push.default

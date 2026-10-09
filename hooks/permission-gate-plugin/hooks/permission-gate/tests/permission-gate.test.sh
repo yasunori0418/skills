@@ -14,6 +14,8 @@ GATE_DIR="$SCRIPT_DIR/.."
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 export XDG_STATE_HOME="$TMP/state"
+# 実行者の global / system gitconfig(push.default 等)に結果を左右させない
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 LOG="$XDG_STATE_HOME/claude/permission-prompts.jsonl"
 
 REPO="$TMP/repo"
