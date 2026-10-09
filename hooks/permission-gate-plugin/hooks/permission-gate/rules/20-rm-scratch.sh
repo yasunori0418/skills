@@ -4,7 +4,9 @@
 #   - tool_name が Bash で、コマンドが `;` / `&&` / 改行で区切った次のセグメントだけから成る
 #     (rm を 1 個以上含む。置換・引用符・glob・リダイレクト・`||` / `|` / `&` は含まない):
 #       NAME=value(1 語の単純代入)/ cd <パス> / rm [-rRfvdiI | 長オプション] [--] <対象…>
-#     rm 以外の処理(git push・curl・wget を含む)があれば扱わない
+#     rm 以外の処理(git push・curl・wget を含む)があれば扱わない。実シェルは zsh のこともあるので
+#     ^(EXTENDED_GLOB)と語頭の =(EQUALS 展開)も扱わず、解決を変える IFS / PATH / CDPATH
+#     (zsh の path / cdpath)への代入と、/ ./ ../ で始まらない cd(CDPATH で解決される)も扱わない
 #   - $NAME / ${NAME} は同一コマンド内の単純代入だけで解決する(環境の変数は未定義扱い)
 #   - cd は以降のセグメントの基準ディレクトリを変える。cd が失敗しても後続が走らないよう、
 #     cd 以降の区切りは && に限る
@@ -24,7 +26,7 @@ command -v realpath >/dev/null && realpath -m / >/dev/null 2>&1 || exit 0
 
 # 置換・引用符・glob・リダイレクト・コメント・チルダ・単独の & | を含むものは扱わない
 case "$cmd" in *__AND__* | *__SEQ__*) exit 0 ;; esac
-case "${cmd//&&/}" in *[\`\(\)\<\>\"\'\\\*\?\[\]\#\~\!\|\&]*) exit 0 ;; esac
+case "${cmd//&&/}" in *[\`\(\)\<\>\"\'\\\*\?\[\]\#\~\!\^\|\&]*) exit 0 ;; esac
 s=${cmd//&&/ __AND__ }
 s=${s//;/ __SEQ__ }
 s=${s//$'\n'/ __SEQ__ }
@@ -41,6 +43,7 @@ expand() { # word -> $NAME / ${NAME} をコマンド内の代入で展開して 
     done
     case "$w" in *[\$\{\}]*) return 1 ;; esac
     REPLY=$out$w
+    case "$REPLY" in =*) return 1 ;; esac
 }
 physical() { # 絶対パス -> rm が実際に消す実体の物理パスを $REPLY へ
     local p=$1 parent base
@@ -79,7 +82,7 @@ run_segment() { # seg の 1 セグメントを解釈する。扱えなければ�
     case "${seg[0]}" in
     cd)
         [ "${#seg[@]}" -eq 2 ] && expand "${seg[1]}" || return 1
-        case "$REPLY" in -* | '') return 1 ;; /*) ;; *) REPLY=$dir/$REPLY ;; esac
+        case "$REPLY" in /*) ;; . | .. | ./* | ../*) REPLY=$dir/$REPLY ;; *) return 1 ;; esac
         dir=$(realpath -m -s -- "$REPLY") || return 1
         after_cd=1
         ;;
@@ -104,6 +107,7 @@ run_segment() { # seg の 1 セグメントを解釈する。扱えなければ�
     *)
         [ "${#seg[@]}" -eq 1 ] && [[ ${seg[0]} =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
         w=${BASH_REMATCH[1]}
+        case "$w" in IFS | PATH | CDPATH | path | cdpath) return 1 ;; esac
         expand "${BASH_REMATCH[2]}" || return 1
         vars[$w]=$REPLY
         ;;
