@@ -187,7 +187,8 @@ class Mode(Enum):
         """レーン起動時に push を arm するか（push-flow.armed を書く）。
 
         implement の push は計画承認済みなので起動時に arm し、permission-gate に
-        確認ダイアログを省かせる。maintain は push の親承認制を保つため arm しない。
+        確認ダイアログを省かせる。maintain は push の親承認制を保つため arm せず、
+        implement が残した marker を消す。
         """
         return self is Mode.IMPLEMENT
 
@@ -832,7 +833,8 @@ def lane_prelude(task: Task, mode: Mode, launch: Launch) -> str:
     できるよう宛先を export する。claude の exec へ環境変数として引き継がれる。
     mode が起動時 arm なら worktree ごとの push-flow.armed へ `<epoch> <ttl秒> <branch>`
     を書く（epoch は生成時でなく起動時に評価する）。書けなくても起動は止めない
-    （arm が無いだけで push は確認ダイアログに戻る）。
+    （arm が無いだけで push は確認ダイアログに戻る）。arm しない mode（maintain）は、同じ
+    worktree の implement が残した marker を消す（残すと push の親承認制が成り立たない）。
     """
     out = ""
     if launch.parent_name:
@@ -847,6 +849,8 @@ def lane_prelude(task: Task, mode: Mode, launch: Launch) -> str:
             f"printf '%s {LANE_PUSH_ARM_TTL} %s\\n' \"$(date +%s)\" {shlex.quote(task.branch)}"
             ' >| "$(git rev-parse --git-path push-flow.armed)"; '
         )
+    else:
+        out += 'rm -f "$(git rev-parse --git-path push-flow.armed)"; '
     return out
 
 

@@ -606,7 +606,7 @@ def test_launch_script_arms_push_only_in_implement():
     # 境界ありの bootstrap では set -e より前（arm の失敗で起動を止めない）。
     assert body.index("push-flow.armed") < body.index("set -e; ")
     maintain = launch_body([task("A"), task("B", boundary=["pkg/**"])], mode="maintain", default_base="main")
-    assert all("push-flow.armed" not in b for b in maintain.values())
+    assert all('>| "$(git rev-parse --git-path push-flow.armed)"' not in b for b in maintain.values())
 
 
 # ------------------------------------------------------------
@@ -887,6 +887,17 @@ def test_lane_prelude_writes_marker_and_exports_env(tmp_path):
     marker = (main / ".git" / "worktrees" / "lane" / "push-flow.armed").read_text()
     m = re.fullmatch(r"(\d+) 86400 br-A\n", marker)
     assert m and abs(int(m.group(1)) - time.time()) < 60
+
+
+def test_lane_prelude_maintain_clears_leftover_marker(tmp_path):
+    # 同じ worktree の implement が残した arm を maintain の起動で消す（push の親承認制を保つ）。
+    repo = git_repo(tmp_path)
+    marker = repo / ".git" / "push-flow.armed"
+    marker.write_text(f"{int(time.time())} 86400 br-A\n")
+    plan = spec([task("A")], mode="maintain")
+    proc = subprocess.run(["bash", "-c", po.lane_prelude(plan.tasks[0], plan.mode, po.Launch())], cwd=repo)
+    assert proc.returncode == 0
+    assert not marker.exists()
 
 
 def test_render_lanes_section():
