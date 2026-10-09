@@ -383,6 +383,9 @@ case "$cmd" in
             fi
         }
 
+        # 実際の git push の直前に push-arm.sh と同じ形式で arm する（permission-gate 用）
+        bash "$(dirname "$0")/push-arm.sh" "$branch"
+
         used_route=""
         rc=1
         if [ "$ssh_ok" = 1 ]; then
