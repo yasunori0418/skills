@@ -62,7 +62,7 @@ import subprocess
 import sys
 from collections import Counter
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -1641,8 +1641,13 @@ def cmd_transcript(config_dir: Path, args) -> None:
 
 
 def load_session_records(config_dir: Path, filters: SessionFilters) -> Iterator[tuple]:
-    """(ファイル, レコード列) を新しい順に。Agent 起動由来は --include-agents が無ければ除く。"""
-    for f in find_session_files(config_dir, filters):
+    """(ファイル, レコード列) を新しい順に。Agent 起動由来は --include-agents が無ければ除く。
+
+    --until はファイル選別に使わない（until 以降まで続いたセッションの期間内のイベントを
+    落とさないため。上限はイベント時刻の in_date_range で判定する）。Agent の判定は
+    load_sessions と同じ spawned_as_agent に揃える。
+    """
+    for f in find_session_files(config_dir, replace(filters, until=None)):
         records = list(iter_records(f))
         if not filters.include_agents and reduce_session(f.stem, f.parent.name, records).spawned_as_agent:
             continue
