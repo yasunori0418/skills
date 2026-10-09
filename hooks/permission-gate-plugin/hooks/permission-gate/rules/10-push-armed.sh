@@ -52,6 +52,13 @@ done
 [ "${#pos[@]}" -le 2 ] || exit 0
 
 current=$(git -C "$dir" symbolic-ref --short -q HEAD 2>/dev/null) || exit 0
+# 宛先を設定で書き換えうる構成(push.default が simple / current 以外、remote.*.push あり)は
+# コマンドから push 先を確定できないので扱わない
+case "$(git -C "$dir" config push.default 2>/dev/null || echo simple)" in
+simple | current) ;;
+*) exit 0 ;;
+esac
+git -C "$dir" config --get-regexp '^remote\..*\.push$' >/dev/null 2>&1 && exit 0
 dst=$current
 if [ "${#pos[@]}" -eq 2 ]; then
     spec=${pos[1]}
