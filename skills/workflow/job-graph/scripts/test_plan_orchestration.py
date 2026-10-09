@@ -8,7 +8,9 @@ herdr/wt の実行はしない。
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+import time
 
 import pytest
 
@@ -97,6 +99,8 @@ def test_mode_behaviour_properties():
     assert not po.Mode.MAINTAIN.creates_pull_request
     assert po.Mode.MAINTAIN.push_needs_parent_approval
     assert not po.Mode.IMPLEMENT.push_needs_parent_approval
+    assert po.Mode.IMPLEMENT.arms_push_at_launch
+    assert not po.Mode.MAINTAIN.arms_push_at_launch
 
 
 def test_parse_spec_rejects_empty_tasks():
@@ -581,6 +585,26 @@ def test_launch_script_boundary_uses_bootstrap():
     assert "task-boundary.json" in body
 
 
+def test_launch_script_exports_lane_ops_env_only_with_parent_name():
+    # 親名があれば permission-gate の notify がレーン報告できるよう宛先を渡す。
+    # 境界あり・なしの両経路で、claude の exec より前に export する。
+    report_sh = str(po.LANE_OPS_SCRIPTS / "report.sh")
+    bodies = launch_body([task("A"), task("B", boundary=["pkg/**"])], launch=po.Launch(parent_name="orc"))
+    for tid, body in bodies.items():
+        assert f"export LANE_OPS_PARENT=orc LANE_OPS_TASK={tid} LANE_OPS_REPORT_SH={report_sh};" in body
+        assert body.index("export LANE_OPS_PARENT") < body.index("exec claude")
+    assert all("LANE_OPS_" not in b for b in launch_body([task("A"), task("B", boundary=["pkg/**"])]).values())
+
+
+def test_launch_script_arms_push_only_in_implement():
+    # implement の push は計画承認済みなので起動時に arm する。maintain は親承認制を保つ。
+    for body in launch_body([task("A"), task("B", boundary=["pkg/**"])]).values():
+        assert "push-flow.armed" in body
+        assert body.index("push-flow.armed") < body.index("exec claude")
+    maintain = launch_body([task("A"), task("B", boundary=["pkg/**"])], mode="maintain", default_base="main")
+    assert all("push-flow.armed" not in b for b in maintain.values())
+
+
 # ------------------------------------------------------------
 # BOUNDARY_BOOTSTRAP（統合: 実 git repo で bash 実行）
 # ------------------------------------------------------------
@@ -841,6 +865,20 @@ def test_claude_exec_still_launches_on_dangling_symlink(tmp_path):
     proc = run_exec(repo, "the prompt")
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.splitlines() == ["ARGC=1", "ARG=the prompt"]
+
+
+def test_lane_prelude_writes_marker_and_exports_env(tmp_path):
+    # marker は permission-gate が読む 1 行 `<epoch> <ttl秒> <branch>`。epoch は起動時に評価する。
+    repo = git_repo(tmp_path)
+    plan = spec([task("A")])
+    prelude = po.lane_prelude(plan.tasks[0], plan.mode, po.Launch(parent_name="orc"))
+    probe = prelude + 'printf "%s|%s|%s" "$LANE_OPS_PARENT" "$LANE_OPS_TASK" "$LANE_OPS_REPORT_SH"'
+    proc = subprocess.run(["bash", "-c", probe], cwd=repo, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == f"orc|A|{po.LANE_OPS_SCRIPTS / 'report.sh'}"
+    marker = (repo / ".git" / "push-flow.armed").read_text()
+    m = re.fullmatch(r"(\d+) 86400 br-A\n", marker)
+    assert m and abs(int(m.group(1)) - time.time()) < 60
 
 def test_render_lanes_section():
     out = rendered([task("A"), task("B", deps=["A"]), task("C")])
