@@ -588,9 +588,11 @@ def test_launch_script_boundary_uses_bootstrap():
 def test_launch_script_exports_lane_ops_env_only_with_parent_name():
     # 親名があれば permission-gate の notify がレーン報告できるよう宛先を渡す。
     # 境界あり・なしの両経路で、claude の exec より前に export する。
+    # export は mode に依らない（maintain でも親へ報告する）。
     report_sh = str(po.LANE_OPS_SCRIPTS / "report.sh")
-    bodies = launch_body([task("A"), task("B", boundary=["pkg/**"])], launch=po.Launch(parent_name="orc"))
-    for tid, body in bodies.items():
+    launch = po.Launch(parent_name="orc")
+    tasks = [task("A"), task("B", boundary=["pkg/**"])]
+    for tid, body in [*launch_body(tasks, launch=launch).items(), *launch_body(tasks, launch=launch, mode="maintain").items()]:
         assert f"export LANE_OPS_PARENT=orc LANE_OPS_TASK={tid} LANE_OPS_REPORT_SH={report_sh};" in body
         assert body.index("export LANE_OPS_PARENT") < body.index("exec claude")
     assert all("LANE_OPS_" not in b for b in launch_body([task("A"), task("B", boundary=["pkg/**"])]).values())
@@ -601,6 +603,8 @@ def test_launch_script_arms_push_only_in_implement():
     for body in launch_body([task("A"), task("B", boundary=["pkg/**"])]).values():
         assert "push-flow.armed" in body
         assert body.index("push-flow.armed") < body.index("exec claude")
+    # 境界ありの bootstrap では set -e より前（arm の失敗で起動を止めない）。
+    assert body.index("push-flow.armed") < body.index("set -e; ")
     maintain = launch_body([task("A"), task("B", boundary=["pkg/**"])], mode="maintain", default_base="main")
     assert all("push-flow.armed" not in b for b in maintain.values())
 
@@ -869,16 +873,21 @@ def test_claude_exec_still_launches_on_dangling_symlink(tmp_path):
 
 def test_lane_prelude_writes_marker_and_exports_env(tmp_path):
     # marker は permission-gate が読む 1 行 `<epoch> <ttl秒> <branch>`。epoch は起動時に評価する。
-    repo = git_repo(tmp_path)
+    # レーンは linked worktree なので、marker が worktree ごとの git dir に置かれることまで見る。
+    main = git_repo(tmp_path)
+    repo = tmp_path / "lane"
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", "-b", "br-A", str(repo)], check=True)
     plan = spec([task("A")])
     prelude = po.lane_prelude(plan.tasks[0], plan.mode, po.Launch(parent_name="orc"))
     probe = prelude + 'printf "%s|%s|%s" "$LANE_OPS_PARENT" "$LANE_OPS_TASK" "$LANE_OPS_REPORT_SH"'
     proc = subprocess.run(["bash", "-c", probe], cwd=repo, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == f"orc|A|{po.LANE_OPS_SCRIPTS / 'report.sh'}"
-    marker = (repo / ".git" / "push-flow.armed").read_text()
+    assert not (main / ".git" / "push-flow.armed").exists()
+    marker = (main / ".git" / "worktrees" / "lane" / "push-flow.armed").read_text()
     m = re.fullmatch(r"(\d+) 86400 br-A\n", marker)
     assert m and abs(int(m.group(1)) - time.time()) < 60
+
 
 def test_render_lanes_section():
     out = rendered([task("A"), task("B", deps=["A"]), task("C")])
