@@ -1,6 +1,6 @@
 ---
 name: pr-create
-description: "Pull Request / Merge Request を作成するときに必ず参照する。`gh pr create`/`glab mr create` で PR/MR を作る、コミット済みの作業をレビューに出す、並列・stacked 作業の各ブランチで PR を起こす、といった場面で使う。リポジトリの pull_request_template/merge_request_template を決定論スクリプトで検出して優先し、テンプレの骨組み（見出し・チェックリスト・順序）を改変せず入力箇所を埋めるだけにする（作成前に骨組み照合ゲートで機械検証）。無ければ汎用観点で本文を構成。本文の素材は対象リポジトリの git 差分のみに限定し、他リポジトリ・他タスクの内容を混入させない。draft 既定。head が既定ブランチ・main・trunk・master のときだけ push と作成の前にユーザー承認を取り、それ以外は確認せず push して作成する。GitHub(gh) 基本、GitLab(glab) 等にも対応。"
+description: "Pull Request / Merge Request を作成するときに必ず参照する。`gh pr create`/`glab mr create` で PR/MR を作る、コミット済みの作業をレビューに出す、並列・stacked 作業の各ブランチで PR を起こす、といった場面で使う。リポジトリの pull_request_template/merge_request_template を決定論スクリプトで検出して優先し、テンプレの骨組み（見出し・チェックリスト・順序）を改変せず入力箇所を埋めるだけにする（作成前に骨組み照合ゲートで機械検証）。無ければ汎用観点で本文を構成。本文の素材は対象リポジトリの git 差分のみに限定し、他リポジトリ・他タスクの内容を混入させない。draft 既定。head が保護ブランチ（GitHub 上・origin/HEAD の既定ブランチ、main・master・develop・trunk・release 系など）のときだけ push と作成の前にユーザー承認を取り、それ以外は確認せず push して作成する。GitHub(gh) 基本、GitLab(glab) 等にも対応。"
 user-invocable: true
 argument-hint: "[ベースブランチ名や追加指示（任意）]"
 ---
@@ -11,7 +11,7 @@ argument-hint: "[ベースブランチ名や追加指示（任意）]"
 
 ## 制約（厳守）
 
-- **確認の要否は §1 の `CONFIRMATION` に従う**。`confirm: required`（head が既定ブランチ・main・trunk・master）のときだけ、push と作成の前にユーザー承認を取る（§7）。`confirm: skip` なら確認せずに push して作成し、作成後に報告する。
+- **確認の要否は §1 の `CONFIRMATION` に従う**。`confirm: required`（head が保護ブランチ）のときだけ、push と作成の前にユーザー承認を取る（§7）。`confirm: skip` なら確認せずに push して作成し、作成後に報告する。
 - 作成は **draft が既定**。「通常 PR で」の指示時のみ非 draft。
 - **対象リポジトリの取り違え・文脈混入を禁止**。本文・タイトルは `scripts/pr-context.sh` が出す**この作業ディレクトリの git 状態（REPO IDENTITY / COMMITS / DIFF）だけ**を根拠にする。会話履歴に残る別リポジトリ・別タスクの内容を PR 本文へ持ち込まない。スクリプトの `REPO IDENTITY`（repo slug / worktree-root）が、PR を作ろうとしている対象と一致することを作成前に必ず確認する。
 - **テンプレートは確定フォーム。骨組みを改変しない**。`TEMPLATE` が `primary`/選択 `multi` を返したら、見出し・チェックリスト・順序を逐語で保ち、入力箇所を埋めるだけ（§4）。独自フォーマットへの差し替え・セクションの削除/追加/並べ替え・見出しの言い換えは禁止。作成前に `scripts/template-check.sh` の骨組み照合ゲート（§5）を必ず通す。
@@ -36,7 +36,7 @@ bash <skill-dir>/scripts/pr-context.sh [base-branch]
 - **BASE BRANCH** = リモート既定ブランチではなく、**作業ブランチの分岐元**をローカル探索した結果。`(特定できませんでした)` や誤検出が疑わしいときは引数 `base-branch` を渡して再実行、またはユーザーに確認。
 - **COMMITS / COMMIT MESSAGES** = 本文の主素材。
 - **DIFF STAT / CHANGED FILES** = 変更範囲。完全差分が要れば末尾の `git diff <base>...HEAD` を別途実行。
-- **CONFIRMATION** = head が保護ブランチか（`protected` は既定ブランチ・main・trunk・master）。`confirm: required` なら §7 で承認を取り、`skip` なら取らない。
+- **CONFIRMATION** = head が保護ブランチか。`protected` は静的リスト（main・master・develop・development・trunk・release・release/*・releases/*）に、`origin/HEAD` と GitHub 上（`gh repo view`）の既定ブランチを加えたもの。`default` に両者の取得結果が出る。`confirm: required` なら §7 で承認を取り、`skip` なら取らない。
 - **UPSTREAM / PUSH STATUS** に WARNING（未 push／未 push コミットあり）が出たら記録しておき、§7 の作成直前に push する。ここではまだ push しない。
 
 ### 2. テンプレート確認
