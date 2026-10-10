@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "claude-skills",
+  "name": "agent-ops-skills",
   "description": "Claude Code 運用スキル群（response-format / session-insights / project-session / agent-teams）。応答整形・セッション分析・ghq プロジェクトの単発 claude 起動・agent teams の後始末などの Claude Code 固有の運用ルールを扱う。",
   "version": "0.2.2",
   "author": {
