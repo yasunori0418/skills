@@ -5,6 +5,7 @@
 #   - background_tasks が空・欠落・壊れた JSON なら沈黙（fail-open）
 #   - stop_hook_active=true なら 2 回目以降は沈黙（8 連続上限の空転防止）
 #   - description 欠落時は agent_type → id の順にフォールバック
+#   - 各行に TaskStop 用の id を添える（id 欠落時は付けない）
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 GUARD="$SCRIPT_DIR/../main.sh"
@@ -33,13 +34,13 @@ TWO_SUBAGENTS='{"background_tasks":[
   {"id":"a2","type":"subagent","status":"idle","description":"spec レンズでレビュー","agent_type":"diff-reviewer"}
 ]}'
 check "two-subagents" "稼働中のサブエージェント/チームメイトが 2 体残っています:" "$(summary "$TWO_SUBAGENTS")"
-check "two-subagents-list" "  - design レンズでレビュー (subagent)" "$(context "$TWO_SUBAGENTS" | sed -n '2p')"
+check "two-subagents-list" "  - design レンズでレビュー (subagent, id=a1)" "$(context "$TWO_SUBAGENTS" | sed -n '2p')"
 
 TEAMMATE='{"background_tasks":[
   {"id":"t1","type":"teammate","status":"idle","description":"nav2-e1-skill"}
 ]}'
 check "teammate" "稼働中のサブエージェント/チームメイトが 1 体残っています:" "$(summary "$TEAMMATE")"
-check "teammate-list" "  - nav2-e1-skill (teammate)" "$(context "$TEAMMATE" | sed -n '2p')"
+check "teammate-list" "  - nav2-e1-skill (teammate, id=t1)" "$(context "$TEAMMATE" | sed -n '2p')"
 
 # 停止対象外の type は数えない
 check "shell-only" "" "$(context '{"background_tasks":[{"id":"s1","type":"shell","status":"running","command":"tail -f log"}]}')"
@@ -64,10 +65,13 @@ NOT_ACTIVE='{"stop_hook_active":false,"background_tasks":[{"id":"a1","type":"sub
 check "stop-hook-inactive" "稼働中のサブエージェント/チームメイトが 1 体残っています:" "$(summary "$NOT_ACTIVE")"
 
 # 説明のフォールバック: description 無し -> agent_type -> id
-check "fallback-agent-type" "  - test-reviewer (subagent)" \
+check "fallback-agent-type" "  - test-reviewer (subagent, id=a1)" \
     "$(context '{"background_tasks":[{"id":"a1","type":"subagent","agent_type":"test-reviewer"}]}' | sed -n '2p')"
-check "fallback-id" "  - a1 (subagent)" \
+check "fallback-id" "  - a1 (subagent, id=a1)" \
     "$(context '{"background_tasks":[{"id":"a1","type":"subagent"}]}' | sed -n '2p')"
+# id が無ければ id= を付けない（"id=null" などを出さない）
+check "no-id" "  - レビュー (subagent)" \
+    "$(context '{"background_tasks":[{"type":"subagent","description":"レビュー"}]}' | sed -n '2p')"
 
 # 出力形式のリグレッション: hookSpecificOutput は cchook 経由（Stop イベント）で
 # "not supported" として握り潰され Claude まで届かないため、使ってはいけない。
@@ -103,7 +107,7 @@ RUNNING_AND_IDLE='{"background_tasks":[
   {"id":"t1","type":"teammate","status":"idle","description":"回収済みレーン"}
 ]}'
 check "mixed-status-summary" "稼働中のサブエージェント/チームメイトが 1 体残っています:" "$(summary "$RUNNING_AND_IDLE")"
-check "mixed-status-list" "  - 回収済みレーン (teammate)" "$(context "$RUNNING_AND_IDLE" | sed -n '2p')"
+check "mixed-status-list" "  - 回収済みレーン (teammate, id=t1)" "$(context "$RUNNING_AND_IDLE" | sed -n '2p')"
 # running のものが一覧のどこにも出ないことを件数で固定する
 check "mixed-status-count" "1" "$(context "$RUNNING_AND_IDLE" | grep -c '^  - ' || true)"
 
