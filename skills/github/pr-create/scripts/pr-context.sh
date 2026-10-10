@@ -228,6 +228,24 @@ echo "=== CURRENT BRANCH ==="
 echo "$current"
 echo ""
 
+echo "=== CONFIRMATION ==="
+# head（push 先）が保護ブランチなら push と PR 作成の前にユーザー確認を取る。
+# 保護ブランチ = origin/HEAD が指す既定ブランチ・main・trunk・master
+protected=(main trunk master)
+if def=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null); then
+    case " ${protected[*]} " in
+    *" ${def#origin/} "*) ;;
+    *) protected=("${def#origin/}" "${protected[@]}") ;;
+    esac
+fi
+confirm=skip
+for p in "${protected[@]}"; do
+    [ "$current" = "$p" ] && confirm=required
+done
+echo "protected: ${protected[*]}"
+echo "confirm: $confirm"
+echo ""
+
 echo "=== REPO IDENTITY ==="
 detect_repo_identity
 echo ""
@@ -276,11 +294,11 @@ if upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null
     ahead=$(echo "$counts" | awk '{print $2}')
     echo "ahead: $ahead / behind: $behind"
     if [ "$ahead" != "0" ]; then
-        echo "WARNING: ローカルに未 push のコミットが ${ahead} 件あります。push はユーザーが実施してください。"
+        echo "WARNING: ローカルに未 push のコミットが ${ahead} 件あります。PR 作成前に push が必要です。"
     fi
 else
     echo "upstream: (未設定 — リモート未 push)"
-    echo "WARNING: このブランチはリモートに push されていません。PR 作成前にユーザーが push する必要があります。"
+    echo "WARNING: このブランチはリモートに push されていません。PR 作成前に push が必要です。"
 fi
 echo ""
 
