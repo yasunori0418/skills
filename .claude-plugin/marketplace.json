@@ -39,7 +39,7 @@
     },
     {
       "name": "agent-ops-skills",
-      "source": "./skills/claude",
+      "source": "./skills/agent-ops",
       "description": "Claude Code 固有の運用スキル群（response-format / session-insights / project-session / agent-teams）。",
       "author": {
         "name": "yasunori0418"
