@@ -28,15 +28,15 @@ let
     # mizchi/skills（apm/waxa 依存の強い skill-finder 系は対象外）
     {
       src = inputs.mizchi-skills;
-      subpath = "meta/empirical-prompt-tuning"; # サブエージェントに実際に読ませて検証する実証的チューニング
+      subpath = "empirical-prompt-tuning"; # サブエージェントに実際に読ませて検証する実証的チューニング
     }
     {
       src = inputs.mizchi-skills;
-      subpath = "meta/optimizing-descriptions"; # SKILL.md の description フィールド監査チェックリスト
+      subpath = "optimizing-descriptions"; # SKILL.md の description フィールド監査チェックリスト
     }
     {
       src = inputs.mizchi-skills;
-      subpath = "meta/retrospective-codify"; # 失敗/成功ペアを skill・CLAUDE.md ルールとして明文化
+      subpath = "retrospective-codify"; # 失敗/成功ペアを skill・CLAUDE.md ルールとして明文化
     }
 
     # anthropics/skills
