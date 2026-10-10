@@ -60,6 +60,10 @@ exec "$BASH" -c "$cmd"
 EOF
 } >"$WORK/bin/ssh"
 chmod +x "$WORK/bin/ssh"
+# 偽 gh: 常に失敗する。fake-host では本物の gh も未認証・接続不能で同じ結果になるが、
+# 本物は接続の失敗に数秒かかり、保護ブランチ判定の gh api が毎回走るとテストが遅くなる
+printf '#!%s\nexit 1\n' "$BASH" >"$WORK/bin/gh"
+chmod +x "$WORK/bin/gh"
 PATH="$WORK/bin:$PATH"
 export PATH
 
@@ -233,5 +237,32 @@ commit_on "$D/work" "feat: on main"
 run "$D/work" push main --force
 check "protected-exit" 1 "$RC"
 has "protected-msg" "$OUT" "保護ブランチ"
+
+# --- 保護ブランチへの通常 push: --allow-protected が無ければ拒否、あれば通す ---
+run "$D/work" preflight main
+check "protected-preflight-exit" 0 "$RC"
+has "protected-preflight-flag" "$OUT" "protected:  yes（静的リスト）"
+has "protected-preflight-warn" "$OUT" "--allow-protected を付けること"
+run "$D/work" push main
+check "protected-plain-exit" 1 "$RC"
+has "protected-plain-msg" "$OUT" "--allow-protected が必要"
+check "protected-plain-remote-unchanged" "$(git -C "$D/remote.git" rev-parse main~0)" \
+    "$(git -C "$D/remote.git" rev-parse main)"
+[ "$(git -C "$D/remote.git" rev-parse main)" != "$(git -C "$D/work" rev-parse main)" ] &&
+    check "protected-plain-not-pushed" yes yes || check "protected-plain-not-pushed" yes no
+run "$D/work" push main --allow-protected
+check "protected-allowed-exit" 0 "$RC"
+check "protected-allowed-remote" "$(git -C "$D/work" rev-parse main)" "$(git -C "$D/remote.git" rev-parse main)"
+run "$D/work" push main --force --allow-protected
+check "protected-force-still-denied" 1 "$RC"
+
+# --- origin/HEAD が指す静的リスト外のブランチも保護する ---
+D="$WORK/prot-head" && new_pair "$D" 0 production
+commit_on "$D/work" "feat: on production"
+git -C "$D/work" update-ref refs/remotes/origin/production main
+git -C "$D/work" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/production
+run "$D/work" push production
+check "origin-head-plain-exit" 1 "$RC"
+has "origin-head-msg" "$OUT" "origin/HEAD"
 
 exit $fail
