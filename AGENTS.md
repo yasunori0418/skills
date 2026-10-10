@@ -26,9 +26,6 @@ AI エージェント向けスキルを管理するリポジトリ。スキル�
   `skills/<category>/.claude-plugin/plugin.json`（`name: "<category>-skills"`）を置き、
   marketplace の `source` は `./skills/<category>`。`skills` / `agents` 参照は
   **category root からの相対**（`./<skill-name>` / `./<skill-name>/agents/<name>.md`）。
-  例外: `skills/claude/` のプラグイン名は `agent-ops-skills`。プラグイン名に `claude` を
-  含むと `claude plugin validate --strict` が Anthropic 公式と紛らわしい名前として弾くため
-  （ディレクトリ名は dotfiles の配置参照があるので据え置く）。
 - **hook プラグイン**（10 個）: skill 非依存の guard/通知 hook を **hook 単位**で
   独立プラグイン化し、利用者が個別に install / on-off できる。各プラグイン root は
   `hooks/<plugin>/`（`yasunori0418-askuserquestion-hooks` /
