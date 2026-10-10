@@ -5,21 +5,39 @@
 #     (対象は同一コマンド内の単純代入と cd 前置だけで静的解決する)
 #   - 一時領域外 / 解決不能(置換・コマンド外の変数・glob 等)/ root そのもの /
 #     symlink 越し / gitignore されていない tmp-agents / rm 以外の処理を含む  -> 沈黙
+#   - GNU の realpath が無く BSD 版だけ(macOS 標準)                         -> 沈黙(grealpath があれば使う)
 #   - いずれも exit 0
+#   fixture を一時領域の外に置けない環境(darwin の nix sandbox)では、fixture に依らないケースだけ検証する
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 RULE="$SCRIPT_DIR/../rules/20-rm-scratch.sh"
 
 U=$(id -u)
-# fixture は一時領域の外に置く(/tmp・/var/tmp の中だと「領域外」のケースが成り立たない)。
-# nix の sandbox では TMPDIR=/build なのでそのまま使い、手元では XDG_CACHE_HOME 側へ逃がす
-base=$(realpath -m -- "${TMPDIR:-/tmp}")
-case "$base/" in "$(realpath -m /tmp)"/* | "$(realpath -m /var/tmp)"/*)
-    base=${XDG_CACHE_HOME:-$HOME/.cache}
-    mkdir -p "$base"
-    ;;
-esac
-TMP=$(mktemp -d -p "$base")
+rp=realpath
+command -v grealpath >/dev/null && rp=grealpath
+in_tmp() { # path -> 規則の既定の一時領域(/tmp・/var/tmp・DARWIN_USER_TEMP_DIR)の中か
+    local p r d
+    p=$("$rp" -m -- "$1")
+    for r in /tmp /var/tmp $(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true); do
+        d=$("$rp" -m -- "$r")
+        case "$p/" in "$d"/*) return 0 ;; esac
+    done
+    return 1
+}
+# fixture は一時領域の外に置く(中だと「領域外」のケースが成り立たない)。
+# Linux の nix sandbox では TMPDIR=/build なのでそのまま使い、手元では XDG_CACHE_HOME 側へ逃がす。
+# darwin の nix sandbox は /private/tmp の下しか書けないので、外に置けなければ該当ケースを SKIP する
+outside=1
+base=${TMPDIR:-/tmp}
+if in_tmp "$base"; then
+    base=${XDG_CACHE_HOME:-${HOME:-/nonexistent}/.cache}
+    { mkdir -p "$base" && [ -w "$base" ] && ! in_tmp "$base"; } 2>/dev/null || outside=0
+fi
+if [ "$outside" -eq 1 ]; then
+    TMP=$(mktemp -d -p "$base")
+else
+    TMP=$(mktemp -d)
+fi
 trap 'rm -rf "$TMP"' EXIT
 # 本物の notify.sh は実通知・親レーンへの報告を出すため、ダミーに差し替えたコピー上で検証する
 GATE_DIR="$TMP/gate"
@@ -86,6 +104,34 @@ expect() { # label expected command [cwd] [tool_name] -> 規則単体と dispatc
     check "$1:gate" "$2" "$(via_gate "${@:3}")"
 }
 
+# 既定の一時領域だけで決まるケース(fixture の置き場所に依らないので cwd は /)
+expect "tmp-any" allow "rm -rf /tmp/nur-cchook-src" /
+expect "tmp-other-uid" allow "rm -rf /tmp/claude-0$U/x" /
+expect "var-tmp" allow "rm -rf /var/tmp/x" /
+expect "cd-tmp" allow "cd /tmp && rm -rf nur-cchook-src" /
+expect "root-itself" "" "rm -rf /tmp" /
+expect "root-trailing-slash" "" "S=/tmp; rm -rf \$S/" /
+expect "var-tmp-itself" "" "rm -rf /var/tmp" /
+expect "cd-tmp-dot" "" "cd /tmp && rm -rf ." /
+expect "dotdot" "" "rm -rf /tmp/../x" /
+expect "tmp-prefix" "" "rm -rf /tmpx/y" /
+expect "var-tmp-prefix" "" "rm -rf /var/tmpx/y" /
+# macOS 標準の BSD realpath(-m なし)だけなら扱わず、coreutils の grealpath があればそれを使う
+BSD="$TMP/bsd-bin" GNU="$TMP/gnu-bin"
+mkdir -p "$BSD" "$GNU"
+printf '#!/bin/sh\nexit 1\n' >"$BSD/realpath"
+cp "$BSD/realpath" "$BSD/grealpath"
+chmod +x "$BSD/realpath" "$BSD/grealpath"
+# coreutils は呼び出し名で振り分ける multi-call のことがあるので、symlink でなく包む
+printf '#!/bin/sh\nexec %s "$@"\n' "$(command -v "$rp")" >"$GNU/grealpath"
+chmod +x "$GNU/grealpath"
+check "bsd-realpath-only" "" "$(PATH="$BSD:$PATH" via_rule "rm -rf /tmp/x" /)"
+check "prefer-grealpath" allow "$(PATH="$GNU:$BSD:$PATH" via_rule "rm -rf /tmp/x" /)"
+if [ "$outside" -eq 0 ]; then
+    echo "SKIP: $(basename "$0") 一時領域の外に fixture を置けないため、残りのケースを省略"
+    exit "$fail"
+fi
+
 # allow: 一時領域だけの rm
 expect "assign-scratchpad" allow "S=$SP; rm -rf \$S/wt2"
 expect "assign-braces" allow "S=$SP && rm -rf \${S}/wt2"
@@ -96,10 +142,6 @@ expect "multi-rm" allow "rm -f $SP/a; rm -rf $SP/b"
 expect "long-options" allow "rm --recursive --force $SP/x"
 expect "double-dash" allow "rm -f -- $SP/-x"
 expect "nix-shell" allow "rm -rf /tmp/nix-shell.AbC123/claude-$U/x"
-expect "tmp-any" allow "rm -rf /tmp/nur-cchook-src"
-expect "tmp-other-uid" allow "rm -rf /tmp/claude-0$U/x"
-expect "var-tmp" allow "rm -rf /var/tmp/x"
-expect "cd-tmp" allow "cd /tmp && rm -rf nur-cchook-src"
 expect "tmpdir" allow "rm -rf $TMPDIR/x"
 expect "tmpdir-symlink-itself" allow "rm -f $TMPDIR/esc"
 expect "tmp-agents" allow "rm -rf tmp-agents/x"
@@ -113,14 +155,7 @@ expect "cd-dotdot" allow "cd .. && rm -rf tmp-agents/x" "$REPO/tmp-agents"
 expect "outside" "" "rm -rf ./build"
 expect "outside-abs" "" "rm -rf $TMP/repo/x"
 expect "mixed" "" "rm -rf $SP/x ./build"
-expect "root-itself" "" "rm -rf /tmp"
-expect "root-trailing-slash" "" "S=/tmp; rm -rf \$S/"
-expect "var-tmp-itself" "" "rm -rf /var/tmp"
-expect "cd-tmp-dot" "" "cd /tmp && rm -rf ."
-expect "dotdot" "" "rm -rf /tmp/../x"
 expect "dot-last" "" "rm -rf $SP/."
-expect "tmp-prefix" "" "rm -rf /tmpx/y"
-expect "var-tmp-prefix" "" "rm -rf /var/tmpx/y"
 expect "cd-symlink-escape" "" "cd $TMPDIR/esc && rm -rf x"
 check "tmpdir-root:rule" "" "$(TMPDIR=/ via_rule "rm -rf $TMP/repo/x")"
 check "tmpdir-root:gate" "" "$(TMPDIR=/ via_gate "rm -rf $TMP/repo/x")"

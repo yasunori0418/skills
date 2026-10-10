@@ -12,7 +12,8 @@
 #   - cd は以降のセグメントの基準ディレクトリを変える。cd が失敗しても後続が走らないよう、
 #     cd 以降の区切りは && に限る
 #   - 全対象が一時領域の内側(領域そのものは不可): /tmp/**、/var/tmp/**、$TMPDIR/**、
-#     cwd のリポジトリ直下 tmp-agents/**
+#     macOS の DARWIN_USER_TEMP_DIR/**、cwd のリポジトリ直下 tmp-agents/**
+#     (macOS の /tmp・/var/tmp は /private 配下への symlink だが、物理パスで比べるので同じに扱う)
 #     (`git check-ignore` を通るときのみ)。比較は物理パスで行い、対象は親ディレクトリを
 #     解決して末尾要素を保持する(末尾 / なら全体を解決)ので、symlink 越しの削除は外れる
 set -uo pipefail
@@ -23,7 +24,13 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
 [ -n "$cmd" ] || exit 0
 case "$cwd" in /*) ;; *) exit 0 ;; esac
-command -v realpath >/dev/null && realpath -m / >/dev/null 2>&1 || exit 0
+# GNU の realpath(-m / -s)が要る。macOS 標準の BSD realpath は -m を持たないので、
+# coreutils の grealpath を優先し、どちらも使えなければ扱わない
+rp=""
+for c in grealpath realpath; do
+    command -v "$c" >/dev/null && "$c" -m / >/dev/null 2>&1 && rp=$c && break
+done
+[ -n "$rp" ] || exit 0
 
 # 置換・引用符・glob・リダイレクト・コメント・チルダ・単独の & | を含むものは扱わない
 case "$cmd" in *__AND__* | *__SEQ__*) exit 0 ;; esac
@@ -49,23 +56,27 @@ expand() { # word -> $NAME / ${NAME} をコマンド内の代入で展開して 
 physical() { # 絶対パス -> rm が実際に消す実体の物理パスを $REPLY へ
     local p=$1 parent base
     case "$p" in
-    */) REPLY=$(realpath -m -- "$p") || return 1 ;;
+    */) REPLY=$("$rp" -m -- "$p") || return 1 ;;
     *)
         parent=${p%/*} base=${p##*/}
         case "$base" in . | ..) return 1 ;; esac
-        parent=$(realpath -m -- "${parent:-/}") || return 1
+        parent=$("$rp" -m -- "${parent:-/}") || return 1
         REPLY=${parent%/}/$base
         ;;
     esac
 }
 
-roots=("$(realpath -m /tmp)" "$(realpath -m /var/tmp)")
-if [[ ${TMPDIR:-} == /?* ]] && tmpdir=$(realpath -m -- "$TMPDIR"); then
+roots=("$("$rp" -m /tmp)" "$("$rp" -m /var/tmp)")
+if [[ ${TMPDIR:-} == /?* ]] && tmpdir=$("$rp" -m -- "$TMPDIR"); then
     roots+=("$tmpdir")
+fi
+# macOS の利用者ごとの一時ディレクトリ(/var/folders/…/T/)。hook に TMPDIR が渡らなくても拾う
+if darwin_tmp=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && [[ $darwin_tmp == /?* ]]; then
+    roots+=("$("$rp" -m -- "$darwin_tmp")")
 fi
 if top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) &&
     git -C "$top" check-ignore -q tmp-agents 2>/dev/null; then
-    roots+=("$(realpath -m -- "$top/tmp-agents")")
+    roots+=("$("$rp" -m -- "$top/tmp-agents")")
 fi
 in_scratch() { # 物理パス -> いずれかの一時領域の内側か
     local r
@@ -77,7 +88,7 @@ in_scratch() { # 物理パス -> いずれかの一時領域の内側か
 }
 
 # 基準ディレクトリは論理(cd -L が辿る)と物理(rm の相対パスを kernel が解決する)の両方を持つ
-ldir=$cwd dir=$(realpath -m -- "$cwd") || exit 0
+ldir=$cwd dir=$("$rp" -m -- "$cwd") || exit 0
 after_cd=0 count=0 seg=()
 run_segment() { # seg の 1 セグメントを解釈する。扱えなければ失敗
     [ "${#seg[@]}" -gt 0 ] || return 0
@@ -91,8 +102,8 @@ run_segment() { # seg の 1 セグメントを解釈する。扱えなければ�
         *) return 1 ;;
         esac
         # 論理解決(cd -L)と物理解決(set -P・zsh の CHASE_DOTS)で行き先が変わるものは扱わない
-        t=$(realpath -m -s -- "$t") && w=$(realpath -m -- "$w") || return 1
-        [ "$(realpath -m -- "$t")" = "$w" ] || return 1
+        t=$("$rp" -m -s -- "$t") && w=$("$rp" -m -- "$w") || return 1
+        [ "$("$rp" -m -- "$t")" = "$w" ] || return 1
         ldir=$t dir=$w
         after_cd=1
         ;;
