@@ -9,7 +9,9 @@
 #   - 判定ディレクトリ(cd 先、無ければ cwd)の `git rev-parse --git-path push-flow.armed` が
 #     `<epoch> <ttl秒> <branch>` で期限内、かつ branch が現在のブランチ・push 先と一致
 #     (期限切れの marker は削除する)
-#   - push 先が default branch(origin/HEAD、解決できなければ main / master)でない
+#   - push 先が保護ブランチでない。保護ブランチは origin/HEAD が指す既定ブランチと、静的リスト
+#     main / master / develop / development / trunk / release / release/* / releases/*
+#     (origin/HEAD は未設定・古いことがあるので、静的リストは常に併用する。hook はネットワークに出ない)
 set -uo pipefail
 
 input=$(cat)
@@ -83,13 +85,11 @@ if [ "$(date +%s)" -gt "$((epoch + ttl))" ]; then
 fi
 [ "${branch:-}" = "$current" ] && [ "$dst" = "$current" ] || exit 0
 
+case "$dst" in
+main | master | develop | development | trunk | release | release/* | releases/*) exit 0 ;;
+esac
 if default=$(git -C "$dir" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null); then
-    defaults=("${default#origin/}")
-else
-    defaults=(main master)
+    [ "$dst" = "${default#origin/}" ] && exit 0
 fi
-for d in "${defaults[@]}"; do
-    [ "$dst" = "$d" ] && exit 0
-done
 
 echo "push-flow.armed が有効($branch、期限 $((epoch + ttl)))"

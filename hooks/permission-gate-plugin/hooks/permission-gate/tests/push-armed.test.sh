@@ -3,7 +3,9 @@
 #   - marker 有効 + ブランチ一致 + 単独 push(cd … && 前置のみ可) -> allow
 #   - marker なし / 期限切れ(marker 削除)/ ブランチ不一致            -> 沈黙
 #   - 複合コマンド / 他の ask 対象(rm・curl・wget)を含む            -> 沈黙
-#   - default branch(origin/HEAD、無ければ main / master)への push -> 沈黙
+#   - 保護ブランチ(origin/HEAD の既定ブランチ + 静的リスト main / master / develop /
+#     development / trunk / release / release/* / releases/*)への push -> 沈黙
+#     (origin/HEAD が無くても静的リストで守る)
 #   - force 等の許可外オプション / 非リテラルの cd / Bash 以外       -> 沈黙
 #   - いずれも exit 0
 set -euo pipefail
@@ -18,8 +20,10 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 REPO="$TMP/repo"     # feat/x、origin/HEAD -> main
 OTHER="$TMP/other"   # feat/x、marker なし(cd 先の marker を見ることの確認用)
-MAINREPO="$TMP/main" # main、origin/HEAD なし(main / master フォールバック)
+MAINREPO="$TMP/main" # main、origin/HEAD なし(静的リストで守る)
 DEVREPO="$TMP/dev"   # develop、origin/HEAD -> develop(default branch の主経路)
+NOHEAD="$TMP/nohead" # develop、origin/HEAD なし(静的リストで守る)
+PROD="$TMP/prod"     # production、origin/HEAD -> production(静的リストに無い既定ブランチ)
 WT="$TMP/wt"         # REPO の linked worktree(feat/w)。marker は worktree ごとに別
 git init -q -b feat/x "$REPO"
 git -C "$REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
@@ -29,6 +33,9 @@ git init -q -b feat/x "$OTHER"
 git init -q -b main "$MAINREPO"
 git init -q -b develop "$DEVREPO"
 git -C "$DEVREPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/develop
+git init -q -b develop "$NOHEAD"
+git init -q -b production "$PROD"
+git -C "$PROD" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/production
 
 fail=0
 check() { # label expected actual
@@ -130,7 +137,7 @@ check "delete" "" "$(behavior 'git push origin --delete feat/x')"
 # Bash 以外 -> 沈黙
 check "non-bash" "" "$(behavior 'git push' "$REPO" Write)"
 
-# default branch への push -> 沈黙(arm があっても)
+# 保護ブランチへの push -> 沈黙(arm があっても)
 check "dst-main-mismatch" "" "$(behavior 'git push origin HEAD:main')"
 arm "$DEVREPO" develop
 check "default-origin-head" "" "$(behavior 'git push' "$DEVREPO")"
@@ -139,6 +146,18 @@ check "default-fallback-main" "" "$(behavior 'git push' "$MAINREPO")"
 git -C "$MAINREPO" symbolic-ref HEAD refs/heads/master
 arm "$MAINREPO" master
 check "default-fallback-master" "" "$(behavior 'git push' "$MAINREPO")"
+arm "$NOHEAD" develop
+check "static-develop-no-origin-head" "" "$(behavior 'git push -u origin develop' "$NOHEAD")"
+for b in development trunk release release/1.0 releases/2026; do
+    git -C "$NOHEAD" symbolic-ref HEAD "refs/heads/$b"
+    arm "$NOHEAD" "$b"
+    check "static-$b" "" "$(behavior "git push -u origin $b" "$NOHEAD")"
+done
+git -C "$NOHEAD" symbolic-ref HEAD refs/heads/release-notes
+arm "$NOHEAD" release-notes
+check "static-prefix-only" allow "$(behavior 'git push -u origin release-notes' "$NOHEAD")"
+arm "$PROD" production
+check "origin-head-non-static" "" "$(behavior 'git push' "$PROD")"
 
 # marker の内容が不正 -> 沈黙
 : >|"$(marker "$REPO")"
