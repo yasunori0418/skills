@@ -1,6 +1,6 @@
 ---
 name: pr-create
-description: "Pull Request / Merge Request を作成するときに必ず参照する。`gh pr create`/`glab mr create` で PR/MR を作る、コミット済みの作業をレビューに出す、並列・stacked 作業の各ブランチで PR を起こす、といった場面で使う。リポジトリの pull_request_template/merge_request_template を決定論スクリプトで検出して優先し、テンプレの骨組み（見出し・チェックリスト・順序）を改変せず入力箇所を埋めるだけにする（作成前に骨組み照合ゲートで機械検証）。無ければ汎用観点で本文を構成。本文の素材は対象リポジトリの git 差分のみに限定し、他リポジトリ・他タスクの内容を混入させない。draft 既定・作成前にユーザー承認。未 push のときは AskUserQuestion で承認を取ってから push。GitHub(gh) 基本、GitLab(glab) 等にも対応。"
+description: "Pull Request / Merge Request を作成するときに必ず参照する。`gh pr create`/`glab mr create` で PR/MR を作る、コミット済みの作業をレビューに出す、並列・stacked 作業の各ブランチで PR を起こす、といった場面で使う。リポジトリの pull_request_template/merge_request_template を決定論スクリプトで検出して優先し、テンプレの骨組み（見出し・チェックリスト・順序）を改変せず入力箇所を埋めるだけにする（作成前に骨組み照合ゲートで機械検証）。無ければ汎用観点で本文を構成。本文の素材は対象リポジトリの git 差分のみに限定し、他リポジトリ・他タスクの内容を混入させない。draft 既定。head が既定ブランチ・main・trunk・master のときだけ push と作成の前にユーザー承認を取り、それ以外は確認せず push して作成する。GitHub(gh) 基本、GitLab(glab) 等にも対応。"
 user-invocable: true
 argument-hint: "[ベースブランチ名や追加指示（任意）]"
 ---
@@ -11,9 +11,8 @@ argument-hint: "[ベースブランチ名や追加指示（任意）]"
 
 ## 制約（厳守）
 
-- **push は無断で行わない**。未 push を検出しても勝手に push せず、作成直前に **AskUserQuestion で push 可否の承認**を取る（要点・選択肢は本文にも記載。§7）。承認されれば push してよい。拒否ならユーザーに委ねて停止。
+- **確認の要否は §1 の `CONFIRMATION` に従う**。`confirm: required`（head が既定ブランチ・main・trunk・master）のときだけ、push と作成の前にユーザー承認を取る（§7）。`confirm: skip` なら確認せずに push して作成し、作成後に報告する。
 - 作成は **draft が既定**。「通常 PR で」の指示時のみ非 draft。
-- **作成前に必ずタイトルと本文を提示しユーザー承認を得てから** 作成コマンドを実行する。
 - **対象リポジトリの取り違え・文脈混入を禁止**。本文・タイトルは `scripts/pr-context.sh` が出す**この作業ディレクトリの git 状態（REPO IDENTITY / COMMITS / DIFF）だけ**を根拠にする。会話履歴に残る別リポジトリ・別タスクの内容を PR 本文へ持ち込まない。スクリプトの `REPO IDENTITY`（repo slug / worktree-root）が、PR を作ろうとしている対象と一致することを作成前に必ず確認する。
 - **テンプレートは確定フォーム。骨組みを改変しない**。`TEMPLATE` が `primary`/選択 `multi` を返したら、見出し・チェックリスト・順序を逐語で保ち、入力箇所を埋めるだけ（§4）。独自フォーマットへの差し替え・セクションの削除/追加/並べ替え・見出しの言い換えは禁止。作成前に `scripts/template-check.sh` の骨組み照合ゲート（§5）を必ず通す。
 - **PR本文にセッションURLを含めない**。Claude Code の既定動作は本文末尾にセッションへのリンクを付与するが、このリポジトリでは付与しない。ローカル CLI・remote-control のどちらのセッションでも同様。
@@ -37,7 +36,8 @@ bash <skill-dir>/scripts/pr-context.sh [base-branch]
 - **BASE BRANCH** = リモート既定ブランチではなく、**作業ブランチの分岐元**をローカル探索した結果。`(特定できませんでした)` や誤検出が疑わしいときは引数 `base-branch` を渡して再実行、またはユーザーに確認。
 - **COMMITS / COMMIT MESSAGES** = 本文の主素材。
 - **DIFF STAT / CHANGED FILES** = 変更範囲。完全差分が要れば末尾の `git diff <base>...HEAD` を別途実行。
-- **UPSTREAM / PUSH STATUS** に WARNING（未 push／未 push コミットあり）が出たら記録しておき、§7 の作成直前に **AskUserQuestion で push 可否の承認**を取る（承認されれば push、拒否なら停止）。ここで自動 push はしない。
+- **CONFIRMATION** = head が保護ブランチか（`protected` は既定ブランチ・main・trunk・master）。`confirm: required` なら §7 で承認を取り、`skip` なら取らない。
+- **UPSTREAM / PUSH STATUS** に WARNING（未 push／未 push コミットあり）が出たら記録しておき、§7 の作成直前に push する。ここではまだ push しない。
 
 ### 2. テンプレート確認
 
@@ -116,27 +116,26 @@ bash <skill-dir>/scripts/pr-context.sh [base-branch]
 
 Conventional Commits 形式（`<type>(<scope>): <subject>`、commit-flow スキル準拠）を基本。単一コミットはそのメッセージを流用、複数は全体を要約。既存 PR にタイトル規約があればそれを優先。
 
-### 7. 承認 →（未 push なら push 承認）→ 作成
+### 7. （確認）→ push → 作成
 
-1. タイトルと本文をチャットに提示 → ユーザー承認。
-2. §1 の PUSH STATUS が WARNING（未 push／未 push コミットあり）なら、**AskUserQuestion で push 可否の承認**を取る（要点と選択肢は本文にも記載／CLAUDE.md 準拠）。
-   - 承認 → **`bash <skill-dir>/../gh-push/scripts/push-arm.sh <branch>` で arm してから** push する（承認済みの push を permission-gate hook に通させる marker。順序は「push 承認 → arm → push」で固定）。permission-gate は push を**実行する前**に判定するため、次を守らないと承認ダイアログが出る:
+1. §1 の `CONFIRMATION` が `confirm: required` なら、タイトルと本文をチャットに提示し、push が要るときはその可否もあわせて **AskUserQuestion で承認**を取る（要点と選択肢は本文にも記載／CLAUDE.md 準拠）。拒否されたら push も作成もせず停止する。`confirm: skip` なら確認を取らずに次へ進む。
+2. §1 の PUSH STATUS が WARNING（未 push／未 push コミットあり）なら push する。既に push 済みならこの手順は不要。
+   - push の直前に **`bash <skill-dir>/scripts/push-arm.sh <branch>` で arm する**（permission-gate hook に push を通させる marker）。permission-gate は push を**実行する前**に判定するため、次を守らないと承認ダイアログが出る:
      - arm と push は**別々の Bash 呼び出し**にする（同じ呼び出しでは判定時点で marker がまだ無い）。
      - arm のパスは `<skill-dir>` を実パスに置き換えて書く。`$(fd …)` 等の置換でスクリプトを探さない。
      - push は `git push [-u] origin <branch>` か `cd <リテラルのパス> && git push [-u] origin <branch>` だけにする。`;`・パイプ・`2>&1`・`| tail`・引用符を付けない。
-   - SSH 認証（publickey）で弾かれる非対話環境では gh-push スキルに従い HTTPS+gh トークン経由で push（`gh-push.sh push` は push 直前に自ら arm する）。
-   - 拒否 → push せず、ユーザーが push してから作成する旨を伝えて停止。
-   - 既に push 済み（WARNING なし）ならこの手順は不要。
+   - push に失敗したら PR の作成に進まない。
 3. **CREATE 直前の最終ゲート**（テンプレありのとき必須）。§5 の照合は「その時点のファイル」の保証でしかなく、その後の Write や外部変更で無効化される。**作成コマンドに渡すまさにそのファイルを再検証する**:
-   - `gh pr create --body-file <PR BODY FILE>` の**直前**に、実ファイルを `cat` して**ユーザーに承認された本文と同一内容であること**を確認する（Write 成功メッセージや context 上の状態を信用せず、必ず実ファイルを読む）。食い違っていたら作成せず、正しい本文を書き直してからやり直す。
+   - `gh pr create --body-file <PR BODY FILE>` の**直前**に、実ファイルを `cat` して**§4〜§5 で確定した本文**（`confirm: required` ならユーザーに承認された本文）**と同一内容であること**を確認する（Write 成功メッセージや context 上の状態を信用せず、必ず実ファイルを読む）。食い違っていたら作成せず、正しい本文を書き直してからやり直す。
    - あわせて `template-check.sh <テンプレ> <PR BODY FILE>` を**もう一度**実行する。
      - `RESULT: OK` → 作成へ。
      - `RESULT: DRIFT DETECTED` かつ §5 の「ユーザー承認済み DRIFT」に**該当しない** → 作成を中止。無断改変が紛れ込んでいるので本文を戻して再照合する。
      - `RESULT: DRIFT DETECTED` だが §5 でユーザーが明示許可した変更**そのもの**なら、想定内として作成してよい（許可外の drift が増えていないことは DIFF で確認）。
-4. draft 作成（コマンドは `references/platforms.md`）→ PR の URL を報告。
+4. draft 作成（コマンドは `references/platforms.md`）→ PR の URL を報告。`confirm: skip` で確認を省いたときは、タイトルと本文も報告に含める。
 
 ## 参照
 
 - `scripts/pr-context.sh` — リポジトリ同定（REPO IDENTITY）・プラットフォーム判定・テンプレ決定論検出（TEMPLATE）・ベース特定〜差分・push 状態を出す read-only スクリプト（§1）。
 - `scripts/template-check.sh` — テンプレ本体と本文下書きの骨組み（見出し＋チェックリストのラベル）を照合し、削り・勝手追加・並べ替えを検出する作成前ゲート（§5）。
+- `scripts/push-arm.sh` — push 直前に permission-gate 用の marker（`push-flow.armed`）を置く（§7）。
 - `references/platforms.md` — プラットフォーム別 CLI コマンド・テンプレ配置・手動作成フォールバック。
