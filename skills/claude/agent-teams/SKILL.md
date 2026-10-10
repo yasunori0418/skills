@@ -10,7 +10,7 @@ description: Claude Code の並列エージェント(agent teams・teammate)の�
 `idle_notification`(`idleReason: "available"`)は「作業が終了した」ではなく「空いて待機中」の意味で、放置すると teammate が滞留し続ける。
 
 - 成果物を回収し、その teammate への追加依頼が無いと判断した時点で `TaskStop` を呼ぶ
-- 反復作業(評価ループ等)で次のイテレーションのエージェントを起動する前に、`TaskList` で前イテレーションの残留を棚卸しし、停止済みにしてから起動する
+- 反復作業(評価ループ等)で次のイテレーションのエージェントを起動する前に、`ListAgents` で前イテレーションの残留を棚卸しし、停止済みにしてから起動する
 - 応答終了時の取りこぼしは teammate-leak-guard hook が `decision: block` で差し戻すが、hook はターン終端でしか発火しない。ターン内での棚卸しはこのルールで担保する
 
 ## 返信が来ないときの再送は 1 回まで
