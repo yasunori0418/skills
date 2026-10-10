@@ -42,10 +42,11 @@ active=$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null |
 # （jq では null != "running" が true になるので、追加の分岐は要らない）。
 # 説明は description → agent_type → id の順に取れたものを使う（description は
 # 最大 1000 文字で切り詰められうるので、行が膨らまないよう 80 文字で丸める）。
+# TaskStop はタスク ID を引数に取るため、id があれば行末に添えて調べ直しを省かせる。
 leaked=$(printf '%s' "$input" | jq -r '
     (.background_tasks // [])
     | map(select((.type == "subagent" or .type == "teammate") and .status != "running"))
-    | map("  - " + ((.description // .agent_type // .id // "(unnamed)") | .[0:80]) + " (" + (.type // "?") + ")")
+    | map("  - " + ((.description // .agent_type // .id // "(unnamed)") | .[0:80]) + " (" + (.type // "?") + (if .id then ", id=" + (.id | tostring) else "" end) + ")")
     | .[]
 ' 2>/dev/null || true)
 
@@ -55,6 +56,6 @@ count=$(printf '%s\n' "$leaked" | grep -c '^' || true)
 
 reason="稼働中のサブエージェント/チームメイトが ${count} 体残っています:
 ${leaked}
-これらは idle（待機中）であって終了していません。成果物を回収済みで追加依頼が無いものは TaskStop で停止してください。まだ使う予定があるものは残して構いません。停止の要否を判断し、必要な TaskStop を済ませてから応答を終えてください。"
+これらは idle（待機中）であって終了していません。成果物を回収済みで追加依頼が無いものは TaskStop（引数は各行の id）で停止してください。まだ使う予定があるものは残して構いません。停止の要否を判断し、必要な TaskStop を済ませてから応答を終えてください。"
 
 jq -cn --arg r "$reason" '{decision: "block", reason: $r}'
