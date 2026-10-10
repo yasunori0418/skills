@@ -7,6 +7,7 @@
 #   - MERGED でない PR は候補に入れず not_merged に出す
 #   - worktree もローカルブランチも無いブランチは候補にしない
 #   - tracking issue は自動クローズ語（Closes/Fixes/Resolves）付きを除外する
+#   - PR 本文の合計が 1 引数の上限（128KiB）を超えても落ちない
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLECT="$SCRIPT_DIR/../collect-merge-state.sh"
@@ -64,7 +65,9 @@ set -euo pipefail
 args="$*"
 case "$args" in
   *"--state open"*) echo '[]' ;;
-  *"--state merged"*) printf '%s' "${PR_LIST_JSON:-[]}" ;;
+  *"--state merged"*)
+      # 大きな応答は環境変数に載らない（1 引数・1 環境変数の上限）のでファイルからも受ける
+      if [ -n "${PR_LIST_FILE:-}" ]; then cat "$PR_LIST_FILE"; else printf '%s' "${PR_LIST_JSON:-[]}"; fi ;;
   *"pr list --head"*)
       head=$(printf '%s\n' "$@" | awk '/^--head$/{getline; print}')
       printf '%s' "${PR_LIST_JSON:-[]}" | jq --arg h "$head" '[.[] | select(.headRefName == $h)]' ;;
@@ -205,5 +208,16 @@ check "tmux-busy" "true" "$(jq -r '.candidates[0].tmux_busy' <<<"$out5")"
 export TMUX_PANE_CMD='zsh'
 out6=$(collect 1)
 check "tmux-idle" "false" "$(jq -r '.candidates[0].tmux_busy' <<<"$out6")"
+
+# --- 12. 引数なし: PR 本文の合計が 128KiB を超えても落ちない -------------------
+# 回帰: 最後の jq へ merged_prs を --argjson で渡していた頃は "Argument list too long" で落ちた
+export PR_LIST_FILE="$TMP/large-prs.json"
+jq -n '[range(1; 31) | {number: ., state: "MERGED", title: "t\(.)",
+    headRefName: (if . == 1 then "feat-clean" else "gone-\(.)" end), baseRefName: "main",
+    url: "u\(.)", body: ("x" * 8192)}]' >"$PR_LIST_FILE"
+out7=$(collect)
+check "large-bodies-merged-count" "30" "$(jq '.merged_prs | length' <<<"$out7")"
+check "large-bodies-candidate" "feat-clean" "$(jq -r '.candidates[0].branch' <<<"$out7")"
+unset PR_LIST_FILE
 
 exit "$fail"
