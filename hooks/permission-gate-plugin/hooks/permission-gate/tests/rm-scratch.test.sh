@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Verifies rules/20-rm-scratch.sh を規則単体と dispatcher(main.sh)経由の両方で:
-#   - 全 rm の対象が一時領域(/tmp/claude-<uid>/**・/tmp/nix-shell.*/claude-<uid>/**・$TMPDIR/**・
+#   - 全 rm の対象が一時領域(/tmp/**・/var/tmp/**・$TMPDIR/**・
 #     cwd のリポジトリ直下で gitignore 済みの tmp-agents/**)に収まる      -> allow
 #     (対象は同一コマンド内の単純代入と cd 前置だけで静的解決する)
 #   - 一時領域外 / 解決不能(置換・コマンド外の変数・glob 等)/ root そのもの /
@@ -11,9 +11,14 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 RULE="$SCRIPT_DIR/../rules/20-rm-scratch.sh"
 
 U=$(id -u)
-# fixture は一時領域の外に置く(実行者の TMPDIR が一時領域の中だと「領域外」のケースが成り立たない)
-base=${TMPDIR:-/tmp}
-case "$base/" in /tmp/claude-"$U"/* | /tmp/nix-shell.*/claude-"$U"/*) base=/tmp ;; esac
+# fixture は一時領域の外に置く(/tmp・/var/tmp の中だと「領域外」のケースが成り立たない)。
+# nix の sandbox では TMPDIR=/build なのでそのまま使い、手元では XDG_CACHE_HOME 側へ逃がす
+base=$(realpath -m -- "${TMPDIR:-/tmp}")
+case "$base/" in "$(realpath -m /tmp)"/* | "$(realpath -m /var/tmp)"/*)
+    base=${XDG_CACHE_HOME:-$HOME/.cache}
+    mkdir -p "$base"
+    ;;
+esac
 TMP=$(mktemp -d -p "$base")
 trap 'rm -rf "$TMP"' EXIT
 # 本物の notify.sh は実通知・親レーンへの報告を出すため、ダミーに差し替えたコピー上で検証する
@@ -91,6 +96,10 @@ expect "multi-rm" allow "rm -f $SP/a; rm -rf $SP/b"
 expect "long-options" allow "rm --recursive --force $SP/x"
 expect "double-dash" allow "rm -f -- $SP/-x"
 expect "nix-shell" allow "rm -rf /tmp/nix-shell.AbC123/claude-$U/x"
+expect "tmp-any" allow "rm -rf /tmp/nur-cchook-src"
+expect "tmp-other-uid" allow "rm -rf /tmp/claude-0$U/x"
+expect "var-tmp" allow "rm -rf /var/tmp/x"
+expect "cd-tmp" allow "cd /tmp && rm -rf nur-cchook-src"
 expect "tmpdir" allow "rm -rf $TMPDIR/x"
 expect "tmpdir-symlink-itself" allow "rm -f $TMPDIR/esc"
 expect "tmp-agents" allow "rm -rf tmp-agents/x"
@@ -104,24 +113,21 @@ expect "cd-dotdot" allow "cd .. && rm -rf tmp-agents/x" "$REPO/tmp-agents"
 expect "outside" "" "rm -rf ./build"
 expect "outside-abs" "" "rm -rf $TMP/repo/x"
 expect "mixed" "" "rm -rf $SP/x ./build"
-expect "root-itself" "" "rm -rf /tmp/claude-$U"
-expect "root-trailing-slash" "" "S=/tmp/claude-$U; rm -rf \$S/"
-expect "dotdot" "" "rm -rf /tmp/claude-$U/../x"
+expect "root-itself" "" "rm -rf /tmp"
+expect "root-trailing-slash" "" "S=/tmp; rm -rf \$S/"
+expect "var-tmp-itself" "" "rm -rf /var/tmp"
+expect "cd-tmp-dot" "" "cd /tmp && rm -rf ."
+expect "dotdot" "" "rm -rf /tmp/../x"
 expect "dot-last" "" "rm -rf $SP/."
-expect "other-uid" "" "rm -rf /tmp/claude-0$U/x"
-expect "root-prefix" "" "rm -rf /tmp/claude-${U}0/x"
-expect "nix-shell-prefix" "" "rm -rf /tmp/nix-shell.a/claude-${U}0/x"
+expect "tmp-prefix" "" "rm -rf /tmpx/y"
+expect "var-tmp-prefix" "" "rm -rf /var/tmpx/y"
 expect "cd-symlink-escape" "" "cd $TMPDIR/esc && rm -rf x"
 check "tmpdir-root:rule" "" "$(TMPDIR=/ via_rule "rm -rf $TMP/repo/x")"
 check "tmpdir-root:gate" "" "$(TMPDIR=/ via_gate "rm -rf $TMP/repo/x")"
-check "tmpdir-shared-tmp:rule" "" "$(TMPDIR=/tmp via_rule "rm -rf /tmp/x")"
-check "tmpdir-shared-tmp:gate" "" "$(TMPDIR=/tmp via_gate "rm -rf /tmp/x")"
-check "tmpdir-shared-var-tmp:rule" "" "$(TMPDIR=/var/tmp via_rule "rm -rf /var/tmp/x")"
-check "tmpdir-shared-var-tmp:gate" "" "$(TMPDIR=/var/tmp via_gate "rm -rf /var/tmp/x")"
+check "tmpdir-shared-tmp:rule" "allow" "$(TMPDIR=/tmp via_rule "rm -rf /tmp/x")"
+check "tmpdir-shared-tmp:gate" "allow" "$(TMPDIR=/tmp via_gate "rm -rf /tmp/x")"
 check "tmpdir-nix-shell:rule" "allow" "$(TMPDIR=/tmp/nix-shell.xxx via_rule "rm -rf /tmp/nix-shell.xxx/x")"
 check "tmpdir-nix-shell:gate" "allow" "$(TMPDIR=/tmp/nix-shell.xxx via_gate "rm -rf /tmp/nix-shell.xxx/x")"
-expect "nix-shell-nested" "" "rm -rf /tmp/nix-shell.a/b/claude-$U/x"
-expect "nix-shell-other" "" "rm -rf /tmp/nix-shell.a/x"
 expect "symlink-escape" "" "rm -rf $TMPDIR/esc/x"
 expect "symlink-trailing-slash" "" "rm -rf $TMPDIR/esc/"
 expect "tmp-agents-not-ignored" "" "rm -rf tmp-agents/x" "$BARE"
