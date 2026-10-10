@@ -228,6 +228,51 @@ echo "=== CURRENT BRANCH ==="
 echo "$current"
 echo ""
 
+echo "=== CONFIRMATION ==="
+# head（push 先）が保護ブランチなら push と PR 作成の前にユーザー確認を取る。
+# 保護ブランチ = 静的リスト + origin/HEAD が指す既定ブランチ + GitHub 上の既定ブランチ。
+# origin/HEAD は未設定・古いことがあるので、静的リストと GitHub への問い合わせを常に併用する。
+# 静的リストは permission-gate の rules/10-push-armed.sh と gh-push の force 判定に揃える。
+protected=(main master develop development trunk release 'release/*' 'releases/*')
+add_protected() {
+    local b=$1 p
+    [ -n "$b" ] || return 0
+    for p in "${protected[@]}"; do
+        # shellcheck disable=SC2254 # release/* 等は glob として照合する
+        case "$b" in $p) return 0 ;; esac
+    done
+    protected+=("$b")
+}
+origin_default="(なし)"
+if def=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null); then
+    origin_default=${def#origin/}
+    add_protected "$origin_default"
+fi
+github_default="(対象外)"
+url=$(git remote get-url origin 2>/dev/null || true)
+host=$(printf '%s' "$url" | sed -E 's#^[a-zA-Z]+://##; s#^[^@/]+@##; s#[:/].*$##')
+case "$host" in
+*github*)
+    github_default="(取得できず)"
+    slug=$(printf '%s' "$url" | sed -E 's#^[a-zA-Z]+://##; s#^[^@/]+@##; s#^[^:/]+[:/]##; s#\.git$##')
+    if command -v gh >/dev/null 2>&1 &&
+        gd=$(GH_HOST=$host gh repo view "$slug" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null) &&
+        [ -n "$gd" ]; then
+        github_default=$gd
+        add_protected "$gd"
+    fi
+    ;;
+esac
+confirm=skip
+for p in "${protected[@]}"; do
+    # shellcheck disable=SC2254
+    case "$current" in $p) confirm=required ;; esac
+done
+echo "protected: ${protected[*]}"
+echo "default: origin/HEAD=$origin_default github=$github_default"
+echo "confirm: $confirm"
+echo ""
+
 echo "=== REPO IDENTITY ==="
 detect_repo_identity
 echo ""
@@ -276,11 +321,11 @@ if upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null
     ahead=$(echo "$counts" | awk '{print $2}')
     echo "ahead: $ahead / behind: $behind"
     if [ "$ahead" != "0" ]; then
-        echo "WARNING: ローカルに未 push のコミットが ${ahead} 件あります。push はユーザーが実施してください。"
+        echo "WARNING: ローカルに未 push のコミットが ${ahead} 件あります。PR 作成前に push が必要です。"
     fi
 else
     echo "upstream: (未設定 — リモート未 push)"
-    echo "WARNING: このブランチはリモートに push されていません。PR 作成前にユーザーが push する必要があります。"
+    echo "WARNING: このブランチはリモートに push されていません。PR 作成前に push が必要です。"
 fi
 echo ""
 

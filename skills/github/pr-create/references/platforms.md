@@ -4,8 +4,8 @@ PR/MR 作成の CLI コマンド・テンプレート配置・フォールバッ
 
 ## 共通の前提
 
-- **push は無断で行わない**。未 push のブランチは、作成直前に AskUserQuestion で push 可否の承認を取ってから push する（SKILL.md §7）。承認が得られなければ push せず停止。SSH 認証（publickey）で弾かれる非対話環境では gh-push スキル（HTTPS+gh トークン）に従う。
-- **作成は draft 既定**、**作成前にユーザー承認**。
+- **確認の要否は `CONFIRMATION` に従う**。`confirm: required`（head が保護ブランチ）のときだけ push と作成の前にユーザー承認を取る。`skip` なら確認せずに push して作成する（SKILL.md §7）。
+- **作成は draft 既定**。
 - 本文は heredoc やファイル渡しで安全に渡す（改行・特殊文字の崩れを避ける）。一時ファイルを使う場合は `tmp-agents/` 配下（tmp-output スキル準拠）に置き、作成後は不要なら削除。
 
 ## GitHub (`gh`)

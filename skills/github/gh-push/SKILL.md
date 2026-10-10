@@ -68,7 +68,7 @@ bash <skill-dir>/scripts/gh-push.sh push [branch] --force [--expect=<sha>]
 
 force は両経路とも `--force-with-lease=<branch>:<現リモート tip>` の**明示 lease** で実行される（gh 経路の URL 直 push では引数なし `--force-with-lease` の比較対象となる remote-tracking ref が参照されず常に stale info で拒否されるため、明示 lease に統一している）。呼び出し元が「安全と確認済みのリモート tip」を持っている場合 — rebase-flow スキルからの委譲等 — は `--expect=<sha>` で渡す。確認時点以降に他者の push が挟まると実 tip と不一致になり、push 前に確実に停止する。
 
-`push` は実際の `git push` の直前に `scripts/push-arm.sh <branch>` で arm する（`git rev-parse --git-path push-flow.armed` に 1 行 `<epoch> <ttl秒> <branch>`、TTL 既定 1800 秒）。承認済みの push を permission-gate hook に通させる marker で、スキル外で承認済みの push を流すときも `bash <skill-dir>/scripts/push-arm.sh <branch> [--ttl <秒>]` を push の直前に実行する。
+`push` は実際の `git push` の直前に `scripts/push-arm.sh <branch>` で arm する（`git rev-parse --git-path push-flow.armed` に 1 行 `<epoch> <ttl秒> <branch>`、TTL 既定 1800 秒）。承認済みの push を permission-gate hook に通させる marker で、スキル外で承認済みの push を流すときも `bash <skill-dir>/scripts/push-arm.sh <branch> [--ttl <秒>]` を push の直前に実行する。permission-gate は push の実行前に判定するので、その場合は arm と push を別々の Bash 呼び出しにし、push は `git push [-u] origin <branch>` か `cd <リテラルのパス> && git push …` の形だけで書く（`;`・パイプ・リダイレクト・置換・引用符を含むと規則に該当せずダイアログが出る）。
 
 gh 経路で push した場合、スクリプトは `refs/remotes/<remote>/<branch>` を手で進めて `git status` の ahead 表示を整合させる（URL 直 push では remote-tracking ref が自動更新されないため）。SSH 経路では git が更新するのでこの補正は行われない。実行結果の `OK: [ssh]` / `OK: [gh]` でどちらの経路を使ったか分かる。
 
