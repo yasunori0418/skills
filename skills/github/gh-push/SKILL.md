@@ -42,7 +42,7 @@ argument-hint: "[push 先ブランチ名（任意、省略時は現在のブラ�
 bash <skill-dir>/scripts/gh-push.sh preflight [branch]
 ```
 
-`=== SECTION ===` 区切りの出力を読み、**push 経路（SSH / gh）・push 先 URL・ブランチ・送るコミット**をユーザーに提示する。`TARGET` の `route` 行で、SSH 経路か gh 経路かとその理由が分かる。`AUTH` セクションで非対話 SSH 認証テストの成否と gh 認証を確認する。`STATE` の意味:
+`=== SECTION ===` 区切りの出力を読み、**push 経路（SSH / gh）・push 先 URL・ブランチ・送るコミット**をユーザーに提示する。`TARGET` の `route` 行で、SSH 経路か gh 経路かとその理由が分かる。`TARGET` の `protected` 行は push 先が保護ブランチ（静的リスト main / master / develop / development / trunk / release / release/* / releases/*、origin/HEAD、GitHub 上の既定ブランチ）かどうか。`AUTH` セクションで非対話 SSH 認証テストの成否と gh 認証を確認する。`STATE` の意味:
 
 - `up-to-date` … 差分なし。push 不要。
 - `new` … リモートに無い新規ブランチ。直近コミットを提示。
@@ -54,13 +54,19 @@ preflight が `ERROR:` を出したら、その内容（非対話 SSH 認証不�
 
 ### 2. push 実行
 
-起動＝push 意図とみなし、preflight 提示後そのまま実行する（毎回の yes/no は取らない）。ただし上記 `diverged`（force が要る状況）だけは**必ず停止して確認**する。
+起動＝push 意図とみなし、preflight 提示後そのまま実行する（毎回の yes/no は取らない）。ただし上記 `diverged`（force が要る状況）と、`protected: yes`（保護ブランチへの push）だけは**必ず停止して確認**する。
 
 ```bash
 bash <skill-dir>/scripts/gh-push.sh push [branch]
 ```
 
-意図的な上書きをユーザーが承認した場合のみ force を付ける:
+保護ブランチへの push は `--allow-protected` が無ければスクリプトが拒否する。このスクリプトの内部 push は Bash ツールの `git push` ではないので、ask ルールにも permission-gate にもかからない。ここで止めないと確認なしに通るため、**ユーザーがそのブランチへの push を明示承認したときだけ**付ける:
+
+```bash
+bash <skill-dir>/scripts/gh-push.sh push <branch> --allow-protected
+```
+
+意図的な上書きをユーザーが承認した場合のみ force を付ける（保護ブランチへの force は `--allow-protected` があっても拒否される）:
 
 ```bash
 bash <skill-dir>/scripts/gh-push.sh push [branch] --force [--expect=<sha>]

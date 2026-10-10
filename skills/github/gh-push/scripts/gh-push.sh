@@ -16,7 +16,8 @@
 #
 # 使い方:
 #   gh-push.sh preflight [branch]                            push 対象を収集して提示用に出力（push しない）
-#   gh-push.sh push      [branch] [--force] [--expect=<sha>] 実際に push する
+#   gh-push.sh push      [branch] [--force] [--expect=<sha>] [--allow-protected]
+#                                                            実際に push する
 #
 # branch 省略時は現在のブランチ。force は push が non-fast-forward で
 # 弾かれたときに、明示確認の上でのみ付ける。
@@ -28,6 +29,12 @@
 # 見えたリモート tip。呼び出し元（rebase-flow 等）が安全確認済みの tip を
 # 持っている場合は --expect で渡すこと — 確認時点以降の他者 push を確実に
 # 検出して拒否できる。
+#
+# 保護ブランチ（静的リスト・origin/HEAD・GitHub 上の既定ブランチ）への push は、
+# --allow-protected が無ければ拒否する。この内部 push は Bash ツールの `git push` ではないので
+# ask ルールにも permission-gate にもかからず、ここで止めないと確認なしに通るため。
+# --allow-protected はユーザーがそのブランチへの push を明示承認したときだけ付ける。
+# force push は --allow-protected があっても保護ブランチには許さない。
 set -euo pipefail
 
 # 既存の credential.helper 一覧を空でリセットしてから gh ヘルパーだけを使う。
@@ -155,10 +162,11 @@ first_sha() {
 }
 
 cmd="${1:-preflight}"; shift || true
-force=0; branch=""; expect=""
+force=0; branch=""; expect=""; allow_protected=0
 for a in "$@"; do
     case "$a" in
         --force|--force-with-lease) force=1 ;;
+        --allow-protected) allow_protected=1 ;;
         --expect=*) expect="${a#--expect=}" ;;
         -*) die "不明なオプション: $a" ;;
         *)  branch="$a" ;;
@@ -223,22 +231,23 @@ if [ "$ssh_ok" != 1 ] && [ "$gh_auth" != 1 ]; then
     die "非対話 SSH 認証不可（テスト失敗/remote が非SSH）で、gh が host '$host' で未認証です。'gh auth login --hostname $host' を実行するか、SSH 鍵を使える状態にしてください"
 fi
 
-# force push は作業ブランチ限定。保護ブランチ（静的リスト + リモート既定ブランチ）は拒否。
-if [ "$force" = 1 ]; then
-    preason=""
-    case "$branch" in
-        main|master|develop|development|trunk|release|release/*|releases/*) preason="静的リスト" ;;
-    esac
-    if [ -z "$preason" ]; then
-        def="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
-        [ -n "$def" ] && [ "${def#refs/remotes/origin/}" = "$branch" ] && preason="origin/HEAD"
-    fi
-    if [ -z "$preason" ]; then
-        slug="${https#https://"$host"/}"; slug="${slug%.git}"
-        def="$(gh api "repos/$slug" --jq .default_branch 2>/dev/null || true)"
-        [ -n "$def" ] && [ "$def" = "$branch" ] && preason="GitHub 既定ブランチ"
-    fi
-    [ -z "$preason" ] || die "保護ブランチ ($branch — $preason) への force push は禁止です。force は作業ブランチのみ"
+# 保護ブランチの判定（静的リスト + リモート既定ブランチ）。preason が空なら作業ブランチ。
+preason=""
+case "$branch" in
+    main|master|develop|development|trunk|release|release/*|releases/*) preason="静的リスト" ;;
+esac
+if [ -z "$preason" ]; then
+    def="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
+    [ -n "$def" ] && [ "${def#refs/remotes/origin/}" = "$branch" ] && preason="origin/HEAD"
+fi
+if [ -z "$preason" ]; then
+    slug="${https#https://"$host"/}"; slug="${slug%.git}"
+    def="$(gh api --hostname "$host" "repos/$slug" --jq .default_branch 2>/dev/null || true)"
+    [ -n "$def" ] && [ "$def" = "$branch" ] && preason="GitHub 既定ブランチ"
+fi
+# force push は作業ブランチ限定。保護ブランチは --allow-protected があっても拒否する。
+if [ "$force" = 1 ] && [ -n "$preason" ]; then
+    die "保護ブランチ ($branch — $preason) への force push は禁止です。force は作業ブランチのみ"
 fi
 
 local_tip="$(git rev-parse HEAD)"
@@ -305,6 +314,11 @@ case "$cmd" in
         echo "push_url:   $https"
         echo "host:       $host"
         echo "branch:     $branch"
+        if [ -n "$preason" ]; then
+            echo "protected:  yes（$preason）— push には --allow-protected が要る（ユーザーの明示承認が前提）"
+        else
+            echo "protected:  no"
+        fi
         if [ "$ssh_ok" = 1 ]; then
             echo "route:      SSH（非対話 SSH 認証テスト成功 → 素の git push を優先。失敗時 gh へフォールバック）"
         else
@@ -348,17 +362,23 @@ case "$cmd" in
         echo "$push_cmd"
         echo
         echo "=== WARNINGS ==="
+        if [ -n "$preason" ]; then
+            echo "WARNING: 保護ブランチ ($branch — $preason) への push。ユーザーの明示承認を得てから --allow-protected を付けること。"
+        fi
         if [ "$need_force" = 1 ]; then
             echo "WARNING: 履歴分岐を検出。--force 無しの push は失敗します。ユーザー確認なしに force しないこと。"
         elif [ "$state" = "up-to-date" ]; then
             echo "WARNING: push する差分がありません。"
-        else
+        elif [ -z "$preason" ]; then
             echo "(none)"
         fi
         ;;
 
     push)
         [ "$state" != "up-to-date" ] || { echo "push 不要: リモートと一致しています。"; exit 0; }
+        if [ -n "$preason" ] && [ "$allow_protected" != 1 ]; then
+            die "保護ブランチ ($branch — $preason) への push は --allow-protected が必要です。ユーザーの明示承認を得てから付けてください"
+        fi
         if [ "$need_force" = 1 ] && [ "$force" != 1 ]; then
             die "履歴が分岐しています。--force_with_lease を意図する場合のみ push ... --force を再実行してください（要ユーザー確認）"
         fi
