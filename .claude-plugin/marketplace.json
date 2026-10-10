@@ -38,7 +38,7 @@
       "tags": ["claude-code", "agentskills", "nix"]
     },
     {
-      "name": "claude-skills",
+      "name": "agent-ops-skills",
       "source": "./skills/claude",
       "description": "Claude Code 固有の運用スキル群（response-format / session-insights / project-session / agent-teams）。",
       "author": {
