@@ -8,6 +8,8 @@
 #   - worktree もローカルブランチも無いブランチは候補にしない
 #   - tracking issue は自動クローズ語（Closes/Fixes/Resolves）付きを除外する
 #   - PR 本文の合計が 1 引数の上限（128KiB）を超えても落ちない
+#   - herdr の pane が cwd / foreground_cwd に持つ worktree は deletable=false + 理由付き
+#     （agent_status を問わない / パス境界で突合 / HERDR_ENV が無ければ判定を省く）
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLECT="$SCRIPT_DIR/../collect-merge-state.sh"
@@ -43,7 +45,7 @@ contains() { # label haystack needle
     esac
 }
 
-# --- stub: gh / wt / tmux ----------------------------------------------------
+# --- stub: gh / wt / tmux / herdr ---------------------------------------------
 # 実バイナリを呼ばせないよう PATH を差し替える。jq/git/bash は実物を使う。
 stub="$TMP/bin"
 mkdir -p "$stub"
@@ -100,7 +102,23 @@ case "$1" in
   *) exit 0 ;;
 esac
 EOF
+# herdr agent list -> HERDR_AGENTS_JSON を .result.agents に包んで返す。
+# HERDR_FAIL=1 なら失敗（サーバ不在などの再現）。
+cat >"$stub/herdr" <<EOF
+#!$stub_bash
+EOF
+cat >>"$stub/herdr" <<'EOF'
+set -euo pipefail
+[ "${HERDR_FAIL:-}" = 1 ] && exit 1
+case "$*" in
+  "agent list") printf '{"id":"cli:agent:list","result":{"agents":%s,"type":"agent_list"}}' "${HERDR_AGENTS_JSON:-[]}" ;;
+  *) exit 1 ;;
+esac
+EOF
 chmod +x "$stub"/*
+
+# 実行元の環境（herdr 管理下の pane）を持ち込まない。herdr の判定は 13 以降で明示的に有効化する。
+unset HERDR_ENV
 
 # --- fixture repo ------------------------------------------------------------
 repo="$TMP/repo"
@@ -219,5 +237,57 @@ out7=$(collect)
 check "large-bodies-merged-count" "30" "$(jq '.merged_prs | length' <<<"$out7")"
 check "large-bodies-candidate" "feat-clean" "$(jq -r '.candidates[0].branch' <<<"$out7")"
 unset PR_LIST_FILE
+
+# --- 13. herdr: pane の cwd が worktree と一致 -> 保護（status は問わない）----------
+# 回帰: 2026-10-10 に herdr pane で claude が使用中の worktree が deletable=true と判定された
+export HERDR_ENV=1
+export HERDR_AGENTS_JSON='[{"pane_id":"w2X:p3","agent":"claude","agent_status":"idle",
+  "cwd":"/tmp/wt.clean","foreground_cwd":"/tmp/wt.clean"}]'
+out8=$(collect 1)
+check "herdr-tooling" "true" "$(jq -r '.tooling.herdr' <<<"$out8")"
+check "herdr-blocked" "false" "$(jq -r '.candidates[0].deletable' <<<"$out8")"
+contains "herdr-reason" "$(jq -r '.candidates[0].blocked_reasons | join("/")' <<<"$out8")" \
+    "herdr pane w2X:p3 で claude 稼働中（idle）"
+check "herdr-panes" '[{"pane_id":"w2X:p3","agent":"claude","agent_status":"idle"}]' \
+    "$(jq -c '.candidates[0].herdr_panes' <<<"$out8")"
+
+# --- 14. herdr: パス境界で突合（配下は一致、同じ接頭辞の別ディレクトリは不一致）------
+export HERDR_AGENTS_JSON='[
+ {"pane_id":"w1:p1","agent":"claude","agent_status":"working",
+  "cwd":"/tmp/wt.clean-extra","foreground_cwd":"/tmp/wt.clean-extra"},
+ {"pane_id":"w1:p2","agent":"codex","agent_status":"working",
+  "cwd":"/tmp/wt.clean/sub/dir","foreground_cwd":"/tmp/wt.clean/sub/dir"}]'
+out9=$(collect 1)
+check "herdr-boundary-panes" '["w1:p2"]' "$(jq -c '[.candidates[0].herdr_panes[].pane_id]' <<<"$out9")"
+check "herdr-boundary-blocked" "false" "$(jq -r '.candidates[0].deletable' <<<"$out9")"
+
+# --- 15. herdr: foreground_cwd だけが配下でも保護（cwd は別の場所）-------------------
+export HERDR_AGENTS_JSON='[{"pane_id":"w1:p9","agent":"claude","agent_status":"working",
+  "cwd":"/somewhere/else","foreground_cwd":"/tmp/wt.clean/"}]'
+out10=$(collect 1)
+check "herdr-foreground-blocked" "false" "$(jq -r '.candidates[0].deletable' <<<"$out10")"
+check "herdr-foreground-panes" '["w1:p9"]' "$(jq -c '[.candidates[0].herdr_panes[].pane_id]' <<<"$out10")"
+
+# --- 16. herdr: 一致する pane が無ければ削除可のまま --------------------------------
+export HERDR_AGENTS_JSON='[{"pane_id":"w1:p1","agent":"claude","agent_status":"working",
+  "cwd":"/tmp/other","foreground_cwd":"/tmp/other"}]'
+out11=$(collect 1)
+check "herdr-nomatch-deletable" "true" "$(jq -r '.candidates[0].deletable' <<<"$out11")"
+check "herdr-nomatch-panes" "[]" "$(jq -c '.candidates[0].herdr_panes' <<<"$out11")"
+
+# --- 17. HERDR_ENV が無ければ判定を省く（素通し・tooling.herdr=false）----------------
+export HERDR_AGENTS_JSON='[{"pane_id":"w2X:p3","agent":"claude","agent_status":"working",
+  "cwd":"/tmp/wt.clean","foreground_cwd":"/tmp/wt.clean"}]'
+unset HERDR_ENV
+out12=$(collect 1)
+check "herdr-noenv-tooling" "false" "$(jq -r '.tooling.herdr' <<<"$out12")"
+check "herdr-noenv-deletable" "true" "$(jq -r '.candidates[0].deletable' <<<"$out12")"
+
+# --- 18. herdr agent list が失敗しても落ちず、判定していないことを示す ----------------
+export HERDR_ENV=1 HERDR_FAIL=1
+out13=$(collect 1)
+check "herdr-fail-tooling" "false" "$(jq -r '.tooling.herdr' <<<"$out13")"
+check "herdr-fail-deletable" "true" "$(jq -r '.candidates[0].deletable' <<<"$out13")"
+unset HERDR_ENV HERDR_FAIL HERDR_AGENTS_JSON
 
 exit "$fail"

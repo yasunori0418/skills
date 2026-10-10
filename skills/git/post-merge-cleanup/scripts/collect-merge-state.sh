@@ -23,6 +23,10 @@
 #                    worktree ごと消えると復旧できないため、候補から外す。
 #   - is_main      : main worktree は対象外
 #   - is_current   : 実行中セッションが居る worktree は自分の足元を消させない
+#   - herdr_busy   : herdr の pane でエージェントが使用中の worktree。apply には pane を
+#                    止める手順が無く、承認すると稼働中のエージェントの足元を wt remove
+#                    が黙って消すため、is_current と同じく硬く守る（tmux_busy は
+#                    kill-session が計画に載るので情報フラグに留めている）
 set -euo pipefail
 
 MERGED_PR_LIMIT=30
@@ -47,6 +51,9 @@ have_wt=false
 command -v wt >/dev/null 2>&1 && have_wt=true
 have_tmux=false
 command -v tmux >/dev/null 2>&1 && have_tmux=true
+# herdr は管理下の pane（HERDR_ENV=1）からのみ参照する。外から覗かない（herdr スキルの規約）。
+have_herdr=false
+command -v herdr >/dev/null 2>&1 && [ "${HERDR_ENV:-}" = 1 ] && have_herdr=true
 
 # --- worktree 一覧 -----------------------------------------------------------
 # wt list --format json（schema 1）を正とし、wt が無い環境では
@@ -162,6 +169,36 @@ session_busy() {
     fi
 }
 
+# --- herdr の pane ---------------------------------------------------------------
+# `herdr agent list` はエージェントが載っている pane だけを返す（素のシェルは含まない）。
+# 載っている＝生きたプロセスの cwd がそこにあるので、agent_status は問わず全て守る
+# （idle でも worktree が消えれば `claude --continue` の再開先ごと失われる）。
+# 取得に失敗したら判定を省き、tooling.herdr=false で「判定していない」ことを示す。
+herdr_agents='[]'
+if [ "$have_herdr" = true ]; then
+    herdr_agents=$(herdr agent list 2>/dev/null |
+        jq -c '[.result.agents[]? | {pane_id, agent, agent_status, cwd, foreground_cwd}]') ||
+        {
+            herdr_agents='[]'
+            have_herdr=false
+        }
+fi
+
+# worktree パス配下（完全一致 or "<path>/" 前置き一致）に cwd / foreground_cwd を持つ pane。
+# 単純な前方一致だと /tmp/wt.clean が /tmp/wt.clean-extra を巻き込むため、境界を付ける。
+herdr_panes_in() {
+    local wpath="$1"
+    [ -n "$wpath" ] || {
+        printf '[]'
+        return
+    }
+    jq -c --arg p "${wpath%/}" '
+        [ .[] | select(
+            [.cwd, .foreground_cwd][] | strings | rtrimstr("/")
+            | (. == $p) or startswith($p + "/")
+          ) | {pane_id, agent, agent_status} ] | unique_by(.pane_id)' <<<"$herdr_agents"
+}
+
 # --- 候補の組み立て ----------------------------------------------------------
 candidates='[]'
 while IFS=$'\t' read -r number branch url title; do
@@ -202,6 +239,8 @@ while IFS=$'\t' read -r number branch url title; do
         busy=$(session_busy "$sess")
     fi
 
+    herdr_panes=$(herdr_panes_in "$wpath")
+
     reasons='[]'
     deletable=true
     [ "$dirty" = true ] && {
@@ -220,17 +259,23 @@ while IFS=$'\t' read -r number branch url title; do
         reasons=$(jq -c '. + ["このセッションの作業ディレクトリ"]' <<<"$reasons")
         deletable=false
     }
+    [ "$(jq 'length' <<<"$herdr_panes")" -gt 0 ] && {
+        reasons=$(jq -c --argjson ps "$herdr_panes" '. + [$ps[]
+            | "herdr pane \(.pane_id) で \(.agent) 稼働中（\(.agent_status)）"]' <<<"$reasons")
+        deletable=false
+    }
 
     candidates=$(jq -c \
         --argjson pr "$number" --arg branch "$branch" --arg url "$url" --arg title "$title" \
         --arg wpath "$wpath" --argjson dirty "$dirty" --argjson ahead "${ahead:-0}" \
-        --arg sess "$sess" --argjson busy "$busy" \
+        --arg sess "$sess" --argjson busy "$busy" --argjson herdr_panes "$herdr_panes" \
         --argjson deletable "$deletable" --argjson reasons "$reasons" \
         '. + [{
             pr: $pr, title: $title, url: $url, branch: $branch,
             worktree_path: (if $wpath == "" then null else $wpath end),
             tmux_session: (if $sess == "" then null else $sess end),
             tmux_busy: $busy,
+            herdr_panes: $herdr_panes,
             dirty: $dirty, ahead: $ahead,
             deletable: $deletable, blocked_reasons: $reasons
         }]' <<<"$candidates")
@@ -267,10 +312,11 @@ jq \
     --argjson tracking_issues "$tracking_issues" \
     --argjson have_wt "$have_wt" \
     --argjson have_tmux "$have_tmux" \
+    --argjson have_herdr "$have_herdr" \
     '{
         merged_prs: [.[] | {number, title, headRefName, url}],
         not_merged: $not_merged,
         candidates: $candidates,
         followups: { stacked_children: $stacked, tracking_issues: $tracking_issues },
-        tooling: { wt: $have_wt, tmux: $have_tmux }
+        tooling: { wt: $have_wt, tmux: $have_tmux, herdr: $have_herdr }
     }' <<<"$merged_prs"

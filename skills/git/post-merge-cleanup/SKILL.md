@@ -23,6 +23,9 @@ gitignored なファイル（`.env` / `.direnv` / ビルド成果物）は復旧
 名指しで中断する。無い依存を回避する実装は持たない — 何を入れれば動くかを伝えて
 落ちる方が短く、挙動も読みやすい。`wt`（worktrunk）と `tmux` は任意で、無ければ
 worktree 情報を `git worktree list` から取り、tmux セッションの対応付けは行わない。
+`herdr` も任意で、`HERDR_ENV=1`（herdr 管理下の pane）のときだけ `herdr agent list` で
+他 pane のエージェントが使用中の worktree を検出する。herdr の外では判定を省く
+（`tooling.herdr: false`）。
 
 ## 設計の前提（判断の根拠）
 
@@ -54,7 +57,10 @@ worktree 情報を `git worktree list` から取り、tmux セッションの対
    強行せず原因を報告する。
 3. **計画に無い対象を実行中に追加しない** — 承認後に候補が増えたら、計画提示からやり直す。
 4. **`deletable=false` は消さない** — dirty / マージ後の追加コミット / main / 実行中
-   セッションの作業ディレクトリは保護対象。`apply` は 1 件でも混ざれば実行前に停止する。
+   セッションの作業ディレクトリ / herdr の pane でエージェントが使用中の worktree は
+   保護対象。`apply` は 1 件でも混ざれば実行前に停止する。herdr の pane は
+   `agent_status`（idle / done を含む）を問わず守る — `apply` に pane を止める手順は無く、
+   消したいなら先にその pane のエージェントを終了してから収集し直す。
 5. **tmux は完全一致のセッションのみ** — 部分一致で無関係なセッションを巻き込まない。
    `tmux_busy: true`（pane で claude 稼働中）は既定を「残す」に倒し、kill するなら
    計画で明示して承認を取る。
@@ -90,6 +96,8 @@ read-only。引数を省略すると merged PR 直近 30 件とローカルの w
 |---|---|
 | `candidates[].deletable` | `true` のみが削除対象。`false` の理由は `blocked_reasons` |
 | `candidates[].tmux_busy` | pane で claude 稼働中。`true` なら既定は「残す」 |
+| `candidates[].herdr_panes` | worktree を cwd に持つ herdr の pane（`pane_id` / `agent` / `agent_status`）。空でなければ `deletable=false` |
+| `tooling.herdr` | `false` なら herdr の判定を行っていない（herdr 外・取得失敗） |
 | `not_merged` | 引数指定されたが MERGED でない PR。対象外として報告する |
 | `followups.stacked_children` | マージ済みブランチを base に持つ open PR |
 | `followups.tracking_issues` | GitHub が自動クローズしない `#N` 参照 |
@@ -113,6 +121,7 @@ read-only。引数を省略すると merged PR 直近 30 件とローカルの w
 | ブランチ | 理由 |
 |---|---|
 | `feat-y` | マージ後の追加コミット 2 件（未 push） |
+| `feat-z` | herdr pane w2X:p3 で claude 稼働中（idle） |
 
 ### 後続タスク（このスキルでは実行しない）
 - stacked 子ブランチ: <一覧。あれば rebase-flow での main 追従を提案>
