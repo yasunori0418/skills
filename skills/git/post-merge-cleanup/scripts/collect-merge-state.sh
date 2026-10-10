@@ -258,8 +258,9 @@ tracking_issues=$(jq -c '
       | .[]
     ] | unique_by(.issue)' <<<"$merged_prs")
 
-jq -n \
-    --argjson merged_prs "$merged_prs" \
+# merged_prs は PR 本文を含み、直近 30 件だと 1 引数の上限（MAX_ARG_STRLEN、128KiB）を
+# 超えうるので、--argjson ではなく stdin で渡す
+jq \
     --argjson not_merged "$not_merged" \
     --argjson candidates "$candidates" \
     --argjson stacked "$stacked" \
@@ -267,9 +268,9 @@ jq -n \
     --argjson have_wt "$have_wt" \
     --argjson have_tmux "$have_tmux" \
     '{
-        merged_prs: [$merged_prs[] | {number, title, headRefName, url}],
+        merged_prs: [.[] | {number, title, headRefName, url}],
         not_merged: $not_merged,
         candidates: $candidates,
         followups: { stacked_children: $stacked, tracking_issues: $tracking_issues },
         tooling: { wt: $have_wt, tmux: $have_tmux }
-    }'
+    }' <<<"$merged_prs"
