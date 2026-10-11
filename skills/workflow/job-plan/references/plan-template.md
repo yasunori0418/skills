@@ -62,7 +62,7 @@ plan.md は 2 つの読者を持つ。ワーカーの `/review-converge` が `DI
 ## 6. 引き渡し
 
 - 起動: `/job-graph tmp-agents/<job>/plan.md`
-- 親の permission mode: acceptEdits 等の明示モード
+- 親・レーンの permission mode: `auto`（既定のまま）。レーンへ `bypassPermissions` / `dontAsk` は渡さない
 ````
 
 第 4 章は 1 行 1 裁定の固定様式で、上の例のような裁定行か `- 該当なし` 以外の行（注記・散文）を
@@ -136,6 +136,7 @@ spec.json の task と 1:1。節見出しは `### <id>: <概要>`（id は英数
 
 ### 第 6 章: 引き渡し
 
-`/job-graph tmp-agents/<job>/plan.md` の起動コマンドと、親を動かす permission mode の注意。
+`/job-graph tmp-agents/<job>/plan.md` の起動コマンドと、親・レーンの permission mode の注意（`auto` のままで
+よい理由は job-graph Phase 1 末尾）。
 issue を出したときは `create_issues.py` が `- epic: <URL>` / `- sub-issue: <id> → <URL>` を末尾に追記する
 （改訂時の `--epic` 番号はここから読む）。
