@@ -108,8 +108,8 @@ Python プロジェクト（`pyproject.toml` + `uv.lock`、依存なし）。実
 /job-graph tmp-agents/<job>/plan.md
 ```
 
-併せて伝える: 親は `acceptEdits` 等の明示 permission mode で動かすこと（job-graph Phase 1 の注意）、
-issue を出したなら epic の URL、改訂なら変更した task の一覧。
+併せて伝える: 親・レーンは既定の `auto` のままでよく、レーンへ `bypassPermissions` / `dontAsk` は渡さないこと
+（理由は job-graph Phase 1 末尾の注意）、issue を出したなら epic の URL、改訂なら変更した task の一覧。
 
 ## 連携スキル・参照
 
