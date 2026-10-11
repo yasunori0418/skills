@@ -4,7 +4,7 @@ description: "計画ファイルまたは epic issue からタスクの依存グ
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[計画ファイルのパス | epic issue 番号] [--parent-name <name>] [--remote-control] [--model <model>] [--permission-mode <mode>] [--effort <level>]"
-allowed-tools: Bash, Read, AskUserQuestion, ExitPlanMode
+allowed-tools: Bash, Read, AskUserQuestion
 ---
 
 # job-graph
@@ -80,7 +80,11 @@ job-plan は同一プラグインの兄弟スキルとして配置される前�
 1. `bash <SKILL>/scripts/preflight.sh` を実行し、`WARNING` を解消する。
 2. 親（自分）に herdr のエージェント名を付ける: `herdr --session "${HERDR_SESSION:-default}" agent rename "$HERDR_PANE_ID" <一意な短い名前>`（ワーカー報告の宛先。lane-ops 参照）。この名前は起動済みワーカーの規約（worker_contract）に焼き付くため、**セッション再開・herdr セッション復旧のたびに同じ名前で rename し直す**。一字でも違うと report.sh の報告が届かなくなる。
 3. `plan_orchestration.py` を `--prompt-dir`（`tmp-agents/<job>/job-graph/prompts`。scratchpad は親交代で失効するので使わない。理由は `references/spec.md`）と `--parent-name`（上記の名前）付きで実行し、`ERROR` が出たら spec を直して再実行。
-4. 出力を土台に plan を組み、**`ExitPlanMode` で承認を取る**。plan には必ず含める:
+4. 出力を土台に plan を組み、承認を取る。**plan mode（`EnterPlanMode` / `ExitPlanMode`）は使わない**（却下されると plan mode が残り、以降の Write / Bash が settings の allow に関係なく毎回確認ダイアログになる。auto で手放し運用する前提が崩れる）。承認の取り方は入口で分ける:
+   - **job-plan 済み**（Phase 0 で `check_plan_spec.py` が `VERDICT: PASS`）: 計画は job-plan で合意済みなので、plan を作り直さず承認も取り直さない。`/job-graph <plan.md>` の明示実行を承認とみなし、下記の必須要素を本文に要約して報告したうえで Phase 2 へ進む。承認代行の宣言もこの報告に含め、Phase 3 の代行根拠とする
+   - **それ以外**（epic issue 入口・起草した spec）: plan を本文に書き、AskUserQuestion で承認を取る（deny されていれば本文で番号付きの選択肢を示して回答を求める）
+
+   plan（job-plan 済みなら要約報告）には必ず含める:
    - **起動ウェーブとレーン割当**（`SCHEDULE` / `LANES`）
    - **コミット計画**: `commit-plan` スキル準拠（タスク＝ブランチ単位）
    - **PR 戦略**: 各ブランチの base（`PR` セクション）
@@ -89,7 +93,7 @@ job-plan は同一プラグインの兄弟スキルとして配置される前�
 
 `mode: "maintain"`（Phase 4.5）では `PR` / `VERIFY` が出力されないため、上記のうち **PR 戦略と計画突合の基準だけを差し替える**（起動ウェーブとレーン割当・コミット計画・承認代行の宣言はそのまま含める。ただし承認代行の宣言は maintain では**対話ゲートへの応答だけ**に掛かる — push は都度親が承認し、PR 作成はワーカー規約が禁じているので対象が無い）。差し替え先は「どのレビュー指摘へ対応するか」と「push は都度親が承認する」ことの明記（詳細は `references/maintain.md`）。
 
-承認なしで worktree 生成・エージェント起動に進まない（maintain も同じ。plan 承認は取る）。親・レーンの permission mode は `auto` でよい。auto で classifier が判定するのは allow の効かない Bash だけで、判定は同じコマンドでも一定しない。指示送信は素の形（`bash …/lane-ops/scripts/send_instruction.sh …`）で行い、`Bash(bash */lane-ops/scripts/send_instruction.sh *)` の allow に一致させて classifier を経由させない。restack など履歴を書き換えるレーンを起動した直後は、読み取り専用の監視コマンドも `[Git Destructive]` として拒否されうる。拒否されたら別経路で迂回せず、ユーザーに確認して同じ形の狭い allow（`Bash(bash */lane-ops/scripts/<name> *)`）を足す。レーンを止めるのは permission mode ではなく `permissions.ask` の確認ダイアログで、ask は auto でも classifier より先に評価されるため `acceptEdits` にしても減らない（Phase 3 の承認代行で捌く）。レーンへ `bypassPermissions` / `dontAsk` は渡さない（`bypassPermissions` は承認ゲートの無いエージェントの起動として auto の既定ルール「Create Unsafe Agents」に当たり、起動自体が拒否されうる。`dontAsk` は事前許可の無い操作を確認なしで拒否するため、ask 対象の push 等でレーンが進めなくなる）。
+承認なしで worktree 生成・エージェント起動に進まない（job-plan 済みなら `/job-graph` の明示実行が承認。maintain は job-plan を経ないので plan 承認を取る）。親・レーンの permission mode は `auto` でよい。auto で classifier が判定するのは allow の効かない Bash だけで、判定は同じコマンドでも一定しない。指示送信は素の形（`bash …/lane-ops/scripts/send_instruction.sh …`）で行い、`Bash(bash */lane-ops/scripts/send_instruction.sh *)` の allow に一致させて classifier を経由させない。restack など履歴を書き換えるレーンを起動した直後は、読み取り専用の監視コマンドも `[Git Destructive]` として拒否されうる。拒否されたら別経路で迂回せず、ユーザーに確認して同じ形の狭い allow（`Bash(bash */lane-ops/scripts/<name> *)`）を足す。レーンを止めるのは permission mode ではなく `permissions.ask` の確認ダイアログで、ask は auto でも classifier より先に評価されるため `acceptEdits` にしても減らない（Phase 3 の承認代行で捌く）。レーンへ `bypassPermissions` / `dontAsk` は渡さない（`bypassPermissions` は承認ゲートの無いエージェントの起動として auto の既定ルール「Create Unsafe Agents」に当たり、起動自体が拒否されうる。`dontAsk` は事前許可の無い操作を確認なしで拒否するため、ask 対象の push 等でレーンが進めなくなる）。
 
 ### Phase 2: worktree 作成・レーン起動
 
