@@ -447,6 +447,31 @@ def test_implement_still_allows_empty_parent():
     assert "報告先（親セッション名）が未指定" in s
 
 
+def test_implement_without_parent_stops_instead_of_reporting():
+    # 報告先が無いのに報告を求める条項が残ると、報告条項（省略してよい）と矛盾する。
+    # 境界 deny と計画突合の条項を出すため boundary / plan / scope_check も渡す。
+    s = wc.render(
+        task(parent="", boundary=["src/**"], plan="/abs/plan.md", scope_check="python3 check.py")
+    )
+    for phrase in ("報告コマンド", "親へ報告", "親セッションへ報告", "親への報告", "親の裁定"):
+        assert phrase not in s
+    assert "触れようとせず、停止して指示を待つ" in s
+    assert "実施せず停止して指示を待つ" in s
+    assert "PR を作らず、停止して指示を待つ" in s
+    assert "修正せず、停止して指示を待つ（指示された範囲だけ修正する）" in s
+    assert "気付いた改善点は実装せず、停止して指示を待つ" in s
+    assert "繰り返さず、停止して指示を待つ" in s
+
+
+def test_implement_with_parent_keeps_report_requests():
+    # 上の parent 空のテストと対になる。parent ありでは従来どおり親への報告を求める。
+    s = wc.render(task(boundary=["src/**"], plan="/abs/plan.md", scope_check="python3 check.py"))
+    assert "触れようとせず、下記の報告コマンドで親セッションへ報告して指示を待つ" in s
+    assert "PR を作らず、報告コマンドで「作業のブロック」として親へ報告し裁定を待つ" in s
+    assert "繰り返さず、上記の報告コマンドで「作業のブロック」として親へ報告して指示を待つ" in s
+    assert "気付いた改善点は親への報告のみとする" in s
+
+
 def test_maintain_keeps_common_clauses():
     s = wc.render(task(mode="maintain", boundary=["src/**"], issue=42))
     assert "編集してよい範囲（境界）" in s

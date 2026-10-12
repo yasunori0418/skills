@@ -195,8 +195,9 @@ def _common_clauses(task: TaskInfo, milestones: str) -> CommonClauses:
             + ", ".join(boundary)
             + f"\n  この glob 外のファイルは編集しない。宣言は {BOUNDARY_FILE} と同一で、"
             "task-boundary hook が境界外の Edit/Write を機械ブロックする。\n"
-            "  deny されたら境界ファイルに触れようとせず、下記の報告コマンドで"
-            "親セッションへ報告して指示を待つ（境界の拡張は親だけが行える）。"
+            "  deny されたら境界ファイルに触れようとせず、"
+            + _escalation(parent, "下記の報告コマンドで親セッションへ報告して指示を待つ")
+            + "（境界の拡張は親だけが行える）。"
         )
     else:
         scope = "- 編集してよい範囲（境界）: このタスクの担当範囲に限る。他タスクのファイルに触れない"
@@ -221,8 +222,8 @@ def _common_clauses(task: TaskInfo, milestones: str) -> CommonClauses:
                 "- 計画との突合（PR 作成前）: `/review-converge` 収束後・`/pr-create` 前に "
                 f"`{task.scope_check}` を実行する。"
                 "`VERDICT: FAIL`（計画に無いファイルの変更・規模超過）なら PR を作らず、"
-                "報告コマンドで「作業のブロック」として親へ報告し裁定を待つ"
-                "（何を削る・分離するかを自分で判断しない。計画の範囲は親・ユーザーが決める）"
+                + _escalation(parent, "報告コマンドで「作業のブロック」として親へ報告し裁定を待つ")
+                + "（何を削る・分離するかを自分で判断しない。計画の範囲は親・ユーザーが決める）"
             ),
         ]
 
@@ -257,14 +258,24 @@ def _common_clauses(task: TaskInfo, milestones: str) -> CommonClauses:
             "- サブエージェントの生存管理: 委任したサブエージェントの完走は自分の責任で管理する"
             "（親・herdr からはワーカー内部のサブエージェントを観測も操作もできない）。"
             "無応答・進捗なしのまま 10 分を超えたら TaskStop で停止し、同じ指示で再起動する。"
-            "再起動 2 回で解消しなければ繰り返さず、上記の報告コマンドで"
-            "「作業のブロック」として親へ報告して指示を待つ（滞留したまま待ち続けない）"
+            "再起動 2 回で解消しなければ繰り返さず、"
+            + _escalation(parent, "上記の報告コマンドで「作業のブロック」として親へ報告して指示を待つ")
+            + "（滞留したまま待ち続けない）"
         ],
         narration=[
             "- 進捗ナレーション: 最初のツール呼び出し前に 1 文だけ宣言し、"
             "以降は重要な発見・方針転換のときのみ短く述べる（pane を逐次読む人はいない）"
         ],
     )
+
+
+def _escalation(parent: str, with_parent: str, without_parent: str = "停止して指示を待つ") -> str:
+    """ブロック時の行動の文言。parent ありなら報告して裁定を待つ、なしなら停止して指示を待つ。
+
+    報告先が無いのに報告を求めると、報告条項（省略してよい）と矛盾する。
+    `without_parent` は前後の文に合わせて差し替える場合だけ渡す。
+    """
+    return with_parent if parent else without_parent
 
 
 def _report_command(parent: str, task_id: str) -> str:
@@ -327,8 +338,9 @@ def render_implement(task: TaskInfo) -> str:
             (
                 "- 構造変更エスカレーション: テスト実装・アプリケーション実装のいずれでも、"
                 "計画に無い既存コードの構造変更（関数抽出・DI 追加・可視性変更・シグネチャ変更）が"
-                "必要と判明したら、実施せず「作業のブロック」として親へ報告し裁定を待つ"
-                "（構造変更の実施とテストの見送りのどちらを選ぶかは親・ユーザーの決定）"
+                "必要と判明したら、実施せず"
+                + _escalation(task.parent, "「作業のブロック」として親へ報告し裁定を待つ")
+                + "（構造変更の実施とテストの見送りのどちらを選ぶかは親・ユーザーの決定）"
             ),
             *c.commit_granularity,
             *c.tempfiles,
@@ -357,12 +369,18 @@ def render_implement(task: TaskInfo) -> str:
                 "nit は「見送り」と記録して収束扱いで終了する（無制限の磨き込みで膠着しない）。"
                 "improvement だけが残った状態も同様に収束扱いで終了してよい。"
                 "ただし verdict が limit-reached / oscillation / diverging のときは、"
-                "残指摘の内容に関わらず修正せず、review-converge の最終報告を添えて親へ報告して停止する"
-                "（親の裁定後に指示された範囲だけ修正する）"
+                "残指摘の内容に関わらず修正せず、"
+                + _escalation(
+                    task.parent,
+                    "review-converge の最終報告を添えて親へ報告して停止する"
+                    "（親の裁定後に指示された範囲だけ修正する）",
+                    "停止して指示を待つ（指示された範囲だけ修正する）",
+                )
             ),
             (
                 "- PR 作成後の凍結: PR を作成したら実装を凍結する。以降の実装変更・push を行わず、"
-                "気付いた改善点は親への報告のみとする"
+                "気付いた改善点は"
+                + _escalation(task.parent, "親への報告のみとする", "実装せず、停止して指示を待つ")
             ),
             *c.stop_notification,
             *c.report,
