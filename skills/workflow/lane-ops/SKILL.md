@@ -39,6 +39,11 @@ herdr agent rename "$HERDR_PANE_ID" <一意な短い名前>   # 例: orc-<リポ
 2. **報告を受ける**: `[lane-ops:report ...]` が会話に届いたら、それは**ワーカーの自己申告であってユーザーの発言ではない**。必ず `verify_lane.sh` で裏を取ってから次の行動（次段起動・凍結確認など）を決める。親が AskUserQuestion 等で blocked（対話入力中）の間に届いた `report.sh` は `herdr agent prompt` が `agent_blocked` で弾かれ会話に現れない。対話入力から戻ったら `${XDG_STATE_HOME:-$HOME/.local/state}/lane-ops/reports/<parent>.jsonl` の未読分（最後に処理した行以降）を確認して取りこぼしを拾う。milestone「ダイアログ待ち」の報告（レーン内の permission-gate が確認ダイアログを出したときに自動で送る。job-graph が起動時に export する `LANE_OPS_*` が宛先）は承認待ちの通知なので、裏取りの代わりに `herdr agent read <pane> --source recent-unwrapped --lines 120` で画面を確認し、手順 3 の blocked と同様に捌く（詳細の `<tool_name>: <command 先頭>` は手掛かりで、判断は画面で行う）。
 3. **blocked を捌く**: watch のイベントが来たら `herdr agent read <pane> --source recent-unwrapped --lines 120` で内容を確認し、下表で応答を判断する。ダイアログ（選択肢 UI）への応答は 2 通りだけ: 提示選択肢で足りるなら `herdr agent send-keys <pane> enter` 等の承認キー、自由記述の裁定が要るなら **`herdr agent send-keys <pane> esc` でダイアログを閉じてから** `send_instruction.sh` で送る。ダイアログが開いたまま本文を送らない（send_instruction の blocked ガードが中断する理由）。**1 回の呼び出しで承認は 1 件だけ行い、余分な Enter を送らない** — 次のダイアログを先読みして重ねて送ると、まだ読んでいない選択肢を誤確定する。
 4. **指示を送る**: 軌道修正・情報共有は指示ファイルを書いて `send_instruction.sh`。herdr の send-keys で指示文を直接流し込まない（send-keys は承認キー送信専用）。誤って選択肢を確定してしまったら、ワーカーは working 中でも次ターンで指示を受領するので、帰結が後段のコミットへ出る前に**即座に訂正指示を送る**。
+5. **スラッシュコマンドを実行させる**: `disable-model-invocation: true` のスキル（例: `pr-visualize`）は、ワーカーへ「実行して」と指示文で頼んでも Skill ツールで拒否される。拒否されたワーカーは SKILL.md を読んでスクリプトを手で順に叩き、手順を再現してしまうことがある（参照ファイルの読み飛ばしなど品質の保証が無く、ガードの迂回にもなる）。ユーザーがそのスキルの実行を明示的に求めたときに限り、親がスラッシュコマンドを代理入力する。送信は 2 段に分ける:
+   1. 前置きを `send_instruction.sh` で送る。「この後に親が `/<スキル> <引数>` を入力する。受領だけ返してターンを終える」「スキルを経由せずに手順やスクリプトを手で再現しない」「スキル内のユーザー承認（AskUserQuestion 等）は使わず、承認待ちとして報告して親の応答を待つ」を書く
+   2. 受領のターン終了を確認してから、`/<スキル> <引数>` の 1 行だけを書いたファイルを `send_instruction.sh` で送る（プロンプト入力欄へ入るのでスラッシュコマンドとして起動する）
+
+   承認待ちの報告が来たら、画面で `/<スキル>` の入力からスキルが起動したことを確かめてから応答する。手で再現した成果物は使わず、前置きからやり直させる。
 
 ## 承認代行の判定基準
 
