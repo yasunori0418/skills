@@ -103,6 +103,8 @@ case "$1" in
 esac
 EOF
 # herdr agent list -> HERDR_AGENTS_JSON を .result.agents に包んで返す。
+# herdr pane process-info --pane <id> -> HERDR_PROCS_JSON（{pane_id: foreground_processes}）
+# から該当 pane を返す。無い pane は失敗（process-info が引けない pane の再現）。
 # HERDR_FAIL=1 なら失敗（サーバ不在などの再現）。
 cat >"$stub/herdr" <<EOF
 #!$stub_bash
@@ -112,6 +114,12 @@ set -euo pipefail
 [ "${HERDR_FAIL:-}" = 1 ] && exit 1
 case "$*" in
   "agent list") printf '{"id":"cli:agent:list","result":{"agents":%s,"type":"agent_list"}}' "${HERDR_AGENTS_JSON:-[]}" ;;
+  "pane process-info --pane "*)
+    procs=${HERDR_PROCS_JSON:-}
+    [ -n "$procs" ] || procs='{}'
+    jq -ce --arg p "$4" '.[$p] // empty
+      | {id: "cli:pane:process_info", result: {process_info: {pane_id: $p, foreground_processes: .}}}' \
+      <<<"$procs" ;;
   *) exit 1 ;;
 esac
 EOF
@@ -288,6 +296,30 @@ export HERDR_ENV=1 HERDR_FAIL=1
 out13=$(collect 1)
 check "herdr-fail-tooling" "false" "$(jq -r '.tooling.herdr' <<<"$out13")"
 check "herdr-fail-deletable" "true" "$(jq -r '.candidates[0].deletable' <<<"$out13")"
-unset HERDR_ENV HERDR_FAIL HERDR_AGENTS_JSON
+unset HERDR_FAIL
+
+# --- 19. herdr: wt switch -x 経由のレーン（前面リーダーの wt が main、子の claude が worktree）-
+# 回帰: 2026-10-12 に agent list の cwd / foreground_cwd が main を指し、
+# claude が稼働中の worktree が deletable=true と判定された（#103）
+export HERDR_AGENTS_JSON='[{"pane_id":"w3C:p1","agent":"claude","agent_status":"done",
+  "cwd":"/repo","foreground_cwd":"/repo"}]'
+export HERDR_PROCS_JSON='{"w3C:p1":[
+  {"name":"wt","pid":10,"cwd":"/repo"},
+  {"name":".claude-wrapped","pid":11,"cwd":"/tmp/wt.clean"}]}'
+out14=$(collect 1)
+check "herdr-proc-blocked" "false" "$(jq -r '.candidates[0].deletable' <<<"$out14")"
+check "herdr-proc-panes" '[{"pane_id":"w3C:p1","agent":"claude","agent_status":"done"}]' \
+    "$(jq -c '.candidates[0].herdr_panes' <<<"$out14")"
+
+# --- 20. herdr: process-info が引けない pane は agent list の値だけで判定する ----------
+export HERDR_AGENTS_JSON='[
+ {"pane_id":"w1:p1","agent":"claude","agent_status":"working","cwd":"/repo","foreground_cwd":"/repo"},
+ {"pane_id":"w1:p2","agent":"claude","agent_status":"working",
+  "cwd":"/tmp/wt.clean","foreground_cwd":"/tmp/wt.clean"}]'
+export HERDR_PROCS_JSON='{}'
+out15=$(collect 1)
+check "herdr-procfail-tooling" "true" "$(jq -r '.tooling.herdr' <<<"$out15")"
+check "herdr-procfail-panes" '["w1:p2"]' "$(jq -c '[.candidates[0].herdr_panes[].pane_id]' <<<"$out15")"
+unset HERDR_ENV HERDR_AGENTS_JSON HERDR_PROCS_JSON
 
 exit "$fail"

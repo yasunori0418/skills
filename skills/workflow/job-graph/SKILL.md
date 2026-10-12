@@ -127,7 +127,7 @@ PR に付いたレビュー指摘へレーンで対応するフェーズ。spec 
 ### Phase 5: 後始末
 
 - 進捗確認: `wt list`
-- 全レーンのマージ後: `/post-merge-cleanup` を案内する。herdr の workspace / tab は**自分が作ったものだけ**閉じる（`herdr --session "$HSESSION" workspace close` / `herdr --session "$HSESSION" tab close`）
+- 全レーンのマージ後: 先にレーンの herdr workspace / tab を閉じ、**その後で** `/post-merge-cleanup` を案内する（エージェントが載ったままの worktree は保護対象で削除候補から外れるため、逆順だと片付かない）。閉じるのは**自分が作ったものだけ**（`herdr --session "$HSESSION" workspace close` / `herdr --session "$HSESSION" tab close`）
 - 下段の tip が動いたら（履歴書き換えだけでなく積み増しも）`references/restack.md` に従って上段を載せ替える
 
 ## 連携スキル・参照

@@ -184,7 +184,26 @@ if [ "$have_herdr" = true ]; then
         }
 fi
 
-# worktree パス配下（完全一致 or "<path>/" 前置き一致）に cwd / foreground_cwd を持つ pane。
+# agent list の foreground_cwd は前面プロセスグループのリーダーの cwd を指す。
+# `wt switch -x … exec claude` で起動したレーンではリーダーが main に居る wt で、
+# worktree に居る claude はその子になるため、worktree と一致しない（#103）。
+# 各 pane の `pane process-info` から前面プロセス全員の cwd を proc_cwds に足す。
+# 保護を強める方向にだけ効かせるので、取得に失敗した pane は agent list の値だけで判定する。
+if [ "$have_herdr" = true ]; then
+    herdr_agents=$(
+        while IFS= read -r pane; do
+            cwds=$(herdr pane process-info --pane "$pane" 2>/dev/null |
+                jq -c '[.result.process_info.foreground_processes[]?.cwd | strings]' 2>/dev/null) ||
+                cwds='[]'
+            jq -cn --arg p "$pane" --argjson c "${cwds:-[]}" '{pane_id: $p, proc_cwds: $c}'
+        done < <(jq -r '.[].pane_id' <<<"$herdr_agents") |
+            jq -c -s --argjson base "$herdr_agents" '
+                . as $procs | $base | map(. as $a
+                    | $a + {proc_cwds: ([$procs[] | select(.pane_id == $a.pane_id) | .proc_cwds[]])})'
+    )
+fi
+
+# worktree パス配下（完全一致 or "<path>/" 前置き一致）に cwd / foreground_cwd / proc_cwds を持つ pane。
 # 単純な前方一致だと /tmp/wt.clean が /tmp/wt.clean-extra を巻き込むため、境界を付ける。
 herdr_panes_in() {
     local wpath="$1"
@@ -194,7 +213,7 @@ herdr_panes_in() {
     }
     jq -c --arg p "${wpath%/}" '
         [ .[] | select(
-            [.cwd, .foreground_cwd][] | strings | rtrimstr("/")
+            ([.cwd, .foreground_cwd] + (.proc_cwds // []))[] | strings | rtrimstr("/")
             | (. == $p) or startswith($p + "/")
           ) | {pane_id, agent, agent_status} ] | unique_by(.pane_id)' <<<"$herdr_agents"
 }
