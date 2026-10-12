@@ -463,6 +463,15 @@ def test_implement_without_parent_stops_instead_of_reporting():
     assert "繰り返さず、停止して指示を待つ" in s
 
 
+def test_implement_with_parent_keeps_report_requests():
+    # 上の parent 空のテストと対になる。parent ありでは従来どおり親への報告を求める。
+    s = wc.render(task(boundary=["src/**"], plan="/abs/plan.md", scope_check="python3 check.py"))
+    assert "触れようとせず、下記の報告コマンドで親セッションへ報告して指示を待つ" in s
+    assert "PR を作らず、報告コマンドで「作業のブロック」として親へ報告し裁定を待つ" in s
+    assert "繰り返さず、上記の報告コマンドで「作業のブロック」として親へ報告して指示を待つ" in s
+    assert "気付いた改善点は親への報告のみとする" in s
+
+
 def test_maintain_keeps_common_clauses():
     s = wc.render(task(mode="maintain", boundary=["src/**"], issue=42))
     assert "編集してよい範囲（境界）" in s
