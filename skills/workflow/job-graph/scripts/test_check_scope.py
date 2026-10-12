@@ -78,6 +78,31 @@ def test_judge_scale_only():
     assert res.unexpected == ()
 
 
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ("cmd/layat/niface.go", "cmd/layat/outturn.go"),
+        ("old/a.go", "new/b.go"),
+        ("dir/f.go", "dir/sub/f.go"),
+    ],
+)
+def test_judge_rename_matches_new_path_only(old, new):
+    changed = (cs.FileChange(path=new, additions=3, deletions=1, old_path=old),)
+    assert cs.judge(changed, cs.Expectation(files=(new,))).verdict is cs.Verdict.PASS
+    assert cs.judge(changed, cs.Expectation(files=(old, new))).verdict is cs.Verdict.PASS
+    old_only = cs.judge(changed, cs.Expectation(files=(old,)))
+    assert old_only.verdict is cs.Verdict.FAIL
+    assert old_only.unexpected == (new,)
+
+
+def test_judge_split_rename_checks_each_path():
+    changed = (fc("dir/old.go", 0, 10), fc("dir/new.go", 10, 0))
+    assert cs.judge(changed, cs.Expectation(files=("dir/old.go", "dir/new.go"))).verdict is cs.Verdict.PASS
+    new_only = cs.judge(changed, cs.Expectation(files=("dir/new.go",)))
+    assert new_only.verdict is cs.Verdict.FAIL
+    assert new_only.unexpected == ("dir/old.go",)
+
+
 def test_judge_carries_warnings():
     res = cs.judge((fc("a"),), cs.Expectation(files=("a",)), warnings=("w1",))
     assert res.warnings == ("w1",)
@@ -96,6 +121,26 @@ def test_parse_numstat_handles_binary_and_blank():
         fc("img/logo.png", 0, 0),
         fc("docs/x.md", 3, 0),
     )
+
+
+@pytest.mark.parametrize(
+    "raw,old,new",
+    [
+        ("cmd/layat/{niface.go => outturn.go}", "cmd/layat/niface.go", "cmd/layat/outturn.go"),
+        ("old/a.go => new/b.go", "old/a.go", "new/b.go"),
+        ("dir/{ => sub}/f.go", "dir/f.go", "dir/sub/f.go"),
+    ],
+)
+def test_parse_numstat_normalizes_rename_to_new_path(raw, old, new):
+    assert cs.parse_numstat(f"71\t70\t{raw}\n") == (
+        cs.FileChange(path=new, additions=71, deletions=70, old_path=old),
+    )
+
+
+def test_parse_numstat_split_rename_keeps_each_path():
+    text = "0\t10\tdir/old.go\n10\t0\tdir/new.go\n"
+    assert cs.parse_numstat(text) == (fc("dir/old.go", 0, 10), fc("dir/new.go", 10, 0))
+    assert all(c.old_path is None for c in cs.parse_numstat(text))
 
 
 def test_parse_pr_json_normalizes_and_warns_on_truncation():
