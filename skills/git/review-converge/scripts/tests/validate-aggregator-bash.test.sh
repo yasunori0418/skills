@@ -126,6 +126,19 @@ ln -s "$BOTH/outside" "$BOTH/real/repo/tmp-agents"
 check "report-symlink-both-directions-allowed" "0" \
     "$(hook_exit "cat a >| $BOTH/link/repo/tmp-agents/review-converge-round-1.md" "$BOTH/link/repo")"
 
+# CWD が above-root symlink 経由でも、<STATE> は `--show-toplevel`(実体パス)で求める規定のため、
+# 実体パス側の <STATE> と同じディレクトリへの書き出しも許可する(#65)
+REALSIDE="$WORK/realside"
+mkdir -p "$REALSIDE/real"
+ln -s "$REALSIDE/real" "$REALSIDE/link"
+git init -q "$REALSIDE/real/repo"
+mkdir -p "$REALSIDE/real/repo/sub" # CWD を worktree の下位にして --show-prefix の剥がしも通す
+check "report-realpath-root-allowed" "0" \
+    "$(hook_exit "cat a >| $REALSIDE/real/repo/tmp-agents/review-converge/fix-x/review-converge-round-1.md" "$REALSIDE/link/repo/sub")"
+# 字句・実体のどちらの root の外も引き続き拒否する
+check "report-realpath-outside-blocked" "2" \
+    "$(hook_exit "cat a >| $REALSIDE/real/review-converge-round-1.md" "$REALSIDE/link/repo")"
+
 # git リポジトリ外で走ったときは worktree を解決できず、安全側で拒否する
 check "report-outside-git-blocked" "2" "$(hook_exit "cat a >| $WORK/review-converge-round-1.md" "$WORK")"
 

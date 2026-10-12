@@ -70,13 +70,18 @@ REPORT_RE='^review-converge-round-[0-9]+\.md$'
 # worktree root より上に symlink がある配置では字句のままの書き込み先と食い違う。
 # CWD から `--show-prefix`(root からの相対)の分を末尾から落とせば、CWD と同じ
 # 字句の系で root が得られる。
+# 一方 <STATE> は規定上 `--show-toplevel`(実体パス)で求めるため、統合報告の出力先は
+# 実体パスの系で来ることもある。そこで root の実体パス(`cd … && pwd -P`)も
+# WORKTREE_REAL として許可 root に加える(字句と実体の両方の系を受け付ける)。
 WORKTREE_ROOT=""
+WORKTREE_REAL=""
 if git_prefix=$(git -C "$CWD" rev-parse --show-prefix 2>/dev/null); then
     WORKTREE_ROOT="${CWD%/}"
     git_prefix="${git_prefix%/}"
     if [[ -n "$git_prefix" ]]; then
         WORKTREE_ROOT="${WORKTREE_ROOT%/"$git_prefix"}"
     fi
+    WORKTREE_REAL=$(cd "$WORKTREE_ROOT" 2>/dev/null && pwd -P) || WORKTREE_REAL=""
 fi
 # scratchpad は worktree 外にある正当な書き込み先になり得るため許可枝を残す。
 # ただし現行のハーネスはそのパスを hook へ渡さない(入力 JSON に該当キーは無く、
@@ -109,10 +114,10 @@ while IFS= read -r target; do
     # `//` と `/./` を畳むだけの字句正規化
     while [[ "$resolved" == *//* ]]; do resolved="${resolved//\/\//\/}"; done
     while [[ "$resolved" == *"/./"* ]]; do resolved="${resolved//\/.\//\/}"; done
-    # 前方一致は字句同士で行う(root も CWD と同じ系で求めてある)。symlink は
-    # 辿らないので、worktree 内の tmp-agents が外を指す symlink でも許可される。
+    # 前方一致は字句同士で行う(root も CWD と同じ系・実体の系の両方で求めてある)。
+    # symlink は辿らないので、worktree 内の tmp-agents が外を指す symlink でも許可される。
     in_allowed=0
-    for root in "$WORKTREE_ROOT" "$SCRATCH_ROOT"; do
+    for root in "$WORKTREE_ROOT" "$WORKTREE_REAL" "$SCRATCH_ROOT"; do
         [[ -n "$root" ]] || continue
         if [[ "$resolved" == "$root"/* ]]; then
             in_allowed=1
