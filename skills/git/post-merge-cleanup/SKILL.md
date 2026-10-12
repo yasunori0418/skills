@@ -24,7 +24,10 @@ gitignored なファイル（`.env` / `.direnv` / ビルド成果物）は復旧
 落ちる方が短く、挙動も読みやすい。`wt`（worktrunk）と `tmux` は任意で、無ければ
 worktree 情報を `git worktree list` から取り、tmux セッションの対応付けは行わない。
 `herdr` も任意で、`HERDR_ENV=1`（herdr 管理下の pane）のときだけ `herdr agent list` で
-他 pane のエージェントが使用中の worktree を検出する。herdr の外では判定を省く
+他 pane のエージェントが使用中の worktree を検出する。照合には `agent list` の
+`cwd` / `foreground_cwd` に加え、`herdr pane process-info` が返す前面プロセス全員の cwd を
+使う（`wt switch -x` 経由のレーンは前面リーダーの `wt` が main に居るため、
+`foreground_cwd` だけでは worktree と一致しない）。herdr の外では判定を省く
 （`tooling.herdr: false`）。
 
 ## 設計の前提（判断の根拠）
