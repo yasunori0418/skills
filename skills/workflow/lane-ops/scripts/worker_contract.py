@@ -56,7 +56,7 @@ class Mode(Enum):
 
 
 MILESTONES = (
-    "最初のコミット完了 / review-converge 収束 / push 完了 / PR 作成（番号付き）/ "
+    "最初のコミット完了 / review-converge 収束 / PR 作成（番号付き）/ "
     "作業のブロック・境界の不足 / 親の承認・裁定待ちで停止する直前（ダイアログ以外の承認待ちを含む）"
 )
 
@@ -335,6 +335,8 @@ def render_implement(task: TaskInfo) -> str:
             (
                 f"- push: 自分の feature ブランチ {task.branch or '<branch>'} に限り push してよい。"
                 "push は計画承認済みの前提であり、個別の確認へ回さず実行する。"
+                "push は `/pr-create` の手順の中でだけ行い、それより前に単独で push しない"
+                "（push の形は pr-create の手順に従う。単独の push はパイプ等が付き確認ダイアログで止まる）。"
                 "main 等の保護ブランチへは push しない"
             ),
             (
