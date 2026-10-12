@@ -184,6 +184,14 @@ def test_push_and_pr_preapproved():
     assert "個別の確認へ回さず実行する" in s
 
 
+def test_implement_push_only_via_pr_create():
+    # 単独の push はパイプ等が付きやすく permission-gate の arm 規則から外れてダイアログになる。
+    # push 手順（arm と素の git push）は pr-create §7 にだけ置き、ワーカーはそれに任せる
+    s = wc.render(task())
+    assert "push は `/pr-create` の手順の中でだけ行い、それより前に単独で push しない" in s
+    assert "push 完了" not in wc.MILESTONES
+
+
 def test_report_command_embeds_script_path_and_parent():
     s = wc.render(task(parent="orc-repo", task_id="T1"))
     assert "report.sh orc-repo T1" in s
