@@ -130,6 +130,8 @@ check "report-symlink-both-directions-allowed" "0" \
 # 実体パス側の <STATE> と同じディレクトリへの書き出しも許可する(#65)
 REALSIDE="$WORK/realside"
 mkdir -p "$REALSIDE/real"
+# TMPDIR 自体が symlink 配下(macOS の /var → /private/var 等)でも、書き込み先を実体パスで組むため
+REALSIDE=$(cd "$REALSIDE" && pwd -P)
 ln -s "$REALSIDE/real" "$REALSIDE/link"
 git init -q "$REALSIDE/real/repo"
 mkdir -p "$REALSIDE/real/repo/sub" # CWD を worktree の下位にして --show-prefix の剥がしも通す
