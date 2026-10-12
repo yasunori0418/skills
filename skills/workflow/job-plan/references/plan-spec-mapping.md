@@ -14,7 +14,7 @@ spec.json は job-graph `plan_orchestration.py` の入力（フィールドの�
 | 第 3 章 `### <id>: <概要>` | `tasks[].id` | 1:1。plan に無い task・spec に無い task はどちらも FAIL |
 | `- branch:` | `tasks[].branch` | 完全一致 |
 | `- 依存:` | `tasks[].depends_on` | 集合一致。`なし` = `[]`。複数親は job-graph が WARNING（先頭親を仮採用）なので、複数書くなら依存の意味を grilling で確認する |
-| `- 変更対象:` | `tasks[].expected_files` | 集合一致。実パス・glob 不可 |
+| `- 変更対象:` | `tasks[].expected_files` | 集合一致。実パス・glob 不可。改名ファイルは旧パス・新パスの 2 行で書く（割れた場合と PR モードの新パスのみの場合の両方に耐える） |
 | `- 規模目安:` | `tasks[].expected_scale` | 整数一致 |
 | `- 境界:` | `tasks[].boundary` | 集合一致（`tmp-agents/**` は両側で無視） |
 | `- 完了条件:` + `- コミット計画:` + `- 対応要求:` | `tasks[].prompt` | 下記の組み立て規則 |
