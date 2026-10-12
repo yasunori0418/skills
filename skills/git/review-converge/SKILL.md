@@ -334,8 +334,8 @@ python3 <SKILL_DIR>/scripts/converge_state.py keep --state <STATE> \
   (PR 本文への反映自体は PR 作成時の作業で、このスキルの範囲外)
 
 **状態ファイルの永続化**: 見送りの有無に関わらず、ループが止まったら `<STATE>` を見送りファイルと
-同じディレクトリ(`<STATE>` 自身のディレクトリ)へ `YYYYMMDD_state.json` として複写する(`cp -n <STATE> <出力先>`。
-同名があれば `_2` 等の連番を付ける)。`<STATE>` は次に新規で回したときの `reset`(事前準備 3)で
+同じディレクトリ(`<STATE>` 自身のディレクトリ)へ `YYYYMMDD_state.json` として複写する(`cp -n <STATE> <ディレクトリ>/YYYYMMDD_state.json`。
+複写先はファイル名まで指定する。同名があれば `_2` 等の連番を付けた名前を指定する)。`<STATE>` は次に新規で回したときの `reset`(事前準備 3)で
 消えるため、複写しないと周回ごとの
 指摘(lens / kind / severity / scope)・保持・差分推移が後から追えなくなる。スキルの改善効果を
 測る唯一の一次資料であり、複写しないと次の分析ができない(state が偶然残っていたから
