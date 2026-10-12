@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -34,6 +35,9 @@ from typing import Union
 
 # 規模目安に対する許容倍率。目安は AI の見積りなので、ちょうど倍までを許容する（閾値は 1 か所）。
 SCALE_FACTOR = 2
+
+# numstat の rename 行（`dir/{old => new}/rest`）。共通部分が無いときは括弧なしの `old => new`。
+RENAME_BRACE = re.compile(r"^(.*)\{(.*) => (.*)\}(.*)$")
 
 # 突合から除外するパス接頭辞（一時出力先。境界宣言でも自動で許可される）。
 EXCLUDED_PREFIXES = ("tmp-agents/",)
@@ -54,6 +58,7 @@ class FileChange:
     path: str
     additions: int
     deletions: int
+    old_path: str | None = None  # rename 行の旧パス（path は新パス）
 
 
 @dataclass(frozen=True)
@@ -108,19 +113,37 @@ class Collected:
 # ============================================================
 
 
+def split_rename(path: str) -> tuple[str | None, str]:
+    """numstat の path 列 -> (旧パス, 新パス)。rename でなければ (None, path)。`//` は畳む。"""
+    m = RENAME_BRACE.match(path)
+    if m:
+        prefix, old, new, suffix = m.groups()
+        old_path, new_path = prefix + old + suffix, prefix + new + suffix
+    elif " => " in path:
+        old_path, new_path = path.split(" => ", 1)
+    else:
+        return None, path
+    return old_path.replace("//", "/"), new_path.replace("//", "/")
+
+
 def parse_numstat(text: str) -> tuple[FileChange, ...]:
-    """`git diff --numstat` の出力 -> FileChange 列。バイナリ（`-`）は 0 行扱い。"""
+    """`git diff --numstat` の出力 -> FileChange 列。バイナリ（`-`）は 0 行扱い。
+
+    rename 行は path を新パスへ正規化し、旧パスを old_path に残す（突合は新パスで行う）。
+    """
     changes: list[FileChange] = []
     for line in text.splitlines():
         parts = line.split("\t", 2)
         if len(parts) != 3:
             continue
         adds, dels, path = parts
+        old_path, new_path = split_rename(path.strip())
         changes.append(
             FileChange(
-                path=path.strip(),
+                path=new_path,
                 additions=0 if adds == "-" else int(adds),
                 deletions=0 if dels == "-" else int(dels),
+                old_path=old_path,
             )
         )
     return tuple(changes)
