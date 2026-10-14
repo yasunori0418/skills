@@ -99,6 +99,9 @@ via_rule() { # command [cwd] [tool_name] -> allow / 空(規則の契約: allow �
     }
     [ -n "$out" ] && echo allow || true
 }
+why() { # command [cwd] -> 規則が fd 3 に書いた外れた理由
+    hook_json "$1" "${2:-$REPO}" | bash "$RULE" 3>&1 >/dev/null 2>/dev/null
+}
 expect() { # label expected command [cwd] [tool_name] -> 規則単体と dispatcher の両方を検証
     check "$1:rule" "$2" "$(via_rule "${@:3}")"
     check "$1:gate" "$2" "$(via_gate "${@:3}")"
@@ -151,6 +154,53 @@ expect "tmp-agents-symlinked" allow "rm -rf tmp-agents/x" "$LINKED"
 expect "cd-relative" allow "cd ./tmp-agents && rm -rf x"
 expect "cd-dotdot" allow "cd .. && rm -rf tmp-agents/x" "$REPO/tmp-agents"
 
+# allow: 確認用の読み取り(ls / echo / printf / git status)と rmdir を並べる
+expect "with-ls" allow "rm -rf $SP/x && ls -la $SP"
+expect "ls-first" allow "ls tmp-agents && rm -f tmp-agents/x"
+expect "ls-assigned" allow "S=$SP; rm -rf \$S/x && ls \$S"
+expect "with-echo" allow "rm -f $SP/a; echo removed"
+expect "with-printf" allow "rm -f $SP/a && printf done"
+expect "with-git-status" allow "rm -f tmp-agents/x && git status"
+expect "with-git-status-short" allow "rm -f tmp-agents/x && git status --short"
+expect "rmdir" allow "rm -f $SP/a/x && rmdir $SP/a"
+expect "rmdir-only" allow "rmdir -v -- $SP/a"
+
+# allow: stderr の破棄(リテラルの 2>/dev/null・2>&1)と || の右辺の echo / printf
+expect "stderr-null" allow "rm -rf $SP/x 2>/dev/null"
+expect "stderr-dup" allow "rm -f $SP/x 2>&1 && ls $SP 2>/dev/null"
+expect "stderr-null-seq" allow "rm -f $SP/x 2>/dev/null;echo ok"
+expect "or-echo" allow "rm -f $SP/x; ls $SP/x 2>/dev/null || echo deleted"
+expect "or-printf-then" allow "rm -f $SP/x || printf failed; rm -f $SP/y"
+
+# 沈黙: 剥がさないリダイレクト・|| の右辺が echo / printf でない
+expect "stdout-null" "" "rm -f $SP/x 1>/dev/null"
+expect "stderr-file" "" "rm -f $SP/x 2>$SP/log"
+expect "stderr-null-suffix" "" "rm -f $SP/x 2>/dev/nullx"
+expect "stderr-attached" "" "rm -f $SP/x2>/dev/null"
+expect "stderr-background" "" "rm -f $SP/x 2>/dev/null&"
+expect "stderr-pipe" "" "rm -f $SP/x 2>&1 | tail -1"
+expect "or-rm" "" "rm -f $SP/x || rm -rf ./build"
+expect "or-triple" "" "rm -f $SP/x ||| echo x"
+expect "cd-or" "" "cd $SP || echo no && rm -f x"
+expect "cd-then-or" "" "cd $SP && rm -f x || echo no"
+
+# 沈黙: 確認用の読み取りの範囲外・rmdir の対象外
+expect "ls-only" "" "ls $SP"
+expect "ls-outer-var" "" "rm -f $SP/x && ls \$HOME"
+expect "ls-option-value" "" "rm -f $SP/x && ls --color=auto $SP"
+expect "echo-var" "" "rm -f $SP/x && echo \$S"
+expect "echo-brace" "" "rm -f $SP/x && echo {a,b}"
+expect "echo-equals" "" "rm -f $SP/x && echo =ls"
+expect "printf-v" "" "rm -f $SP/x; printf -v PATH $SP"
+expect "printf-bare" "" "rm -f $SP/x; printf"
+expect "git-log" "" "rm -f tmp-agents/x && git log"
+expect "git-diff" "" "rm -f tmp-agents/x && git diff"
+expect "git-status-option" "" "rm -f tmp-agents/x && git status --porcelain"
+expect "wc" "" "rm -f $SP/x && wc -l $SP/y"
+expect "rmdir-parents" "" "rmdir -p $SP/a/b"
+expect "rmdir-outside" "" "rmdir ./build"
+expect "rmdir-root" "" "rmdir tmp-agents"
+
 # 沈黙: 一時領域外・root そのもの・symlink 越し
 expect "outside" "" "rm -rf ./build"
 expect "outside-abs" "" "rm -rf $TMP/repo/x"
@@ -179,7 +229,7 @@ expect "prefix-assign" "" "S=$SP rm -rf \$S/x"
 expect "glob" "" "rm -rf $SP/*"
 expect "quote" "" "rm -rf '$SP/x'"
 expect "tilde" "" "rm -rf ~/x"
-expect "redirect" "" "rm -rf $SP/x 2>/dev/null"
+expect "redirect" "" "rm -rf $SP/x >/dev/null"
 expect "brace" "" "cd $SP && rm -rf {/etc,x}"
 expect "caret" "" "rm -rf $SP/^x"
 expect "equals" "" "cd $SP && rm -f =ls"
@@ -208,6 +258,17 @@ expect "background" "" "rm -rf $SP/x &"
 expect "unknown-option" "" "rm --no-preserve-root -rf $SP/x"
 expect "no-target" "" "rm -rf"
 expect "no-rm" "" "S=$SP"
+
+# 外れた理由(fd 3)。allow のときは書かない
+check "why-allow" "" "$(why "rm -rf $SP/x")"
+check "why-forbidden" "禁止文字を含む: *" "$(why "rm -rf $SP/*")"
+check "why-outside" "一時領域の外(または領域そのもの): ./build" "$(why "rm -rf ./build")"
+check "why-cd-seq" "cd の後の区切りが && でない" "$(why "cd $SP; rm -rf smoke")"
+check "why-no-rm" "rm / rmdir を含まない" "$(why "ls $SP")"
+check "why-other-cmd" "未対応のコマンド: curl" "$(why "rm -rf $SP/x; curl -s https://example.com")"
+check "why-option" "未対応の rm のオプション: --no-preserve-root" "$(why "rm --no-preserve-root -rf $SP/x")"
+check "why-or" "|| の右辺が echo / printf でない: rm" "$(why "rm -f $SP/x || rm -rf ./build")"
+check "why-non-bash" "" "$(hook_json "rm -rf ./build" "$REPO" Write | bash "$RULE" 3>&1 >/dev/null 2>/dev/null)"
 
 # 沈黙: 他の ask 対象・rm 以外の処理を含む
 expect "git-push" "" "rm -rf $SP/x && git push"
