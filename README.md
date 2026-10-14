@@ -79,7 +79,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 | `yasunori0418-task-boundary-hooks`           | `./hooks/task-boundary-plugin`        | 境界ファイル `.claude/task-boundary.json` の外への Edit/Write/NotebookEdit を deny(境界ファイルが無ければ沈黙) |
 | `yasunori0418-teammate-leak-guard-hooks`     | `./hooks/teammate-leak-guard-plugin`  | Stop 時に稼働中のサブエージェント/チームメイトが残っていれば TaskStop を促す(idle は終了ではないため放置すると滞留する) |
 | `yasunori0418-fabricated-toolcall-guard-hooks` | `./hooks/fabricated-toolcall-guard-plugin` | Stop 時に、実行されずに text へ書かれた捏造ツール呼び出しを検出して差し戻す |
-| `yasunori0418-permission-gate-hooks`         | `./hooks/permission-gate-plugin`      | settings の ask で出る許可ダイアログのうち arm 済み(`push-flow.armed`)の通常 push を自動応答し、全ダイアログを JSONL に記録 |
+| `yasunori0418-permission-gate-hooks`         | `./hooks/permission-gate-plugin`      | settings の ask で出る許可ダイアログのうち arm 済み(`push-flow.armed`)の通常 push と一時領域だけの rm を自動応答し、全ダイアログを JSONL に記録。rm が自動承認に乗らない書き方は PreToolUse で単独の呼び出しに分けるよう促す |
 
 > **hook の分離方針**: git rebase/reset をスキル経由へ強制する `git-guard` は、
 > rebase-flow/reset-flow スキルとペアで機能するため `git-skills` プラグインに同梱する。
