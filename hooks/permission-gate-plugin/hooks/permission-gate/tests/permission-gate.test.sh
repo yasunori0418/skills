@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verifies permission-gate の dispatcher(main.sh):
 #   - 全入力がログ(${XDG_STATE_HOME}/claude/permission-prompts.jsonl)に 1 行追記される
-#     項目は ts(JST)・session_id・cwd・tool_name・command(先頭 300 字)・decision・rule・reason
+#     項目は ts(JST)・session_id・cwd・tool_name・command(先頭 2000 字)・has_rm・decision・rule・reason
 #   - rule が allow を返せば stdout に decision.behavior: allow、decision=allow・rule=規則名
 #   - Bash 以外の tool_name -> 記録のみ(stdout なし、decision=prompt)
 #   - rules/*.sh は名前順に呼ばれ、最初の allow を採用する
@@ -53,17 +53,18 @@ check "non-bash-silent" "" "$OUT"
 check "non-bash-logged" "1" "$(lines)"
 check "non-bash-decision" "prompt" "$(last .decision)"
 check "non-bash-tool" "Write" "$(last .tool_name)"
-check "fields" "ts,session_id,cwd,tool_name,command,decision,rule,reason" \
+check "fields" "ts,session_id,cwd,tool_name,command,has_rm,decision,rule,reason" \
     "$(last 'keys_unsorted | join(",")')"
 check "session-cwd" "s1 $REPO" "$(last '"\(.session_id) \(.cwd)"')"
 check "ts-jst" "ok" "$(last '.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\+09:?00$") | if . then "ok" else "ng" end')"
 
-# 規則に当たらない Bash -> 沈黙 + prompt 記録、command は先頭 300 字
-LONG="echo $(printf 'a%.0s' $(seq 1 400))"
+# 規則に当たらない Bash -> 沈黙 + prompt 記録、command は先頭 2000 字、has_rm は切り詰め前に判定
+LONG="echo $(printf 'a%.0s' $(seq 1 2100)); rm -f /x"
 check "unmatched-silent" "" "$(run "$GATE_DIR" Bash "$(bash_input "$LONG")")"
 check "unmatched-logged" "2" "$(lines)"
 check "unmatched-decision" "prompt" "$(last .decision)"
-check "command-truncated" "300" "$(last '.command | length')"
+check "command-truncated" "2000" "$(last '.command | length')"
+check "has-rm-beyond-truncation" "true" "$(last .has_rm)"
 
 # 規則が allow -> stdout に allow、decision=allow・rule=規則名
 echo "$(date +%s) 1800 feat/x" >|"$REPO/.git/push-flow.armed"
@@ -111,5 +112,17 @@ check "notify-fail" "allow" "$(run "$STUB" Bash "$(bash_input 'ls')" | jq -r '.h
 : >"$TMP/not-a-dir"
 OUT=$(XDG_STATE_HOME="$TMP/not-a-dir" run "$STUB" Bash "$(bash_input 'ls')")
 check "log-unwritable" "allow" "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.decision.behavior')"
+
+# has_rm: rm という語(区切り・行頭の直後)を含むか
+has_rm() { # command -> ログの has_rm
+    run "$GATE_DIR" Bash "$(bash_input "$1")" >/dev/null
+    last .has_rm
+}
+check "has-rm-plain" "true" "$(has_rm 'rm -rf ./build')"
+check "has-rm-after-sep" "true" "$(has_rm 'ls;rm x')"
+check "has-rm-newline" "true" "$(has_rm $'ls\nrm x')"
+check "has-rm-none" "false" "$(has_rm 'ls -la')"
+check "has-rm-rmdir" "false" "$(has_rm 'rmdir x')"
+check "has-rm-substring" "false" "$(has_rm 'echo firm')"
 
 exit "$fail"

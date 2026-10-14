@@ -7,7 +7,8 @@
 # 規則の契約: stdin に hook JSON を受け、allow なら理由を stdout に 1 行出す。それ以外は無出力。
 #   各規則は tool_name が Bash のときだけ判定する(Bash 以外は記録のみ)。
 # 記録: 全入力を ${XDG_STATE_HOME:-$HOME/.local/state}/claude/permission-prompts.jsonl に 1 行追記する
-#   (ts は JST、command は先頭 300 字、decision は allow / prompt)。
+#   (ts は JST、command は先頭 2000 字、has_rm はコマンドに rm という語を含むか(切り詰め前に判定)、
+#   decision は allow / prompt)。
 # 通知: notify.sh が実行可能なら決定後に呼ぶ(stdin に hook JSON + decision)。stdout は捨てる。
 # どの失敗でもダイアログを壊さないよう、常に exit 0 で allow 以外は何も出力しない。
 set -uo pipefail
@@ -37,7 +38,8 @@ ts="${ts%??}:${ts: -2}"
           session_id: (.session_id // ""),
           cwd: (.cwd // ""),
           tool_name: (.tool_name // ""),
-          command: ((.tool_input.command // "") | tostring | .[:300]),
+          command: ((.tool_input.command // "") | tostring | .[:2000]),
+          has_rm: ((.tool_input.command // "") | tostring | test("(^|[\\s;&|(`])rm(\\s|$)")),
           decision: $d,
           rule: $r,
           reason: $why
