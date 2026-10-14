@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Verifies permission-gate の dispatcher(main.sh):
 #   - 全入力がログ(${XDG_STATE_HOME}/claude/permission-prompts.jsonl)に 1 行追記される
-#     項目は ts(JST)・session_id・cwd・tool_name・command(先頭 2000 字)・has_rm・decision・rule・reason
+#     項目は ts(JST)・session_id・cwd・tool_name・command(先頭 2000 字)・has_rm・decision・rule・reason・misses
 #   - rule が allow を返せば stdout に decision.behavior: allow、decision=allow・rule=規則名
 #   - Bash 以外の tool_name -> 記録のみ(stdout なし、decision=prompt)
 #   - rules/*.sh は名前順に呼ばれ、最初の allow を採用する
+#   - allow しなかった規則が fd 3 に書いた理由は misses に {規則名: 理由} として残る
 #   - notify.sh が実行可能なら決定後に呼ばれ、その stdout は hook 出力に混ざらない
 #   - 不正な入力でも exit 0・stdout なし
 set -euo pipefail
@@ -53,7 +54,7 @@ check "non-bash-silent" "" "$OUT"
 check "non-bash-logged" "1" "$(lines)"
 check "non-bash-decision" "prompt" "$(last .decision)"
 check "non-bash-tool" "Write" "$(last .tool_name)"
-check "fields" "ts,session_id,cwd,tool_name,command,has_rm,decision,rule,reason" \
+check "fields" "ts,session_id,cwd,tool_name,command,has_rm,decision,rule,reason,misses" \
     "$(last 'keys_unsorted | join(",")')"
 check "session-cwd" "s1 $REPO" "$(last '"\(.session_id) \(.cwd)"')"
 check "ts-jst" "ok" "$(last '.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\+09:?00$") | if . then "ok" else "ng" end')"
@@ -65,6 +66,7 @@ check "unmatched-logged" "2" "$(lines)"
 check "unmatched-decision" "prompt" "$(last .decision)"
 check "command-truncated" "2000" "$(last '.command | length')"
 check "has-rm-beyond-truncation" "true" "$(last .has_rm)"
+check "unmatched-misses" "一時領域の外(または領域そのもの): /x" "$(last '.misses["20-rm-scratch"]')"
 
 # 規則が allow -> stdout に allow、decision=allow・rule=規則名
 echo "$(date +%s) 1800 feat/x" >|"$REPO/.git/push-flow.armed"
@@ -89,6 +91,15 @@ printf '#!/usr/bin/env bash\ncat >/dev/null\necho "from a"\n' >"$STUB/rules/10-a
 OUT=$(run "$STUB" Bash "$(bash_input 'ls')")
 check "order-output" "allow" "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.decision.behavior')"
 check "order-first-allow" "10-a from a" "$(last '"\(.rule) \(.reason)"')"
+check "order-misses-empty" "{}" "$(last '.misses | tojson')"
+
+# fd 3 に書いた理由だけが misses に残り、stdout(allow)とは混ざらない
+printf '#!/usr/bin/env bash\ncat >/dev/null\necho "why x" >&3\necho "why x2" >&3\n' >"$STUB/rules/01-x.sh"
+printf '#!/usr/bin/env bash\ncat >/dev/null\necho "why y" >&3\necho "from y"\n' >"$STUB/rules/02-y.sh"
+OUT=$(run "$STUB" Bash "$(bash_input 'ls')")
+check "misses-allow" "allow 02-y from y" "$(last '"\(.decision) \(.rule) \(.reason)"')"
+check "misses-recorded" '{"01-x":"why x"}' "$(last '.misses | tojson')"
+rm -f "$STUB/rules/01-x.sh" "$STUB/rules/02-y.sh"
 
 cat >"$STUB/notify.sh" <<EOF
 #!$BASH

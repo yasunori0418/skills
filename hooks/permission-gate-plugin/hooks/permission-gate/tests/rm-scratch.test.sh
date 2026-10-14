@@ -99,6 +99,9 @@ via_rule() { # command [cwd] [tool_name] -> allow / 空(規則の契約: allow �
     }
     [ -n "$out" ] && echo allow || true
 }
+why() { # command [cwd] -> 規則が fd 3 に書いた外れた理由
+    hook_json "$1" "${2:-$REPO}" | bash "$RULE" 3>&1 >/dev/null 2>/dev/null
+}
 expect() { # label expected command [cwd] [tool_name] -> 規則単体と dispatcher の両方を検証
     check "$1:rule" "$2" "$(via_rule "${@:3}")"
     check "$1:gate" "$2" "$(via_gate "${@:3}")"
@@ -255,6 +258,17 @@ expect "background" "" "rm -rf $SP/x &"
 expect "unknown-option" "" "rm --no-preserve-root -rf $SP/x"
 expect "no-target" "" "rm -rf"
 expect "no-rm" "" "S=$SP"
+
+# 外れた理由(fd 3)。allow のときは書かない
+check "why-allow" "" "$(why "rm -rf $SP/x")"
+check "why-forbidden" "禁止文字を含む: *" "$(why "rm -rf $SP/*")"
+check "why-outside" "一時領域の外(または領域そのもの): ./build" "$(why "rm -rf ./build")"
+check "why-cd-seq" "cd の後の区切りが && でない" "$(why "cd $SP; rm -rf smoke")"
+check "why-no-rm" "rm / rmdir を含まない" "$(why "ls $SP")"
+check "why-other-cmd" "未対応のコマンド: curl" "$(why "rm -rf $SP/x; curl -s https://example.com")"
+check "why-option" "未対応の rm のオプション: --no-preserve-root" "$(why "rm --no-preserve-root -rf $SP/x")"
+check "why-or" "|| の右辺が echo / printf でない: rm" "$(why "rm -f $SP/x || rm -rf ./build")"
+check "why-non-bash" "" "$(hook_json "rm -rf ./build" "$REPO" Write | bash "$RULE" 3>&1 >/dev/null 2>/dev/null)"
 
 # 沈黙: 他の ask 対象・rm 以外の処理を含む
 expect "git-push" "" "rm -rf $SP/x && git push"
