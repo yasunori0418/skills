@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # rules/20-rm-scratch.sh — 対象が一時領域だけの rm を allow する規則(契約は main.sh 参照)。
 # 次を全て満たすときだけ理由を 1 行出す。1 つでも外れれば無出力(通常のダイアログに任せる):
-#   - tool_name が Bash で、コマンドが `;` / `&&` / 改行で区切った次のセグメントだけから成る
-#     (rm / rmdir を 1 個以上含む。置換・引用符・glob・リダイレクト・`||` / `|` / `&` は含まない):
+#   - tool_name が Bash で、コマンドが `;` / `&&` / `||` / 改行で区切った次のセグメントだけから成る
+#     (rm / rmdir を 1 個以上含む。置換・引用符・glob・`|` / `&` は含まない。リダイレクトは語として
+#     独立したリテラルの 2>/dev/null / 2>&1 だけを許し、判定の前に取り除く):
 #       NAME=value(1 語の単純代入)/ cd <パス> / rm [-rRfvdiI | 長オプション] [--] <対象…> /
 #       rmdir [-v | --verbose | --ignore-fail-on-non-empty] [--] <対象…> /
 #       確認用の読み取り: ls [オプション] [パス…] / echo <リテラル…> / printf <リテラル…>(- 始まりを除く)/
 #       git status [--short]
+#     `||` の右辺には確認用の echo / printf だけを置ける(`ls … || echo deleted` の形)。
 #     これ以外の処理(git push・curl・wget・git log / diff を含む)があれば扱わない。実シェルは zsh のこともあるので
 #     ^(EXTENDED_GLOB)と語頭の =(EQUALS 展開)も扱わず、解決を変える IFS / PATH / CDPATH
 #     (zsh の path / cdpath)/ PWD / OLDPWD への代入と、/ ./ ../ で始まらない cd(CDPATH で
 #     解決される)・論理解決と物理解決で行き先が変わる cd も扱わない
 #   - $NAME / ${NAME} は同一コマンド内の単純代入だけで解決する(環境の変数は未定義扱い)
 #   - cd は以降のセグメントの基準ディレクトリを変える。cd が失敗しても後続が走らないよう、
-#     cd 以降の区切りは && に限る
+#     cd 以降の区切りは && に限る(; / || は扱わない)
 #   - 全対象が一時領域の内側(領域そのものは不可): /tmp/**、/var/tmp/**、$TMPDIR/**、
 #     macOS の DARWIN_USER_TEMP_DIR/**、cwd のリポジトリ直下 tmp-agents/**
 #     (macOS の /tmp・/var/tmp は /private 配下への symlink だが、物理パスで比べるので同じに扱う)
@@ -35,10 +37,17 @@ for c in grealpath realpath; do
 done
 [ -n "$rp" ] || exit 0
 
+case "$cmd" in *__AND__* | *__SEQ__* | *__OR__*) exit 0 ;; esac
+# 確認時の stderr の破棄(語として独立したリテラルの 2>/dev/null・2>&1)は削除の対象を変えないので、
+# 剥がしてから判定する。&・| が続く形や語に繋がった形は剥がさず、下の禁止文字で落とす
+while [[ $cmd =~ ^(.*[[:space:]])2\>(/dev/null|\&1)([[:space:]\;].*|\&\&.*|\|\|.*)?$ ]]; do
+    cmd="${BASH_REMATCH[1]} ${BASH_REMATCH[3]}"
+done
 # 置換・引用符・glob・リダイレクト・コメント・チルダ・単独の & | を含むものは扱わない
-case "$cmd" in *__AND__* | *__SEQ__*) exit 0 ;; esac
-case "${cmd//&&/}" in *[\`\(\)\<\>\"\'\\\*\?\[\]\#\~\!\^\|\&]*) exit 0 ;; esac
+s=${cmd//&&/}
+case "${s//||/}" in *[\`\(\)\<\>\"\'\\\*\?\[\]\#\~\!\^\|\&]*) exit 0 ;; esac
 s=${cmd//&&/ __AND__ }
+s=${s//||/ __OR__ }
 s=${s//;/ __SEQ__ }
 s=${s//$'\n'/ __SEQ__ }
 read -ra toks <<<"$s"
@@ -92,10 +101,12 @@ in_scratch() { # 物理パス -> いずれかの一時領域の内側か
 
 # 基準ディレクトリは論理(cd -L が辿る)と物理(rm の相対パスを kernel が解決する)の両方を持つ
 ldir=$cwd dir=$("$rp" -m -- "$cwd") || exit 0
-after_cd=0 count=0 seg=()
+after_cd=0 count=0 fallback=0 seg=()
 run_segment() { # seg の 1 セグメントを解釈する。扱えなければ失敗
     [ "${#seg[@]}" -gt 0 ] || return 0
     local w t ends=0
+    # || の右辺は失敗時の確認用の出力(echo / printf)に限る
+    [ "$fallback" -eq 0 ] || case "${seg[0]}" in echo | printf) ;; *) return 1 ;; esac
     case "${seg[0]}" in
     cd)
         [ "${#seg[@]}" -eq 2 ] && expand "${seg[1]}" || return 1
@@ -158,9 +169,12 @@ run_segment() { # seg の 1 セグメントを解釈する。扱えなければ�
 }
 for t in "${toks[@]}" __END__; do
     case "$t" in
-    __AND__ | __SEQ__ | __END__)
+    __AND__ | __SEQ__ | __OR__ | __END__)
         run_segment || exit 0
-        [ "$t" = __SEQ__ ] && [ "$after_cd" -eq 1 ] && exit 0
+        # cd が失敗しても後続が走る区切り(; / ||)は cd 以降に置けない
+        case "$t" in __SEQ__ | __OR__) [ "$after_cd" -eq 0 ] || exit 0 ;; esac
+        fallback=0
+        [ "$t" != __OR__ ] || fallback=1
         seg=()
         ;;
     *) seg+=("$t") ;;
