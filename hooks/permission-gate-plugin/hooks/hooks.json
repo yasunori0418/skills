@@ -1,5 +1,5 @@
 {
-  "description": "許可ダイアログを規則で自動応答し、全ダイアログを JSONL に記録する hook。",
+  "description": "許可ダイアログを規則で自動応答し、全ダイアログを JSONL に記録する hook。一時領域の rm が自動承認に乗らない書き方には、単独の呼び出しに分けるよう Claude に促す。",
   "hooks": {
     "PermissionRequest": [
       {
@@ -7,6 +7,17 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/permission-gate/main.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/rm-split-hint/main.sh"
           }
         ]
       }
