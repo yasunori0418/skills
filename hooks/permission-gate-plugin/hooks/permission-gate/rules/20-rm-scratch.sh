@@ -2,9 +2,12 @@
 # rules/20-rm-scratch.sh — 対象が一時領域だけの rm を allow する規則(契約は main.sh 参照)。
 # 次を全て満たすときだけ理由を 1 行出す。1 つでも外れれば無出力(通常のダイアログに任せる):
 #   - tool_name が Bash で、コマンドが `;` / `&&` / 改行で区切った次のセグメントだけから成る
-#     (rm を 1 個以上含む。置換・引用符・glob・リダイレクト・`||` / `|` / `&` は含まない):
-#       NAME=value(1 語の単純代入)/ cd <パス> / rm [-rRfvdiI | 長オプション] [--] <対象…>
-#     rm 以外の処理(git push・curl・wget を含む)があれば扱わない。実シェルは zsh のこともあるので
+#     (rm / rmdir を 1 個以上含む。置換・引用符・glob・リダイレクト・`||` / `|` / `&` は含まない):
+#       NAME=value(1 語の単純代入)/ cd <パス> / rm [-rRfvdiI | 長オプション] [--] <対象…> /
+#       rmdir [-v | --verbose | --ignore-fail-on-non-empty] [--] <対象…> /
+#       確認用の読み取り: ls [オプション] [パス…] / echo <リテラル…> / printf <リテラル…>(- 始まりを除く)/
+#       git status [--short]
+#     これ以外の処理(git push・curl・wget・git log / diff を含む)があれば扱わない。実シェルは zsh のこともあるので
 #     ^(EXTENDED_GLOB)と語頭の =(EQUALS 展開)も扱わず、解決を変える IFS / PATH / CDPATH
 #     (zsh の path / cdpath)/ PWD / OLDPWD への代入と、/ ./ ../ で始まらない cd(CDPATH で
 #     解決される)・論理解決と物理解決で行き先が変わる cd も扱わない
@@ -107,14 +110,17 @@ run_segment() { # seg の 1 セグメントを解釈する。扱えなければ�
         ldir=$t dir=$w
         after_cd=1
         ;;
-    rm)
+    rm | rmdir)
         t=0
         for w in "${seg[@]:1}"; do
             if [ "$ends" -eq 0 ]; then
-                case "$w" in
-                --) ends=1 && continue ;;
-                --recursive | --force | --verbose | --dir) continue ;;
-                -*) [[ $w =~ ^-[rRfvdiI]+$ ]] && continue || return 1 ;;
+                case "${seg[0]}:$w" in
+                *:--) ends=1 && continue ;;
+                rm:--recursive | rm:--force | rm:--verbose | rm:--dir) continue ;;
+                rmdir:--verbose | rmdir:--ignore-fail-on-non-empty) continue ;;
+                rm:-*) [[ $w =~ ^-[rRfvdiI]+$ ]] && continue || return 1 ;;
+                # -p は親を辿って領域そのもの(tmp-agents 等)まで消しうるので扱わない
+                rmdir:-*) [ "$w" = -v ] && continue || return 1 ;;
                 esac
             fi
             expand "$w" || return 1
@@ -124,6 +130,22 @@ run_segment() { # seg の 1 セグメントを解釈する。扱えなければ�
         done
         [ "$t" -gt 0 ] || return 1
         count=$((count + t))
+        ;;
+    ls) # 確認用の読み取り。対象は領域を問わないが、静的に解決できるパスと短い/長いオプションに限る
+        for w in "${seg[@]:1}"; do
+            case "$w" in -*) [[ $w =~ ^(-[A-Za-z0-9]+|--[a-z][a-z-]*)$ ]] && continue || return 1 ;; esac
+            expand "$w" || return 1
+        done
+        ;;
+    echo | printf) # 確認用の出力。引数はリテラルに限る(printf -v は変数への代入になるので - 始まりを扱わない)
+        [ "${seg[0]}" = echo ] || [ "${#seg[@]}" -gt 1 ] || return 1
+        for w in "${seg[@]:1}"; do
+            case "$w" in *[\$\{\}]* | =*) return 1 ;; esac
+            [ "${seg[0]}" = echo ] || case "$w" in -*) return 1 ;; esac
+        done
+        ;;
+    git) # 確認用の git status だけ(他のサブコマンドは pager・外部 diff・textconv を起動しうる)
+        case "${seg[*]}" in "git status" | "git status --short") ;; *) return 1 ;; esac
         ;;
     *)
         [ "${#seg[@]}" -eq 1 ] && [[ ${seg[0]} =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
