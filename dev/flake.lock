@@ -25,11 +25,11 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1792231472,
-        "narHash": "sha256-frBdSlj3LToboaYmWH934/qjcPxzb74hnXky111Ve0U=",
+        "lastModified": 1792829207,
+        "narHash": "sha256-oOY8dx8pvhebaxO0mELOCc+uSMYH2BWKug5cLQGkK10=",
         "owner": "lambdalisue",
         "repo": "cclens",
-        "rev": "408c64102a4ce0a9876eb40c355cac364defc279",
+        "rev": "39cadc2d22522c09a99010659155393361780695",
         "type": "github"
       },
       "original": {
@@ -139,11 +139,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1792098797,
-        "narHash": "sha256-u4DIIZgznEGzByxXrxWCXK19VcMtTBmi/M9gZ7Jk9bM=",
+        "lastModified": 1793193205,
+        "narHash": "sha256-X6xa6sGA7RnJQuZGbFMC+K+KToWAlBDCCjJXfTwEPsw=",
         "owner": "nix-community",
         "repo": "home-manager",
-        "rev": "640725978b99076e18e069f6e7d2959124584f8f",
+        "rev": "095fef2f265c3c0da4fe315efba8f8a04495ab34",
         "type": "github"
       },
       "original": {
@@ -158,6 +158,7 @@
         "haumea": "haumea",
         "home-manager": "home-manager",
         "namaka": "namaka",
+        "nix-darwin": "nix-darwin",
         "nix-unit": "nix-unit",
         "nixpkgs": [
           "nixpkgs"
@@ -165,11 +166,11 @@
         "treefmt-nix": "treefmt-nix_2"
       },
       "locked": {
-        "lastModified": 1792599197,
-        "narHash": "sha256-hZ8YZB8EXeSNxq3zffNqlx6FlpW/DhRnaJ2ejknd3G8=",
+        "lastModified": 1793199368,
+        "narHash": "sha256-QxoPnvL3MWoHL08g16iPz5OXGjcbU66lwmZBTKS5OvU=",
         "owner": "yasunori0418",
         "repo": "layat",
-        "rev": "6f16c2206a812fed5f90b89502cb357b80c18417",
+        "rev": "b32942aa2f4eb05409af4cfb37d0fc8076bcd752",
         "type": "github"
       },
       "original": {
@@ -181,11 +182,11 @@
     "matt-skills": {
       "flake": false,
       "locked": {
-        "lastModified": 1792425100,
-        "narHash": "sha256-2FKfe3/Fwc4MmwBLa+d/oQW4/gtYIssdWapy2MPd39I=",
+        "lastModified": 1793087052,
+        "narHash": "sha256-CkNJKbSlW8bUSfvHqfl7JTPnq8o1iYdzI24LGDMojE4=",
         "owner": "mattpocock",
         "repo": "skills",
-        "rev": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+        "rev": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
         "type": "github"
       },
       "original": {
@@ -232,6 +233,27 @@
       "original": {
         "owner": "nix-community",
         "repo": "namaka",
+        "type": "github"
+      }
+    },
+    "nix-darwin": {
+      "inputs": {
+        "nixpkgs": [
+          "layat",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1792737899,
+        "narHash": "sha256-P0/GhewcEQmAbzq3QunNWY2jLJaYH9F6c/5dEM/jQ4M=",
+        "owner": "nix-darwin",
+        "repo": "nix-darwin",
+        "rev": "bb0b90dbd54e207100de72b5dcbe3188c98a4b69",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-darwin",
+        "repo": "nix-darwin",
         "type": "github"
       }
     },
@@ -335,11 +357,11 @@
     },
     "nixpkgs_2": {
       "locked": {
-        "lastModified": 1792502884,
-        "narHash": "sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA=",
+        "lastModified": 1793110635,
+        "narHash": "sha256-dhoW6VgFWlaodSY5jrBn+CF2FLmaUvDVgM7+C7T2+NM=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "02c087f3fe673c9e317f206a627cb6b910336dbe",
+        "rev": "31ecbaca1bdefa45dffc409f0250bd8039ea0010",
         "type": "github"
       },
       "original": {
