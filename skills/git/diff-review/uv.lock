@@ -4,11 +4,11 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "bracex"
-version = "3.2"
+version = "3.2.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/fb/37/adf8dd2cde958c2d086bdd87fc36b532fd824bf38f10be6348d65da0c8f9/bracex-3.2.tar.gz", hash = "sha256:0a3d40bfae4caae4d3bfd0ea715874799fab711c38fd4012cc35343e815405cd", size = 29771, upload-time = "2026-10-22T00:28:49.508Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/1f/b7ce2efe406b87bb3693d587b91bcd8fa9030888870ceff29e4a0d233cb2/bracex-3.2.2.tar.gz", hash = "sha256:d18976160b3ba01a57d5c53a5c8c3aa2506efa9e0a3a62467251f82b8f563fde", size = 34980, upload-time = "2026-11-07T21:28:25.433Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/42/65/8030b03de8137d1aab7dd6ecfecdba2fc22fc849fa35959b024f62293a99/bracex-3.2-py3-none-any.whl", hash = "sha256:8f3e908a452f66707e1d6d91b3d7d7d4c649d248df18537c0dc710aeb9c30d87", size = 12019, upload-time = "2026-10-22T00:28:48.233Z" },
+    { url = "https://files.pythonhosted.org/packages/21/b5/52a750a062db07ba056cde1c52c802b898a96b70953389a0b2247e18f210/bracex-3.2.2-py3-none-any.whl", hash = "sha256:284d59c4656e5a0421ff691402074bd5847049d50410535764a2c522a47095bc", size = 14151, upload-time = "2026-11-07T21:28:24.028Z" },
 ]
 
 [[package]]
@@ -83,7 +83,7 @@ wheels = [
 
 [[package]]
 name = "pytest"
-version = "9.1.1"
+version = "9.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "colorama", marker = "sys_platform == 'win32'" },
@@ -92,9 +92,9 @@ dependencies = [
     { name = "pluggy" },
     { name = "pygments" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa3c9d3fe98a76a1d14c74a9e266d397cf6eb64be5e01/pytest-9.1.1.tar.gz", hash = "sha256:1088fbde8f2b49d95a549a195707afa7a76a3ce9bcadc26b6d71f0ffda5fe313", size = 1636369, upload-time = "2026-06-19T10:58:32.857Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/42/bb4641652e58dedeac2ec51abc1f8cae4fee4ec63899a0999016229a0f2a/pytest-9.2.0.tar.gz", hash = "sha256:97c4f3b1f3c7414aa36465e09b8220f1d03627993bd51b1282e193753c80557b", size = 1797555, upload-time = "2026-10-27T21:30:20.728Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl", hash = "sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c", size = 386536, upload-time = "2026-06-19T10:58:31.347Z" },
+    { url = "https://files.pythonhosted.org/packages/51/39/1f5d8c8877a0fa327db959c19341d4be61660de1ab6b7391f9eb805bcd67/pytest-9.2.0-py3-none-any.whl", hash = "sha256:07acdcf88ec174f907dc01af70bf52d49b014bbab03faeeade31c96b18c2e588", size = 411776, upload-time = "2026-10-27T21:30:19.131Z" },
 ]
 
 [[package]]
@@ -157,12 +157,12 @@ wheels = [
 
 [[package]]
 name = "wcmatch"
-version = "11.2"
+version = "12.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bracex" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bd/07/b7a9162a804bc0f7d03fe84c93e374d3e1c4d828043d5f9b797f7d4e30e0/wcmatch-11.2.tar.gz", hash = "sha256:1605bde546fbde4c063628c7d89eda486909fd4337e51d73a873987fbcb2554c", size = 134939, upload-time = "2026-10-22T00:37:57.622Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/17/bf44790f97414e37885830139933b4e96faac71560768ae9f9e458dbd936/wcmatch-12.0.1.tar.gz", hash = "sha256:4ea6acef75b657bf71ac8fa9520165bf5ae55120c4e655895a5b7d4c69896c5e", size = 163680, upload-time = "2026-11-07T21:45:37.072Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/34/96/b6cebd4bd75320743a291fed494c79f07c01b58fa9b187d12aeb5110f002/wcmatch-11.2-py3-none-any.whl", hash = "sha256:952bab83c75c233836007a69550a3a8753cf06964c1eb3b84ff11ad5bff1c272", size = 44361, upload-time = "2026-10-22T00:37:56.293Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/24/8a5bbb3e73962b5bc901966f926b4fe25cbc9d1170ad9b4d9938441dbdc3/wcmatch-12.0.1-py3-none-any.whl", hash = "sha256:0e11b0bf1700bc8222ad5e7dc79fb326d9e0304458c7e2c25419ab6d26d07d8e", size = 51084, upload-time = "2026-11-07T21:45:35.661Z" },
 ]
