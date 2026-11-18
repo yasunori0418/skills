@@ -60,7 +60,7 @@
     {
       "name": "product-skills",
       "source": "./skills/product",
-      "description": "プロダクト業務スキル群（basic-design / biz-translate / def-done / feature-spec / product-spec）。",
+      "description": "プロダクト業務スキル群（basic-design / biz-translate / def-done / feature-spec / product-naming / product-spec）。",
       "author": {
         "name": "yasunori0418"
       },
