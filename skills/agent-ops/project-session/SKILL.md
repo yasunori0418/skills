@@ -76,9 +76,9 @@ ghq 管理外のディレクトリを直接指定して起動する（セッシ�
 
 ## 決定論ツール（scripts/launch.sh）
 
-ghq 照合・セッション名決定・backend 判定・セッション起動は `bash <SKILL>/scripts/launch.sh` に委譲する
-（`<SKILL>` はプラグイン実行時 `${CLAUDE_PLUGIN_ROOT}/project-session`、個人 skill 配置時は
-この SKILL.md があるディレクトリ）。3 サブコマンドと exit code 契約:
+ghq 照合・セッション名決定・backend 判定・セッション起動は `bash "<SKILL>/scripts/launch.sh"` に委譲する
+（`<SKILL>` は、この SKILL.md があるディレクトリの絶対パス。プラグインとして入れた場合も、
+個人 skill として置いた場合も同じ。パスはダブルクォートで囲む）。3 サブコマンドと exit code 契約:
 
 - **`launch.sh list`** — `ghq list` をそのまま 1 行 1 件で出力（「一覧を見せて」と明示されたとき用。
   引数省略時の一覧は `launch` 自身が exit 4 で返すので、省略判定のために先に叩かない）。

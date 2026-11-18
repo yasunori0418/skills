@@ -106,7 +106,8 @@
 
           # skills/ 配下の pytest を走らせる。pyproject.toml を持つスキルだけを自動探索
           # するため、Python テストを CI に載せる条件は pyproject.toml を置くこと
-          # (現時点の対象は lane-ops / job-graph / job-plan / session-insights / diff-review)。
+          # (現時点の対象は lane-ops / job-graph / job-plan / session-insights / diff-review /
+          # product-naming)。
           # job-graph の plan_orchestration.py が lane-ops を兄弟パスで参照するため、skills
           # ツリー全体をコピーする必要がある。
           checks.pytest =

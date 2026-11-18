@@ -1,0 +1,19 @@
+[project]
+name = "product-naming-tools"
+version = "0.1.0"
+description = "product-naming スキルの確認スクリプト（候補の名前と既存のパッケージ・GitHub との重なり）"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+# 配布物ではないので package 化しない。`uv run --project <skill-dir>` で実行する。
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["scripts"]
+pythonpath = ["scripts"]

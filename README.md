@@ -67,7 +67,7 @@ AI エージェント(Claude Code)向けスキルを管理するリポジトリ�
 | `nix-skills`                                 | `./skills/nix`                        | nix-cache-check / nix-devenv / nix-store-lookup              |
 | `agent-ops-skills`                           | `./skills/agent-ops`                  | Claude Code 固有: response-format / session-insights / project-session / agent-teams |
 | `workflow-skills`                            | `./skills/workflow`                   | エージェント非依存: external-writes / job-graph / job-plan / lane-ops / test-targeted / tmp-output |
-| `product-skills`                             | `./skills/product`                    | basic-design / biz-translate / def-done / feature-spec / product-spec |
+| `product-skills`                             | `./skills/product`                    | basic-design / biz-translate / def-done / feature-spec / product-naming / product-spec |
 | `testing-skills`                             | `./skills/testing`                    | ISTQB/JSTQB テストプロセス: test-plan / test-monitor / test-analyze / test-design / test-implement / test-execute / test-report / test-review |
 | `learning-skills`                            | `./skills/learning`                   | 学習・理解支援: quizzing / tutoring / navigating(AI 利用で生じた理解負債の返済) |
 | `yasunori0418-askuserquestion-hooks`         | `./hooks/askuserquestion`             | AskUserQuestion のセッション単位無効化(#aq-off/#aq-on)と発火時のデスクトップ通知 |
